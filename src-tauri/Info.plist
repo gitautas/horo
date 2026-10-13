@@ -8,24 +8,24 @@
 	  voice settings show no devices and calls silently fail to publish audio.
 	-->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>uwum needs your microphone so people can hear you on voice calls.</string>
+	<string>horo needs your microphone so people can hear you on voice calls.</string>
 
 	<!-- Reserved for video calls; harmless until then, and avoids a rebuild. -->
 	<key>NSCameraUsageDescription</key>
-	<string>uwum needs your camera for video calls.</string>
+	<string>horo needs your camera for video calls.</string>
 
 	<!--
 	  Reading the library to draw the in-app grid of recent photos. Without this
 	  key iOS terminates the app the moment PhotoKit is asked for authorisation
 	  — not a denial, a crash.
 
-	  Note there is no matching "add" key: uwum only ever reads.
+	  Note there is no matching "add" key: horo only ever reads.
 	-->
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>uwum shows your recent photos and videos so you can send one without leaving the chat.</string>
+	<string>horo shows your recent photos and videos so you can send one without leaving the chat.</string>
 
 	<!-- Local network access, for reaching a LiveKit server on your own LAN. -->
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>uwum needs local network access to reach a voice server on your network.</string>
+	<string>horo needs local network access to reach a voice server on your network.</string>
 </dict>
 </plist>

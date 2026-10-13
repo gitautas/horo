@@ -1,6 +1,6 @@
 //! MatrixRTC voice calls over a LiveKit SFU.
 //!
-//! This follows the MSC3401/MSC4143 shape that Element Call uses, so uwum can
+//! This follows the MSC3401/MSC4143 shape that Element Call uses, so horo can
 //! join a call started from Element X and vice versa:
 //!
 //! 1. Advertise membership by writing an `org.matrix.msc3401.call.member` state

@@ -18,7 +18,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("uwum crashed", error, info.componentStack);
+    console.error("horo crashed", error, info.componentStack);
     this.setState({ componentStack: info.componentStack ?? null });
   }
 
@@ -48,7 +48,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
               color: "var(--accent-secondary)",
             }}
           >
-            uwum fell over
+            horo fell over
           </div>
           <div style={{ marginTop: 8, color: "var(--text-secondary)", fontSize: 14 }}>
             something went wrong while drawing the app. the details below are the

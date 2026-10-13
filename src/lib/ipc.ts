@@ -333,7 +333,7 @@ export const saveMedia = (mxc: string, destination: string) =>
 /**
  * Turn an `mxc://` URI into something an `<img>` can load.
  *
- * The bytes are served by the Rust `uwum://` protocol handler, which fetches
+ * The bytes are served by the Rust `horo://` protocol handler, which fetches
  * through the SDK's media cache and lets the WebView do the rest.
  */
 export function mediaUrl(
@@ -345,8 +345,8 @@ export function mediaUrl(
   // WebView2 serves Tauri custom protocols as http://<scheme>.localhost/..., not
   // <scheme>://. The Rust handler (media.rs) and the CSP already accept both forms.
   const base = navigator.userAgent.includes("Windows")
-    ? `http://uwum.localhost/media/${encodeURIComponent(mxc)}`
-    : `uwum://media/${encodeURIComponent(mxc)}`;
+    ? `http://horo.localhost/media/${encodeURIComponent(mxc)}`
+    : `horo://media/${encodeURIComponent(mxc)}`;
   if (!size) return base;
 
   const { width, height } = thumbnailSize(size);
@@ -458,7 +458,7 @@ export const getActiveCalls = () => invoke<string[]>("get_active_calls");
 
 /** The "settings…" menu item — on macOS that's where `cmd+,` arrives. */
 export const onOpenSettings = (fn: () => void): Promise<UnlistenFn> =>
-  listen("uwum://open-settings", () => fn());
+  listen("horo://open-settings", () => fn());
 
 export const onRooms = (fn: (update: RoomsUpdate) => void): Promise<UnlistenFn> =>
   listen<RoomsUpdate>("matrix://rooms", (e) => fn(e.payload));

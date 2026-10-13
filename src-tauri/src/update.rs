@@ -24,7 +24,7 @@ use crate::error::{Error, Result};
 /// of truth than the in-app one. `/releases/latest/download/` resolves against
 /// whichever release is marked latest, which the workflow only does once every
 /// platform's assets are attached — so this is never a half-published version.
-const MANIFEST: &str = "https://github.com/gitautas/uwum/releases/latest/download/latest.json";
+const MANIFEST: &str = "https://github.com/gitautas/horo/releases/latest/download/latest.json";
 
 #[derive(Debug, Clone, Copy, Serialize, TS)]
 #[ts(export, rename = "UpdateMode")]
@@ -112,7 +112,7 @@ pub async fn latest_release() -> Result<LatestRelease> {
     }
 
     Ok(LatestRelease {
-        url: format!("https://github.com/gitautas/uwum/releases/tag/v{version}"),
+        url: format!("https://github.com/gitautas/horo/releases/tag/v{version}"),
         notes: manifest.notes,
         version,
     })

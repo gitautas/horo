@@ -21,7 +21,7 @@ pub fn run() {
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                 // The SDK is extremely chatty at debug level; keep our own
                 // module at debug and everything else at info.
-                "info,uwum=debug,matrix_sdk=info,matrix_sdk_crypto=info".into()
+                "info,horo=debug,matrix_sdk=info,matrix_sdk_crypto=info".into()
             }),
         )
         .init();
@@ -41,7 +41,7 @@ pub fn run() {
 
     builder
         .manage(AppState::default())
-        .register_asynchronous_uri_scheme_protocol("uwum", handle_media_request)
+        .register_asynchronous_uri_scheme_protocol("horo", handle_media_request)
         .invoke_handler(tauri::generate_handler![
             // auth
             commands::discover_homeserver,
@@ -135,7 +135,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building uwum")
+        .expect("error while building horo")
         .run(|app, event| {
             // Give the SDK a chance to flush and release the SQLite store,
             // otherwise the next launch can find a locked database.
@@ -197,7 +197,7 @@ fn install_settings_menu_item(app: &tauri::AppHandle) -> tauri::Result<()> {
     // Edit has to be here even though nothing in it is ours — on macOS, cut,
     // copy, paste and select-all only function because these menu items claim
     // their shortcuts.
-    let app_menu = SubmenuBuilder::new(app, "uwum")
+    let app_menu = SubmenuBuilder::new(app, "horo")
         .about(None)
         .separator()
         .item(&settings)
@@ -243,7 +243,7 @@ fn install_settings_menu_item(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Serve `uwum://media/<encoded-mxc>?w=&h=` from the Matrix media repository.
+/// Serve `horo://media/<encoded-mxc>?w=&h=` from the Matrix media repository.
 ///
 /// This runs for every avatar and inline image, so it must never block the main
 /// thread — hence the asynchronous protocol handler and the spawned task.

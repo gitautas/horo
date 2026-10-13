@@ -2,8 +2,8 @@
 //!
 //! Avatars and image attachments are far too numerous to shuttle through IPC as
 //! base64 — a busy room would push megabytes per render. Instead the app
-//! registers a `uwum://` URI scheme, so the frontend can write
-//! `<img src="uwum://media/<url-encoded mxc>?w=64&h=64">` and let the WebView
+//! registers a `horo://` URI scheme, so the frontend can write
+//! `<img src="horo://media/<url-encoded mxc>?w=64&h=64">` and let the WebView
 //! handle caching and lazy loading like it would for any other image.
 //!
 //! Requests are served from the SDK's media cache when possible, so scrolling a
@@ -29,7 +29,7 @@ use crate::error::{Error, Result};
 /// Known media sources, keyed by `mxc://` URI.
 ///
 /// In an encrypted room an attachment's bytes are ciphertext, and the keys to
-/// open them live in the *event*, not in the URI. A `uwum://` request carries
+/// open them live in the *event*, not in the URI. A `horo://` request carries
 /// only the URI, so rebuilding a `MediaSource::Plain` from it downloads the
 /// ciphertext and hands the WebView noise — which is exactly what a video that
 /// refuses to play looks like.
@@ -240,7 +240,7 @@ fn sniff_mime(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// Parse a `uwum://media/<encoded-mxc>?w=..&h=..&mime=..` request path.
+/// Parse a `horo://media/<encoded-mxc>?w=..&h=..&mime=..` request path.
 pub struct MediaRequest {
     pub mxc: String,
     pub size: Option<(u32, u32)>,
@@ -251,8 +251,8 @@ pub fn parse_request(uri: &str) -> Option<MediaRequest> {
     let parsed = url::Url::parse(uri).ok()?;
     let path = parsed.path();
 
-    // Tauri hands us `uwum://media/<mxc>` on macOS and Linux, but
-    // `http://uwum.localhost/media/<mxc>` on Windows and Android. In the first
+    // Tauri hands us `horo://media/<mxc>` on macOS and Linux, but
+    // `http://horo.localhost/media/<mxc>` on Windows and Android. In the first
     // form `media` parses as the *host* and the mxc is the whole path; in the
     // second the host is the app and `media` is a path segment. Handle both
     // rather than assuming a platform.
@@ -385,7 +385,7 @@ mod tests {
     #[test]
     fn parses_the_macos_and_linux_form() {
         // Here `media` is the URL *host*, and the mxc is the whole path.
-        let request = parse_request(&format!("uwum://media/{}", encoded())).unwrap();
+        let request = parse_request(&format!("horo://media/{}", encoded())).unwrap();
         assert_eq!(request.mxc, MXC);
         assert_eq!(request.size, None);
     }
@@ -394,14 +394,14 @@ mod tests {
     fn parses_the_windows_and_android_form() {
         // Here the host is the app and `media` is a path segment.
         let request =
-            parse_request(&format!("http://uwum.localhost/media/{}", encoded())).unwrap();
+            parse_request(&format!("http://horo.localhost/media/{}", encoded())).unwrap();
         assert_eq!(request.mxc, MXC);
     }
 
     #[test]
     fn reads_thumbnail_dimensions_and_mime_hint() {
         let request =
-            parse_request(&format!("uwum://media/{}?w=64&h=48&mime=image/png", encoded()))
+            parse_request(&format!("horo://media/{}?w=64&h=48&mime=image/png", encoded()))
                 .unwrap();
         assert_eq!(request.size, Some((64, 48)));
         assert_eq!(request.mime_hint.as_deref(), Some("image/png"));
@@ -411,16 +411,16 @@ mod tests {
     fn ignores_degenerate_dimensions() {
         // A zero or half-specified size means "give me the original", not a
         // request for a 0-pixel thumbnail.
-        assert_eq!(parse_request(&format!("uwum://media/{}?w=0&h=0", encoded())).unwrap().size, None);
-        assert_eq!(parse_request(&format!("uwum://media/{}?w=64", encoded())).unwrap().size, None);
+        assert_eq!(parse_request(&format!("horo://media/{}?w=0&h=0", encoded())).unwrap().size, None);
+        assert_eq!(parse_request(&format!("horo://media/{}?w=64", encoded())).unwrap().size, None);
     }
 
     #[test]
     fn rejects_anything_that_is_not_an_mxc_uri() {
         // The WebView is untrusted input; this must not become an SSRF vector.
-        assert!(parse_request("uwum://media/https%3A%2F%2Fevil.example%2Fx").is_none());
-        assert!(parse_request("uwum://media/%2Fetc%2Fpasswd").is_none());
-        assert!(parse_request("uwum://other/whatever").is_none());
+        assert!(parse_request("horo://media/https%3A%2F%2Fevil.example%2Fx").is_none());
+        assert!(parse_request("horo://media/%2Fetc%2Fpasswd").is_none());
+        assert!(parse_request("horo://other/whatever").is_none());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-# uwum
+# horo
 
 A Matrix client with end-to-end encryption and LiveKit voice, in the UwU design
 system. Tauri 2 + Rust backend, React + TypeScript frontend.
@@ -19,7 +19,7 @@ macOS and iOS build today, and Android runs on a device. Linux and Windows are
 kept viable — no macOS-only crates, and both custom-protocol URL forms are
 handled — but neither is tested yet.
 
-**Voice does not work on Linux**, and not for a reason uwum can fix. The
+**Voice does not work on Linux**, and not for a reason horo can fix. The
 WebView there is WebKitGTK, whose `ENABLE_WEB_RTC` follows
 `ENABLE_EXPERIMENTAL_FEATURES` — off — and no distribution overrides it, so
 `RTCPeerConnection` does not exist however the `enable-webrtc` setting reads
@@ -47,7 +47,7 @@ tens of gigabytes, and an `IgnorePkg` entry so the next `-Syu` doesn't undo it.
 That build then has to be the one the app actually loads, which the **AppImage
 is not** — linuxdeploy bundles a WebKitGTK and its `WebKitWebProcess` inside, so
 the AppImage ignores whatever is installed on the system. Run a locally built
-uwum (`npm run app`, or `npm run app:build` on the patched machine) to get the
+horo (`npm run app`, or `npm run app:build` on the patched machine) to get the
 system WebKitGTK.
 
 An attempt at exactly this on Arch with 2.52.6 did not end in a working call,
@@ -94,7 +94,7 @@ every copy already installed until its owner downloads a build by hand. Keep the
 private key and its password somewhere they outlive the machine that made them.
 
 ```bash
-npm run tauri signer generate -- -w ~/.tauri/uwum-updater.key
+npm run tauri signer generate -- -w ~/.tauri/horo-updater.key
 ```
 
 ## What works

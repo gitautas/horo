@@ -62,7 +62,7 @@ describe("renderFormattedBody — untrusted markup", () => {
 
   it("renders mxc images through our own media protocol", () => {
     const container = html('<img src="mxc://uwu.gg/abc" alt="pic">');
-    expect(container.querySelector("img")?.getAttribute("src")).toContain("uwum://media/");
+    expect(container.querySelector("img")?.getAttribute("src")).toContain("horo://media/");
   });
 
   it("strips iframes and objects while keeping surrounding text", () => {

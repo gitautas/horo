@@ -148,7 +148,7 @@ export function AttachSheet({
                 color: "var(--text-secondary)",
               }}
             >
-              uwum can't see your photos. you can turn that on in Settings →
+              horo can't see your photos. you can turn that on in Settings →
               Privacy &amp; Security → Photos, or pick a file below instead.
             </div>
           )}
@@ -218,7 +218,7 @@ export function AttachSheet({
             }}
           >
             showing the photos you chose to share. Settings → Privacy &amp; Security →
-            Photos lets uwum see more.
+            Photos lets horo see more.
           </div>
         )}
 

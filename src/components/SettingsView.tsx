@@ -814,7 +814,7 @@ function VoiceSection() {
   );
   const missing = (what: string) => (
     <div style={{ fontSize: 12.5, color: "var(--status-warning)" }}>
-      no {what} found — check that uwum has permission in system settings.
+      no {what} found — check that horo has permission in system settings.
     </div>
   );
 
@@ -962,8 +962,8 @@ function NotificationsSection() {
       {permitted === false && (
         <Card tone="warning">
           <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>
-            your system isn't letting uwum show banners yet. sounds still work — but
-            for pop-ups, allow notifications for uwum in system settings.
+            your system isn't letting horo show banners yet. sounds still work — but
+            for pop-ups, allow notifications for horo in system settings.
           </div>
           <div style={{ marginTop: 12 }}>
             <Button variant="ghost" size="sm" onClick={askPermission}>
@@ -1281,7 +1281,7 @@ function AboutSection() {
             letterSpacing: "-0.03em",
           }}
         >
-          uwum
+          horo
         </div>
         <div style={{ color: "var(--text-secondary)", fontSize: 13.5, marginTop: 6 }}>
           a cute matrix client~

@@ -28,10 +28,10 @@
  * the bar ever returns after regenerating the iOS project, it is this that went
  * missing.
  */
-@interface UwumKeyboardAccessoryPatch : NSObject
+@interface HoroKeyboardAccessoryPatch : NSObject
 @end
 
-@implementation UwumKeyboardAccessoryPatch
+@implementation HoroKeyboardAccessoryPatch
 
 + (void)load {
   // WebKit's classes are registered when its image loads, which has not
@@ -69,12 +69,12 @@
  *
  * Three C entry points, called from `photos.rs` on a Rust worker thread:
  *
- *   uwum_photos_recent  — authorise, then JSON for the N newest items, each
+ *   horo_photos_recent  — authorise, then JSON for the N newest items, each
  *                         with a small JPEG thumbnail as a data URI.
- *   uwum_photos_export  — copy one asset's original bytes to a temp file and
+ *   horo_photos_export  — copy one asset's original bytes to a temp file and
  *                         return the path, so the existing path-based upload
  *                         can send it unchanged.
- *   uwum_photos_free    — release a string from either of the above.
+ *   horo_photos_free    — release a string from either of the above.
  *
  * Everything here is synchronous by design. PhotoKit is callback-driven, so
  * each call blocks on a semaphore; that is safe *only* because the caller is a
@@ -82,7 +82,7 @@
  * thread would deadlock against PhotoKit's own main-queue callbacks.
  */
 
-static char *uwum_copy_cstr(NSString *string) {
+static char *horo_copy_cstr(NSString *string) {
   const char *utf8 = string.UTF8String;
   if (utf8 == NULL) {
     return NULL;
@@ -90,17 +90,17 @@ static char *uwum_copy_cstr(NSString *string) {
   return strdup(utf8);
 }
 
-static char *uwum_json(id object) {
+static char *horo_json(id object) {
   NSError *error = nil;
   NSData *data = [NSJSONSerialization dataWithJSONObject:object options:0 error:&error];
   if (data == nil) {
-    return uwum_copy_cstr(@"{\"status\":\"error\",\"message\":\"could not encode\"}");
+    return horo_copy_cstr(@"{\"status\":\"error\",\"message\":\"could not encode\"}");
   }
-  return uwum_copy_cstr([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]);
+  return horo_copy_cstr([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]);
 }
 
 /** Ask once, block until answered. `limited` counts as usable — see below. */
-static PHAuthorizationStatus uwum_authorise(void) {
+static PHAuthorizationStatus horo_authorise(void) {
   PHAuthorizationStatus status =
       [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite];
   if (status != PHAuthorizationStatusNotDetermined) {
@@ -118,15 +118,15 @@ static PHAuthorizationStatus uwum_authorise(void) {
   return answered;
 }
 
-extern "C" char *uwum_photos_recent(int limit, int thumb_px) {
+extern "C" char *horo_photos_recent(int limit, int thumb_px) {
   @autoreleasepool {
-    PHAuthorizationStatus status = uwum_authorise();
+    PHAuthorizationStatus status = horo_authorise();
 
     // `limited` is not a failure: the user picked some photos to share and we
     // see exactly those. Treating it as denied would be telling them their
     // choice didn't work.
     if (status != PHAuthorizationStatusAuthorized && status != PHAuthorizationStatusLimited) {
-      return uwum_json(@{@"status" : @"denied"});
+      return horo_json(@{@"status" : @"denied"});
     }
 
     PHFetchOptions *options = [PHFetchOptions new];
@@ -181,23 +181,23 @@ extern "C" char *uwum_photos_recent(int limit, int thumb_px) {
       }];
     }];
 
-    return uwum_json(@{
+    return horo_json(@{
       @"status" : status == PHAuthorizationStatusLimited ? @"limited" : @"ok",
       @"assets" : out,
     });
   }
 }
 
-extern "C" char *uwum_photos_export(const char *local_id) {
+extern "C" char *horo_photos_export(const char *local_id) {
   @autoreleasepool {
     if (local_id == NULL) {
-      return uwum_json(@{@"status" : @"error", @"message" : @"no asset"});
+      return horo_json(@{@"status" : @"error", @"message" : @"no asset"});
     }
 
     NSString *identifier = [NSString stringWithUTF8String:local_id];
     PHAsset *asset = [PHAsset fetchAssetsWithLocalIdentifiers:@[ identifier ] options:nil].firstObject;
     if (asset == nil) {
-      return uwum_json(@{@"status" : @"error", @"message" : @"that photo is gone"});
+      return horo_json(@{@"status" : @"error", @"message" : @"that photo is gone"});
     }
 
     // The *resource* rather than a rendered image: this is the file the user
@@ -212,7 +212,7 @@ extern "C" char *uwum_photos_export(const char *local_id) {
       }
     }
     if (resource == nil) {
-      return uwum_json(@{@"status" : @"error", @"message" : @"couldn't read that photo"});
+      return horo_json(@{@"status" : @"error", @"message" : @"couldn't read that photo"});
     }
 
     NSString *name = resource.originalFilename.length > 0 ? resource.originalFilename : @"photo";
@@ -238,13 +238,13 @@ extern "C" char *uwum_photos_export(const char *local_id) {
     dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
 
     if (failure != nil) {
-      return uwum_json(@{@"status" : @"error", @"message" : failure.localizedDescription});
+      return horo_json(@{@"status" : @"error", @"message" : failure.localizedDescription});
     }
-    return uwum_json(@{@"status" : @"ok", @"path" : path});
+    return horo_json(@{@"status" : @"ok", @"path" : path});
   }
 }
 
-extern "C" void uwum_photos_free(char *pointer) {
+extern "C" void horo_photos_free(char *pointer) {
   free(pointer);
 }
 
@@ -253,12 +253,12 @@ extern "C" void uwum_photos_free(char *pointer) {
  * Rust library is linked before this file's objects exist — see the long note
  * in `photos.rs` for why the dependency can only run this way.
  */
-extern "C" void uwum_register_photo_bridge(char *(*recent)(int, int),
+extern "C" void horo_register_photo_bridge(char *(*recent)(int, int),
                                            char *(*exporter)(const char *),
                                            void (*release)(char *));
 
 int main(int argc, char * argv[]) {
-	uwum_register_photo_bridge(uwum_photos_recent, uwum_photos_export, uwum_photos_free);
+	horo_register_photo_bridge(horo_photos_recent, horo_photos_export, horo_photos_free);
 	ffi::start_app();
 	return 0;
 }

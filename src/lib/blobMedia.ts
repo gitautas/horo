@@ -1,7 +1,7 @@
 /**
  * Blob URLs for `<video>` and `<audio>`.
  *
- * Images load happily from the `uwum://` scheme, but WKWebView doesn't play
+ * Images load happily from the `horo://` scheme, but WKWebView doesn't play
  * media elements through the WebView's networking at all — it hands the URL to
  * AVFoundation, which knows nothing about custom scheme handlers. The request
  * never reaches Rust, and the element reports "format not supported" with no

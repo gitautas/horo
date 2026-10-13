@@ -1,10 +1,10 @@
-# uwum architecture
+# horo architecture
 
 Rust owns the protocol; the WebView owns the pixels and the media.
 
 ```
 src-tauri/src/
-  lib.rs          tauri builder, command registry, uwum:// media protocol
+  lib.rs          tauri builder, command registry, horo:// media protocol
   commands.rs     the whole IPC surface — thin wrappers, no logic
   dto.rs          the wire format (camelCase); src/lib/bindings is generated from it
   error.rs        one error type, serialised as { kind, message }
@@ -15,7 +15,7 @@ src-tauri/src/
     auth.rs       discovery, password/SSO login, restore, sync bootstrap
     rooms.rs      room summaries + the sliding-sync diff stream
     timeline.rs   open/close timelines, send, edit, react, redact, paginate
-    media.rs      mxc:// fetching behind the uwum:// scheme
+    media.rs      mxc:// fetching behind the horo:// scheme
     presence.rs   who's online, polled for whoever is on screen
   verification.rs emoji SAS + key recovery
   rtc.rs          MatrixRTC membership + LiveKit token exchange
@@ -49,7 +49,7 @@ target, replies resolve — which is most of "Discord parity" for free.
 **Diffs, not snapshots.** The room list and each timeline stream `VectorDiff`s.
 The frontend applies them in place, so a busy room doesn't re-render the world.
 
-**Media over a custom scheme, not IPC.** `uwum://media/<encoded-mxc>?w=&h=` lets
+**Media over a custom scheme, not IPC.** `horo://media/<encoded-mxc>?w=&h=` lets
 the WebView cache and lazy-load avatars like any other image. Pushing base64
 through IPC would cost megabytes per render. *Except* for video and audio — see
 below.
@@ -180,7 +180,7 @@ user is when they start one, so `VerificationModal` sits above every other
 Media elements are handed to AVFoundation, which never consults a
 `WKURLSchemeHandler` — the request simply never arrives and the element reports
 "format not supported" with nothing in the network log. Images are fine over
-`uwum://`; media goes over IPC and gets wrapped in a `blob:` URL
+`horo://`; media goes over IPC and gets wrapped in a `blob:` URL
 (`src/lib/blobMedia.ts`). A blob typed `application/octet-stream` won't play
 either, so the container is sniffed from the bytes.
 

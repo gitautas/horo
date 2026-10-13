@@ -60,6 +60,9 @@ pub const PACK_ROOMS_LEGACY: &str = "im.ponies.emote_rooms";
 /// one. There's no standard type for a pack room, so this is ours; clients that
 /// don't know it should leave the room out of their room list, which is exactly
 /// what we want them to do.
+///
+/// It keeps the pre-rename `uwum` name: it is stored on the server, and changing
+/// it would hide every pack room created before the rename.
 pub const PACK_ROOM_TYPE: &str = "gg.veil.uwum.image_pack";
 
 // ---------------------------------------------------------------------------

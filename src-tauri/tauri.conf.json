@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "uwum",
+  "productName": "horo",
   "identifier": "lt.uwu.uwum",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "uwum",
+        "title": "horo",
         "label": "main",
         "width": 1280,
         "height": 832,
@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' uwum: http://uwum.localhost data: blob:; media-src 'self' uwum: http://uwum.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost https: wss: blob:; worker-src 'self' blob:; frame-src 'none'; object-src 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' horo: http://horo.localhost data: blob:; media-src 'self' horo: http://horo.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost https: wss: blob:; worker-src 'self' blob:; frame-src 'none'; object-src 'none'"
     }
   },
   "bundle": {
@@ -33,7 +33,7 @@
     "targets": "all",
     "category": "SocialNetworking",
     "shortDescription": "a cute matrix client",
-    "longDescription": "uwum — a Matrix client with end-to-end encryption and LiveKit voice, in the UwU design system.",
+    "longDescription": "horo — a Matrix client with end-to-end encryption and LiveKit voice, in the UwU design system.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -80,7 +80,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIwNkE2NTFBNDk4NDZDMEIKUldRTGJJUkpHbVZxSUxScldxR0hSb1FZeUVGUVVtNHdLWnkrejNnWndYYlR3a2VLd3BabmxQS00K",
       "endpoints": [
-        "https://github.com/gitautas/uwum/releases/latest/download/latest.json"
+        "https://github.com/gitautas/horo/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"

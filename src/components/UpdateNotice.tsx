@@ -38,8 +38,8 @@ function useUpdateCopy() {
       ? "looking for a new version…"
       : phase === "available"
         ? mode === "manual"
-          ? `uwum ${version} is out — this build updates from where you installed it`
-          : `uwum ${version} is ready to install`
+          ? `horo ${version} is out — this build updates from where you installed it`
+          : `horo ${version} is ready to install`
         : phase === "downloading"
           ? percent === null
             ? "downloading the update…"

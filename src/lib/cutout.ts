@@ -8,7 +8,7 @@
  *
  * Only the pixels can say. The format can't (a PNG screenshot is opaque), and
  * neither can an alpha channel (plenty of opaque PNGs carry one anyway). And
- * since an `<img>` from `uwum://` is cross-origin and would taint a canvas, the
+ * since an `<img>` from `horo://` is cross-origin and would taint a canvas, the
  * bytes come over IPC — the same thumbnail the timeline shows, so it's a
  * cache hit rather than a second download.
  */
@@ -53,6 +53,7 @@ export function isCutout(rgba: Uint8ClampedArray): boolean {
 // Answers are remembered across launches: they never change for a given mxc,
 // and without this every transparent image would flash its frame once per
 // session before losing it.
+// Still under the pre-rename name, so existing caches carry over.
 const STORAGE_KEY = "uwum:cutouts";
 const REMEMBERED = 500;
 

@@ -3,7 +3,7 @@
 //! A WebView can't enumerate photos — `<input type="file">` runs the system
 //! picker out of process and returns only the chosen file. That's the right
 //! privacy default, and it's why showing a grid of recent photos inside the app
-//! needs native code. The iOS half lives in `gen/apple/Sources/uwum/main.mm`;
+//! needs native code. The iOS half lives in `gen/apple/Sources/horo/main.mm`;
 //! this is the Rust side of that bridge.
 //!
 //! Exports land in the temp directory as ordinary files, so the picked photo
@@ -90,7 +90,7 @@ mod ios {
     /// The three pointers must be the PhotoKit entry points from `main.mm`, and
     /// strings from `recent`/`export` must be freeable by `free`.
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn uwum_register_photo_bridge(
+    pub unsafe extern "C" fn horo_register_photo_bridge(
         recent: RecentFn,
         export: ExportFn,
         free: FreeFn,

@@ -469,14 +469,14 @@ pub async fn get_event_body(
 
 /// The raw bytes of a piece of media, for `<video>` and `<audio>`.
 ///
-/// Images load fine from the `uwum://` scheme, but WKWebView hands media
+/// Images load fine from the `horo://` scheme, but WKWebView hands media
 /// elements to AVFoundation, which never consults a custom scheme handler — the
 /// request simply never arrives and the element reports "format not supported".
 /// So media comes over IPC instead and the frontend wraps it in a `blob:` URL,
 /// which AVFoundation will load.
 ///
 /// It's also how the frontend reads an image's pixels: one loaded from
-/// `uwum://` is cross-origin, so a canvas it's drawn into can't be read back.
+/// `horo://` is cross-origin, so a canvas it's drawn into can't be read back.
 #[tauri::command]
 pub async fn get_media_bytes(
     state: State<'_, AppState>,

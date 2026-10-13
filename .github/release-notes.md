@@ -26,7 +26,7 @@ background behind it. This works whichever app it was sent from.
 
 The macOS, Windows and AppImage builds update themselves: they check on launch
 and offer the new version in-app. A `.deb` is owned by your package manager
-rather than by uwum, so those builds tell you a release is out and send you back
+rather than by horo, so those builds tell you a release is out and send you back
 here instead.
 
 This release is **desktop only** — the Android and iOS builds are not signed
@@ -44,7 +44,7 @@ open it ("Apple could not verify…"). Either:
 
 1. Open **System Settings → Privacy & Security**, scroll down, and click
    **Open Anyway** (macOS 15+ removed the old right-click → Open shortcut), or
-2. clear the quarantine flag in a terminal: `xattr -cr /Applications/uwum.app`
+2. clear the quarantine flag in a terminal: `xattr -cr /Applications/horo.app`
 
 ### Windows — `.msi` / `-setup.exe` (x64)
 
@@ -55,8 +55,8 @@ under emulation.
 
 ### Linux — `.deb` / `.AppImage` (x86_64 `amd64` and arm64 `aarch64`)
 
-- **AppImage:** `chmod +x uwum_*.AppImage`, then run it. No installation needed.
+- **AppImage:** `chmod +x horo_*.AppImage`, then run it. No installation needed.
 - **deb:** requires Ubuntu 22.04+ / Debian 12+ (WebKitGTK 4.1):
-  `sudo apt install ./uwum_*.deb`
+  `sudo apt install ./horo_*.deb`
 - Known gap: **voice calls do not work on Linux yet** (WebKitGTK's WebRTC support
   is not enabled by the app). Everything else, including E2EE messaging, works.

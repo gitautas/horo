@@ -101,7 +101,7 @@ function Booting() {
         }}
         className="uwu-wobble"
       >
-        uwum
+        horo
       </div>
       <div style={{ position: "relative", zIndex: 1 }}>
         <Spinner size={20} />

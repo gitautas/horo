@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "7ABF7C897D4C3527940B1B80"
-               BuildableName = "uwum_iOS.app"
-               BlueprintName = "uwum_iOS"
-               ReferencedContainer = "container:uwum.xcodeproj">
+               BuildableName = "horo_iOS.app"
+               BlueprintName = "horo_iOS"
+               ReferencedContainer = "container:horo.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -33,9 +33,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "7ABF7C897D4C3527940B1B80"
-            BuildableName = "uwum_iOS.app"
-            BlueprintName = "uwum_iOS"
-            ReferencedContainer = "container:uwum.xcodeproj">
+            BuildableName = "horo_iOS.app"
+            BlueprintName = "horo_iOS"
+            ReferencedContainer = "container:horo.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -70,9 +70,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "7ABF7C897D4C3527940B1B80"
-            BuildableName = "uwum_iOS.app"
-            BlueprintName = "uwum_iOS"
-            ReferencedContainer = "container:uwum.xcodeproj">
+            BuildableName = "horo_iOS.app"
+            BlueprintName = "horo_iOS"
+            ReferencedContainer = "container:horo.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -101,9 +101,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "7ABF7C897D4C3527940B1B80"
-            BuildableName = "uwum_iOS.app"
-            BlueprintName = "uwum_iOS"
-            ReferencedContainer = "container:uwum.xcodeproj">
+            BuildableName = "horo_iOS.app"
+            BlueprintName = "horo_iOS"
+            ReferencedContainer = "container:horo.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>

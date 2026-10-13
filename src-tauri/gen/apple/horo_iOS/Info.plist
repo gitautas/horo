@@ -41,12 +41,12 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>uwum needs your microphone so people can hear you on voice calls.</string>
+	<string>horo needs your microphone so people can hear you on voice calls.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>uwum needs your camera for video calls.</string>
+	<string>horo needs your camera for video calls.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>uwum shows your recent photos and videos so you can send one without leaving the chat.</string>
+	<string>horo shows your recent photos and videos so you can send one without leaving the chat.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>uwum needs local network access to reach a voice server on your network.</string>
+	<string>horo needs local network access to reach a voice server on your network.</string>
 </dict>
 </plist>

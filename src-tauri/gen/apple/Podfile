@@ -1,13 +1,13 @@
 # Uncomment the next line to define a global platform for your project
 
-target 'uwum_iOS' do
+target 'horo_iOS' do
 platform :ios, '14.0'
-  # Pods for uwum_iOS
+  # Pods for horo_iOS
 end
 
-target 'uwum_macOS' do
+target 'horo_macOS' do
 platform :osx, '11.0'
-  # Pods for uwum_macOS
+  # Pods for horo_macOS
 end
 
 # Delete the deployment target for iOS and macOS, causing it to be inherited from the Podfile

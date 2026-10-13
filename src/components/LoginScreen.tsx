@@ -103,7 +103,7 @@ export function LoginScreen() {
             lineHeight: 1,
           }}
         >
-          uwum
+          horo
         </div>
         <div style={{ color: "var(--text-secondary)", fontSize: 13.5, marginTop: 6 }}>
           a cute matrix client~
@@ -224,7 +224,7 @@ export function LoginScreen() {
 
               {!info?.supportsPassword && !info?.supportsSso && (
                 <div style={{ fontSize: 13, color: "var(--status-warning)" }}>
-                  this server doesn't offer a sign-in method uwum supports yet.
+                  this server doesn't offer a sign-in method horo supports yet.
                 </div>
               )}
             </>

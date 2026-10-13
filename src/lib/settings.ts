@@ -101,6 +101,7 @@ export const FONT_PRESETS: { label: string; family: string }[] = [
   { label: "mono", family: "'JetBrains Mono Variable'" },
 ];
 
+// Still under the pre-rename name, so existing settings carry over.
 const STORAGE_KEY = "uwum:settings";
 
 /**

@@ -12,7 +12,7 @@
 //! that implements this, and matching its keys means a bio written in one shows
 //! up in the other. Note the shapes differ — bio is an object, status is a bare
 //! string. There's no observed key for a cover image anywhere, so that one is
-//! ours and only uwum will read it.
+//! ours and only horo will read it.
 
 use std::time::Duration;
 

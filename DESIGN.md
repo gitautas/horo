@@ -1,4 +1,4 @@
-# uwum design
+# horo design
 
 The visual language is **kawaii crossed with free-party/tekno rave flyer** —
 bubbly and soft where it's cute, neon and glowing where it wants to feel alive

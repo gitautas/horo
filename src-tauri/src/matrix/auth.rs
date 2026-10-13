@@ -25,7 +25,7 @@ use crate::{
     },
 };
 
-const DEVICE_NAME: &str = "uwum";
+const DEVICE_NAME: &str = "horo";
 
 /// Build a throwaway client just to inspect a server. No store, no session.
 async fn probe_client(server: &str) -> Result<Client> {
@@ -38,7 +38,7 @@ async fn probe_client(server: &str) -> Result<Client> {
 }
 
 fn user_agent() -> String {
-    format!("uwum/{}", env!("CARGO_PKG_VERSION"))
+    format!("horo/{}", env!("CARGO_PKG_VERSION"))
 }
 
 /// How the SDK is allowed to move room keys around on our behalf.

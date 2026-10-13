@@ -63,7 +63,7 @@ jobs:
           else
             release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases" \
               -f tag_name="${GITHUB_REF_NAME}" \
-              -f name="uwum ${GITHUB_REF_NAME}" \
+              -f name="horo ${GITHUB_REF_NAME}" \
               -F draft=true \
               -F body=@.github/release-notes.md \
               --jq '.id')"
@@ -137,7 +137,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS: ad-hoc code signing. Embeds entitlements.plist (mic access under
-          # hardened runtime) and prevents Gatekeeper's "uwum is damaged" dead end
+          # hardened runtime) and prevents Gatekeeper's "horo is damaged" dead end
           # on Apple Silicon downloads. Read only by the macOS bundler.
           APPLE_SIGNING_IDENTITY: '-'
           # Windows x64: aws-lc-sys (matrix-sdk -> reqwest -> rustls) needs NASM,
@@ -171,7 +171,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v6
         with:
-          name: uwum-${{ matrix.name }}
+          name: horo-${{ matrix.name }}
           if-no-files-found: error   # a row that bundled nothing must fail loudly
           retention-days: 7          # private-repo artifact storage is billed
           path: |
@@ -250,7 +250,7 @@ jobs:
             exit 1
           fi
 
-          keystore="${RUNNER_TEMP}/uwum-release.jks"
+          keystore="${RUNNER_TEMP}/horo-release.jks"
           printf '%s' "${KEYSTORE_BASE64}" | base64 -d > "${keystore}"
 
           # A Java properties file, so a backslash in a value is an escape
@@ -278,7 +278,7 @@ jobs:
             echo "::error::the Android build produced no signed release APK"
             exit 1
           fi
-          name="uwum-${GITHUB_REF_NAME:-dev}-android.apk"
+          name="horo-${GITHUB_REF_NAME:-dev}-android.apk"
           cp "${apk}" "${name}"
           echo "path=${name}" >> "$GITHUB_OUTPUT"
 
@@ -292,7 +292,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v6
         with:
-          name: uwum-android
+          name: horo-android
           if-no-files-found: error
           retention-days: 7
           path: ${{ steps.apk.outputs.path }}
@@ -376,7 +376,7 @@ jobs:
             echo "::error::the iOS build produced no IPA"
             exit 1
           fi
-          name="uwum-${GITHUB_REF_NAME:-dev}-ios.ipa"
+          name="horo-${GITHUB_REF_NAME:-dev}-ios.ipa"
           cp "${ipa}" "${name}"
           echo "path=${name}" >> "$GITHUB_OUTPUT"
 
@@ -390,7 +390,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v6
         with:
-          name: uwum-ios
+          name: horo-ios
           if-no-files-found: error
           retention-days: 7
           path: ${{ steps.ipa.outputs.path }}

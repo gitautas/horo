@@ -66,7 +66,7 @@ class Gate {
   async start(track: MediaStreamTrack): Promise<void> {
     if (!this.node) {
       await this.context.audioWorklet.addModule(workletUrl);
-      this.node = new AudioWorkletNode(this.context, "uwum-noise-gate", {
+      this.node = new AudioWorkletNode(this.context, "horo-noise-gate", {
         numberOfInputs: 1,
         numberOfOutputs: 1,
         outputChannelCount: [1],
@@ -114,7 +114,7 @@ class Gate {
 export class NoiseGateProcessor
   implements TrackProcessor<Track.Kind.Audio, AudioProcessorOptions>
 {
-  readonly name = "uwum-noise-gate";
+  readonly name = "horo-noise-gate";
   private gate = new Gate();
   processedTrack?: MediaStreamTrack;
 

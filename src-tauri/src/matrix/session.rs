@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
+/// Kept from before the rename to horo: changing it would orphan saved sessions.
 const KEYRING_SERVICE: &str = "gg.uwu.uwum";
 const SESSION_FILE: &str = "session.json";
 const FALLBACK_FILE: &str = "session.secret.json";

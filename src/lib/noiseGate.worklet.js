@@ -93,4 +93,4 @@ class NoiseGate extends AudioWorkletProcessor {
   }
 }
 
-registerProcessor("uwum-noise-gate", NoiseGate);
+registerProcessor("horo-noise-gate", NoiseGate);

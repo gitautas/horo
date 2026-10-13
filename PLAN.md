@@ -156,7 +156,7 @@ Small, self-contained, and entirely ours.
 
 Nothing standard exists. Element, FluffyChat and Cinny don't have it; SchildiChat
 does wallpapers but locally, not shared. So "set it for everyone" means a
-namespaced state event that only uwum reads:
+namespaced state event that only horo reads:
 
 ```
 type:      gg.uwu.room_background
@@ -186,7 +186,7 @@ this room".
   (`@tauri-apps/plugin-dialog`), a blur slider, a dim slider, a "for everyone"
   toggle, and remove.
 - `ChatPane.tsx`: render the image behind the timeline —
-  `position: absolute; inset: 0; background-image: url(uwum://media/…);
+  `position: absolute; inset: 0; background-image: url(horo://media/…);
   background-size: cover; filter: blur(Npx); z-index: 0`, with the timeline and
   composer above it. The existing `.uwu-pattern` is the precedent.
 - Add `background` to `RoomSummary` so the room list doesn't need a second
@@ -201,7 +201,7 @@ this room".
 - Blur on a large image is expensive to repaint. Blur once into a scaled-down
   copy rather than applying a large CSS blur radius to a full-size background on
   every scroll.
-- The `uwum://` media protocol serves this fine — but a background is a *large*
+- The `horo://` media protocol serves this fine — but a background is a *large*
   image, so request a thumbnail rather than the original.
 
 ---
@@ -361,7 +361,7 @@ deliberately rather than by recency.
 
 Decided rather than discovered: a category is a **subspace**, so the grouping is
 the same one Element shows and the same one other people see in their own
-spaces. The alternative — uwum-only folders in account data — would let you
+spaces. The alternative — horo-only folders in account data — would let you
 arrange anything, including rooms in no space at all, but nobody else would see
 it and it would ignore how a space's owner organised things.
 
@@ -424,7 +424,7 @@ Kept as a record of what the code does and why, not as work to do.
 Bio and status use Commet's keys (`chat.commet.profile_bio`, an object with a
 `body`; `chat.commet.profile_status`, a bare string) so a bio written in either
 client shows in the other. Cover photos are `gg.uwu.cover_url` — nothing else
-writes one, so only uwum reads it. Continuwuity implements MSC4133 without
+writes one, so only horo reads it. Continuwuity implements MSC4133 without
 advertising `uk.tcpip.msc4133`, which is why an earlier capability check
 concluded wrongly: test the endpoint, not the advertisement.
 
