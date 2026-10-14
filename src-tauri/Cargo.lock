@@ -2245,7 +2245,7 @@ dependencies = [
 
 [[package]]
 name = "horo"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "anyhow",
  "apple-native-keyring-store",
