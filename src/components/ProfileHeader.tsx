@@ -6,6 +6,7 @@ import type { Profile } from "../lib/types";
 import { useStore } from "../store";
 import { PresenceLine } from "./Presence";
 import { Avatar } from "./ui";
+import { corner, headingSize, space, textSize } from "../lib/scale";
 
 /**
  * The top of a person: cover, avatar over it, name, handle, status.
@@ -60,7 +61,7 @@ export function ProfileHeader({
         }}
       />
 
-      <div style={{ padding: "0 16px" }}>
+      <div style={{ padding: space("0 16px") }}>
         <div
           style={{
             marginTop: -Math.round(avatarSize * 0.45),
@@ -93,9 +94,9 @@ export function ProfileHeader({
 
         <div
           style={{
-            fontFamily: "var(--font-display)",
+            fontFamily: "var(--font-heading)",
             fontWeight: 800,
-            fontSize: 19,
+            fontSize: headingSize(19),
             lineHeight: 1.2,
           }}
         >
@@ -105,7 +106,7 @@ export function ProfileHeader({
           className="selectable"
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 11,
+            fontSize: textSize(11),
             color: "var(--text-tertiary)",
             wordBreak: "break-all",
           }}
@@ -120,10 +121,10 @@ export function ProfileHeader({
             className="selectable"
             style={{
               marginTop: 11,
-              padding: "7px 11px",
-              borderRadius: 12,
+              padding: space("7px 11px"),
+              borderRadius: corner(12),
               background: "var(--surface-inset)",
-              fontSize: 13,
+              fontSize: textSize(13),
               color: "var(--text-secondary)",
               wordBreak: "break-word",
             }}

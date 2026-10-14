@@ -34,6 +34,7 @@ import {
 import type { ImagePack, PackImage } from "../lib/types";
 import { useStore } from "../store";
 import { Icon } from "./ui";
+import { corner, space, textSize } from "../lib/scale";
 
 const WIDTH = 340;
 const HEIGHT = 392;
@@ -192,7 +193,7 @@ export function EmojiPicker({
         height: HEIGHT,
         display: "flex",
         flexDirection: "column",
-        borderRadius: 20,
+        borderRadius: corner(20),
         background: "var(--surface-card-raised)",
         border: "1px solid var(--border-default)",
         boxShadow: "var(--shadow-pop)",
@@ -200,13 +201,13 @@ export function EmojiPicker({
         zIndex: 60,
       }}
     >
-      <div style={{ padding: "10px 12px 8px" }}>
+      <div style={{ padding: space("10px 12px 8px") }}>
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 8,
-            padding: "6px 11px",
+            gap: space(8),
+            padding: space("6px 11px"),
             borderRadius: 999,
             background: "var(--surface-card)",
             border: "1px solid var(--border-subtle)",
@@ -226,7 +227,7 @@ export function EmojiPicker({
               border: "none",
               outline: "none",
               color: "var(--text-primary)",
-              fontSize: 13,
+              fontSize: textSize(13),
             }}
           />
         </div>
@@ -237,8 +238,8 @@ export function EmojiPicker({
           className="uwu-scroll"
           style={{
             display: "flex",
-            gap: 2,
-            padding: "0 10px 6px",
+            gap: space(2),
+            padding: space("0 10px 6px"),
             borderBottom: "1px solid var(--border-subtle)",
           }}
         >
@@ -252,7 +253,7 @@ export function EmojiPicker({
                 flex: 1,
                 minWidth: 22,
                 height: 26,
-                borderRadius: 8,
+                borderRadius: corner(8),
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -271,7 +272,7 @@ export function EmojiPicker({
         </div>
       )}
 
-      <div ref={scroller} className="uwu-scroll" style={{ flex: 1, padding: "4px 8px 8px" }}>
+      <div ref={scroller} className="uwu-scroll" style={{ flex: 1, padding: space("4px 8px 8px") }}>
         {results ? (
           <SearchResults
             results={results}
@@ -340,7 +341,7 @@ export function EmojiPicker({
 const GRID: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(8, 1fr)",
-  gap: 1,
+  gap: space(1),
 };
 
 function SearchResults({
@@ -364,9 +365,9 @@ function SearchResults({
     return (
       <div
         style={{
-          padding: "28px 12px",
+          padding: space("28px 12px"),
           textAlign: "center",
-          fontSize: 12.5,
+          fontSize: textSize(12.5),
           color: "var(--text-tertiary)",
         }}
       >
@@ -409,9 +410,9 @@ function Block({
           position: "sticky",
           top: 0,
           zIndex: 1,
-          padding: "6px 4px 4px",
+          padding: space("6px 4px 4px"),
           fontFamily: "var(--font-mono)",
-          fontSize: 10,
+          fontSize: textSize(10),
           letterSpacing: ".08em",
           textTransform: "uppercase",
           color: "var(--text-tertiary)",
@@ -496,7 +497,7 @@ function RemoteImg({
   size?: number;
 }) {
   const src = mediaUrl(url, { width: size * 2, height: size * 2 });
-  if (!src) return <span style={{ fontSize: 9 }}>{label}</span>;
+  if (!src) return <span style={{ fontSize: textSize(9) }}>{label}</span>;
 
   return (
     <img
@@ -571,8 +572,8 @@ function Cell({
       aria-label={label}
       style={{
         height: 34,
-        borderRadius: 8,
-        fontSize: 20,
+        borderRadius: corner(8),
+        fontSize: textSize(20),
         lineHeight: 1,
         cursor: "pointer",
         display: "flex",
@@ -609,8 +610,8 @@ function Footer({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 8,
-        padding: "7px 12px",
+        gap: space(8),
+        padding: space("7px 12px"),
         borderTop: "1px solid var(--border-subtle)",
         background: "var(--surface-card)",
       }}
@@ -618,7 +619,7 @@ function Footer({
       <span
         style={{
           width: 20,
-          fontSize: 17,
+          fontSize: textSize(17),
           lineHeight: 1,
           display: "flex",
           justifyContent: "center",
@@ -634,12 +635,12 @@ function Footer({
       </span>
       <span
         className="uwu-ellipsis"
-        style={{ flex: 1, fontSize: 11.5, color: "var(--text-secondary)" }}
+        style={{ flex: 1, fontSize: textSize(11.5), color: "var(--text-secondary)" }}
       >
         {label}
       </span>
 
-      <div style={{ display: "flex", gap: 1 }}>
+      <div style={{ display: "flex", gap: space(1) }}>
         {TONE_SAMPLES.map((sample, tone) => (
           <button
             key={tone}
@@ -652,8 +653,8 @@ function Footer({
             style={{
               width: 20,
               height: 20,
-              borderRadius: 6,
-              fontSize: 12,
+              borderRadius: corner(6),
+              fontSize: textSize(12),
               lineHeight: 1,
               cursor: "pointer",
               background:

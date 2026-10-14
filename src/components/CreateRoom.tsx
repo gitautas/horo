@@ -3,6 +3,7 @@ import { useState } from "react";
 import * as ipc from "../lib/ipc";
 import { useStore } from "../store";
 import { Button, Modal, RaveLabel, Spinner, Toggle } from "./ui";
+import { corner, headingSize, space, textSize } from "../lib/scale";
 
 type Mode = "create" | "join";
 
@@ -25,7 +26,7 @@ function Dialog() {
   const showBanner = useStore((s) => s.showBanner);
   const refreshSpaces = useStore((s) => s.refreshSpaces);
   const activeSpaceId = useStore((s) => s.activeSpaceId);
-  const space = useStore((s) => s.spaces.find((sp) => sp.id === s.activeSpaceId));
+  const activeSpace = useStore((s) => s.spaces.find((sp) => sp.id === s.activeSpaceId));
 
   const [mode, setMode] = useState<Mode>("create");
   const [busy, setBusy] = useState(false);
@@ -92,7 +93,7 @@ function Dialog() {
 
   return (
     <Modal title={mode === "create" ? "make a room~" : "join a room"} onClose={close}>
-      <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
+      <div style={{ display: "flex", gap: space(6), marginBottom: 20 }}>
         <ModeTab label="make one" active={mode === "create"} onClick={() => setMode("create")} />
         <ModeTab label="join one" active={mode === "join"} onClick={() => setMode("join")} />
       </div>
@@ -119,7 +120,7 @@ function Dialog() {
           />
 
           <Field label="address">
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: space(6) }}>
               <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-tertiary)" }}>
                 #
               </span>
@@ -127,7 +128,7 @@ function Dialog() {
             </div>
             <div
               style={{
-                fontSize: 11.5,
+                fontSize: textSize(11.5),
                 color: "var(--text-tertiary)",
                 lineHeight: 1.45,
                 marginTop: 6,
@@ -150,9 +151,9 @@ function Dialog() {
             onToggle={setEncrypted}
           />
 
-          {space && (
+          {activeSpace && (
             <SwitchRow
-              label={`put it in ${space.name}`}
+              label={`put it in ${activeSpace.name}`}
               hint="you need permission to manage that space — if you haven't got it, the room still gets made, just not filed there"
               on={addToSpace}
               onToggle={setAddToSpace}
@@ -178,7 +179,7 @@ function Dialog() {
           </Field>
           <div
             style={{
-              fontSize: 12,
+              fontSize: textSize(12),
               color: "var(--text-tertiary)",
               lineHeight: 1.5,
               marginTop: -4,
@@ -226,11 +227,11 @@ function ModeTab({
     <button
       onClick={onClick}
       style={{
-        padding: "7px 14px",
+        padding: space("7px 14px"),
         borderRadius: 999,
         cursor: "pointer",
         fontFamily: "var(--font-rave)",
-        fontSize: 10,
+        fontSize: textSize(10),
         fontWeight: 800,
         letterSpacing: "0.1em",
         textTransform: "uppercase",
@@ -286,13 +287,13 @@ function Input({
       }}
       style={{
         width: "100%",
-        padding: "10px 13px",
-        borderRadius: 14,
+        padding: space("10px 13px"),
+        borderRadius: corner(14),
         background: "var(--surface-inset)",
         border: "1px solid var(--border-subtle)",
         outline: "none",
         color: "var(--text-primary)",
-        fontSize: 14,
+        fontSize: textSize(14),
       }}
     />
   );
@@ -310,14 +311,14 @@ function SwitchRow({
   onToggle: (next: boolean) => void;
 }) {
   return (
-    <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 14 }}>
+    <div style={{ display: "flex", alignItems: "flex-start", gap: space(12), marginBottom: 14 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13.5 }}>
+        <div style={{ fontFamily: "var(--font-heading)", fontWeight: 700, fontSize: headingSize(13.5) }}>
           {label}
         </div>
         <div
           style={{
-            fontSize: 12,
+            fontSize: textSize(12),
             color: "var(--text-tertiary)",
             lineHeight: 1.45,
             marginTop: 2,
@@ -326,7 +327,7 @@ function SwitchRow({
           {hint}
         </div>
       </div>
-      <div style={{ paddingTop: 2 }}>
+      <div style={{ paddingTop: space(2) }}>
         <Toggle on={on} onToggle={onToggle} label={label} />
       </div>
     </div>

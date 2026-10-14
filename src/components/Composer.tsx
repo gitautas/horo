@@ -11,6 +11,7 @@ import { selectDraft, useStore } from "../store";
 import { AttachSheet } from "./AttachSheet";
 import { EmojiPicker } from "./EmojiPicker";
 import { Icon } from "./ui";
+import { corner, space, textSize } from "../lib/scale";
 
 /** How long we let a typing notice stand before refreshing it. */
 const TYPING_REFRESH_MS = 4000;
@@ -301,9 +302,9 @@ export function Composer({
     <div
       style={{
         position: "relative",
-        padding: isMobile
+        padding: space(isMobile
           ? "10px 14px calc(var(--safe-bottom) + 8px)"
-          : "12px 22px 18px",
+          : "12px 22px 18px"),
       }}
     >
       {completing && (
@@ -338,10 +339,10 @@ export function Composer({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 10,
-            padding: "7px 14px",
+            gap: space(10),
+            padding: space("7px 14px"),
             marginBottom: 8,
-            borderRadius: 14,
+            borderRadius: corner(14),
             background: "var(--surface-card)",
             border: "1px solid var(--border-subtle)",
             borderLeft: `2px solid ${draft.editing ? "var(--accent-primary)" : "var(--accent-tertiary)"}`,
@@ -352,7 +353,7 @@ export function Composer({
             size={13}
             color={draft.editing ? "var(--accent-primary)" : "var(--accent-tertiary)"}
           />
-          <span style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
+          <span style={{ fontSize: textSize(12.5), color: "var(--text-secondary)" }}>
             {draft.editing ? "editing your message" : "replying"}
           </span>
           <button
@@ -368,11 +369,11 @@ export function Composer({
         style={{
           display: "flex",
           alignItems: "flex-end",
-          gap: 10,
+          gap: space(10),
           background: "var(--surface-card-raised)",
           border: "1px solid var(--border-default)",
-          borderRadius: 24,
-          padding: "9px 12px",
+          borderRadius: corner(24),
+          padding: space("9px 12px"),
           boxShadow: "var(--shadow-card)",
         }}
       >
@@ -522,12 +523,12 @@ export function Composer({
             color: "var(--text-primary)",
             fontSize: "var(--text-message)",
             lineHeight: 1.5,
-            padding: "9px 6px",
+            padding: space("9px 6px"),
             maxHeight: 160,
           }}
         />
 
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space(4) }}>
           <button
             ref={emojiButton}
             onClick={() =>
@@ -586,7 +587,7 @@ export function Composer({
             }}
             onMouseEnter={(e) => {
               if (draft.body.trim()) {
-                e.currentTarget.style.transform = "rotate(-6deg) scale(1.05)";
+                e.currentTarget.style.transform = "rotate(calc(-6deg * var(--tilt-scale))) scale(1.05)";
               }
             }}
             onMouseLeave={(e) => {
@@ -607,16 +608,16 @@ export function Composer({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 8,
+            gap: space(8),
             marginTop: 8,
-            padding: "0 6px",
+            padding: space("0 6px"),
           }}
         >
           <Icon name="lock-key-open" size={11} color="var(--status-warning)" />
           <span
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: 10.5,
+              fontSize: textSize(10.5),
               color: "var(--text-tertiary)",
             }}
           >
@@ -655,8 +656,8 @@ function ShortcodeMenu({
         marginBottom: 4,
         minWidth: 220,
         maxWidth: 320,
-        padding: 5,
-        borderRadius: 16,
+        padding: space(5),
+        borderRadius: corner(16),
         background: "var(--surface-card-raised)",
         border: "1px solid var(--border-default)",
         boxShadow: "var(--shadow-pop)",
@@ -675,9 +676,9 @@ function ShortcodeMenu({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 9,
-            padding: "5px 9px",
-            borderRadius: 11,
+            gap: space(9),
+            padding: space("5px 9px"),
+            borderRadius: corner(11),
             cursor: "pointer",
             background: i === active ? "rgba(255,255,255,.08)" : "transparent",
           }}
@@ -687,7 +688,7 @@ function ShortcodeMenu({
             className="uwu-ellipsis"
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: 12,
+              fontSize: textSize(12),
               color: i === active ? "var(--text-primary)" : "var(--text-secondary)",
             }}
           >

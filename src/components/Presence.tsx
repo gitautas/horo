@@ -13,6 +13,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { formatLastSeen } from "../lib/display";
 import { usePresence, usePresenceSupported } from "../lib/presence";
 import type { Availability, Presence } from "../lib/types";
+import { space, textSize } from "../lib/scale";
 
 /** What gets a dot. `unknown` is a server answer we can't read, and gets none. */
 type Drawable = Exclude<Availability, "unknown">;
@@ -74,7 +75,7 @@ export function PresenceDot({
         // Offline sits back a little, and online glows: the two live states
         // should catch the eye first in a list where most people aren't.
         opacity: state === "offline" ? 0.9 : 1,
-        boxShadow: state === "online" ? "0 0 6px rgba(92,255,160,.5)" : undefined,
+        boxShadow: state === "online" ? "0 0 6px color-mix(in srgb, var(--green-500) 50%, transparent)" : undefined,
       }}
     />
   );
@@ -110,10 +111,10 @@ export function PresenceLine({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 6,
+        gap: space(6),
         marginTop: 7,
         fontFamily: "var(--font-mono)",
-        fontSize: 10.5,
+        fontSize: textSize(10.5),
         color: "var(--text-tertiary)",
         ...style,
       }}

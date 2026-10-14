@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { corner, headingSize, space, textSize } from "../lib/scale";
 
 interface State {
   error: Error | null;
@@ -33,7 +34,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          padding: 40,
+          padding: space(40),
           background: "var(--surface-app)",
           color: "var(--text-primary)",
           fontFamily: "var(--font-body)",
@@ -42,15 +43,15 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
         <div style={{ maxWidth: 680, width: "100%" }}>
           <div
             style={{
-              fontFamily: "var(--font-display)",
+              fontFamily: "var(--font-heading)",
               fontWeight: 800,
-              fontSize: 28,
+              fontSize: headingSize(28),
               color: "var(--accent-secondary)",
             }}
           >
             horo fell over
           </div>
-          <div style={{ marginTop: 8, color: "var(--text-secondary)", fontSize: 14 }}>
+          <div style={{ marginTop: 8, color: "var(--text-secondary)", fontSize: textSize(14) }}>
             something went wrong while drawing the app. the details below are the
             useful bit.
           </div>
@@ -59,13 +60,13 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
             className="selectable uwu-scroll"
             style={{
               marginTop: 18,
-              padding: 16,
+              padding: space(16),
               maxHeight: 320,
-              borderRadius: 16,
+              borderRadius: corner(16),
               background: "var(--ink-900)",
               border: "1px solid var(--border-subtle)",
               fontFamily: "var(--font-mono)",
-              fontSize: 12,
+              fontSize: textSize(12),
               lineHeight: 1.55,
               color: "var(--status-danger)",
               whiteSpace: "pre-wrap",
@@ -80,7 +81,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
             onClick={() => window.location.reload()}
             style={{
               marginTop: 18,
-              padding: "10px 20px",
+              padding: space("10px 20px"),
               borderRadius: 999,
               background: "var(--accent-primary)",
               color: "var(--text-on-accent)",
@@ -88,7 +89,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
               boxShadow: "var(--shadow-sticker-ink)",
               fontFamily: "var(--font-display)",
               fontWeight: 700,
-              fontSize: 14,
+              fontSize: textSize(14),
               cursor: "pointer",
             }}
           >

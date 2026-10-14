@@ -16,6 +16,7 @@ import type { Photo } from "../lib/types";
 import { uploadPaths } from "../lib/upload";
 import { useStore } from "../store";
 import { Icon, Spinner } from "./ui";
+import { corner, space, textSize } from "../lib/scale";
 
 /** How many tiles to ask for. Two screens' worth on a phone. */
 const RECENT_LIMIT = 36;
@@ -118,7 +119,7 @@ export function AttachSheet({
           borderTop: "1px solid var(--border-default)",
           borderTopLeftRadius: 22,
           borderTopRightRadius: 22,
-          padding: "10px 10px calc(var(--safe-bottom) + 10px)",
+          padding: space("10px 10px calc(var(--safe-bottom) + 10px)"),
           boxShadow: "var(--shadow-pop)",
         }}
       >
@@ -128,12 +129,12 @@ export function AttachSheet({
             maxHeight: "42vh",
             display: "grid",
             gridTemplateColumns: "repeat(4, 1fr)",
-            gap: 4,
+            gap: space(4),
             marginBottom: 8,
           }}
         >
           {photos === null && (
-            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "center", padding: 24 }}>
+            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "center", padding: space(24) }}>
               <Spinner size={18} />
             </div>
           )}
@@ -142,8 +143,8 @@ export function AttachSheet({
             <div
               style={{
                 gridColumn: "1 / -1",
-                padding: "14px 6px",
-                fontSize: 13,
+                padding: space("14px 6px"),
+                fontSize: textSize(13),
                 lineHeight: 1.5,
                 color: "var(--text-secondary)",
               }}
@@ -163,7 +164,7 @@ export function AttachSheet({
                 position: "relative",
                 aspectRatio: "1 / 1",
                 padding: 0,
-                borderRadius: 10,
+                borderRadius: corner(10),
                 overflow: "hidden",
                 cursor: "pointer",
                 background: "var(--surface-card)",
@@ -182,7 +183,7 @@ export function AttachSheet({
                     right: 4,
                     bottom: 3,
                     fontFamily: "var(--font-mono)",
-                    fontSize: 10,
+                    fontSize: textSize(10),
                     color: "var(--text-primary)",
                     textShadow: "0 1px 3px rgba(0,0,0,.9)",
                   }}
@@ -211,8 +212,8 @@ export function AttachSheet({
         {limited && (
           <div
             style={{
-              padding: "0 6px 8px",
-              fontSize: 11.5,
+              padding: space("0 6px 8px"),
+              fontSize: textSize(11.5),
               lineHeight: 1.45,
               color: "var(--text-tertiary)",
             }}
@@ -244,16 +245,16 @@ function SheetRow({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 12,
+        gap: space(12),
         width: "100%",
         height: 48,
-        padding: "0 12px",
-        borderRadius: 14,
+        padding: space("0 12px"),
+        borderRadius: corner(14),
         cursor: "pointer",
         textAlign: "left",
         fontFamily: "var(--font-display)",
         fontWeight: 700,
-        fontSize: 15,
+        fontSize: textSize(15),
         color: "var(--text-primary)",
       }}
     >

@@ -1,4 +1,6 @@
-:root{
+/* The classic theme. Also matched by `data-theme="classic"` so a preview tile can
+   show it while another theme is active. */
+:root,[data-theme="classic"]{
 /* base palette */
 --pink-500:#FF6187;--pink-400:#FF85A2;--pink-300:#FFB0C4;--pink-600:#E8456C;--pink-glow:rgba(255,97,135,.45);
 --acid-500:#C8FF4D;--acid-400:#D9FF7A;--acid-600:#A6E020;--acid-glow:rgba(200,255,77,.5);

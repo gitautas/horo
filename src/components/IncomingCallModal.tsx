@@ -4,6 +4,7 @@ import { call } from "../lib/call";
 import * as ipc from "../lib/ipc";
 import { useStore } from "../store";
 import { Avatar, Button, Icon } from "./ui";
+import { corner, headingSize, space, textSize } from "../lib/scale";
 
 /**
  * Someone is calling.
@@ -61,12 +62,12 @@ export function IncomingCallModal() {
       <div
         style={{
           width: "min(380px, calc(100vw - 32px))",
-          padding: 28,
-          borderRadius: 28,
+          padding: space(28),
+          borderRadius: corner(28),
           textAlign: "center",
           background: "var(--surface-card)",
-          border: "1px solid rgba(200,255,77,.35)",
-          boxShadow: "var(--shadow-pop), 0 0 40px rgba(200,255,77,.14)",
+          border: "1px solid color-mix(in srgb, var(--acid-500) 35%, transparent)",
+          boxShadow: "var(--shadow-pop), 0 0 40px color-mix(in srgb, var(--acid-500) 14%, transparent)",
         }}
       >
         <div
@@ -84,9 +85,9 @@ export function IncomingCallModal() {
         <div
           style={{
             marginTop: 16,
-            fontFamily: "var(--font-display)",
+            fontFamily: "var(--font-heading)",
             fontWeight: 800,
-            fontSize: 20,
+            fontSize: headingSize(20),
           }}
         >
           {room.name}
@@ -97,8 +98,8 @@ export function IncomingCallModal() {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            gap: 6,
-            fontSize: 13.5,
+            gap: space(6),
+            fontSize: textSize(13.5),
             color: "var(--text-secondary)",
           }}
         >
@@ -106,7 +107,7 @@ export function IncomingCallModal() {
           {room.isVideoRoom ? "incoming video call~" : "incoming call~"}
         </div>
 
-        <div style={{ marginTop: 26, display: "flex", gap: 10, justifyContent: "center" }}>
+        <div style={{ marginTop: 26, display: "flex", gap: space(10), justifyContent: "center" }}>
           <Button variant="danger" onClick={() => stop(room.id)}>
             decline
           </Button>
@@ -117,7 +118,7 @@ export function IncomingCallModal() {
           style={{
             marginTop: 14,
             fontFamily: "var(--font-mono)",
-            fontSize: 10.5,
+            fontSize: textSize(10.5),
             color: "var(--text-tertiary)",
           }}
         >

@@ -7,7 +7,7 @@ import { startNotifications } from "./lib/notify";
 import { startRinger } from "./lib/ringer";
 import { startUpdateChecks } from "./lib/update";
 import { resetPresence } from "./lib/presence";
-import { applyAccent, applyTypography, load as loadSettings } from "./lib/settings";
+import { applyAccent, applyTheme, applyTypography, load as loadSettings } from "./lib/settings";
 import type { RoomSummary } from "./lib/types";
 import { useEdgeSwipeBack, useIsMobile, useKeyboardSafeArea } from "./lib/viewport";
 import { selectActiveRoom, useStore } from "./store";
@@ -25,6 +25,7 @@ import { IncomingCallModal } from "./components/IncomingCallModal";
 import { UpdateBanner } from "./components/UpdateNotice";
 import { VerificationModal } from "./components/VerificationModal";
 import { BackdropPattern, dragRegion, Icon, Logo, Spinner } from "./components/ui";
+import { corner, space, textSize } from "./lib/scale";
 
 export default function App() {
   const { session, bootstrapped, setSession, setBootstrapped, showBanner } = useStore(
@@ -37,10 +38,11 @@ export default function App() {
     })),
   );
 
-  // Paint the saved accent and fonts before anything renders, so the app never
-  // flashes the defaults on the way to the chosen ones.
+  // Paint the saved theme, accent and fonts before anything renders, so the app
+  // never flashes the defaults on the way to the chosen ones.
   useEffect(() => {
     const saved = loadSettings();
+    applyTheme(saved.theme);
     applyAccent(saved.accent);
     applyTypography(saved);
   }, []);
@@ -82,7 +84,7 @@ function Booting() {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        gap: 18,
+        gap: space(18),
         background: "var(--surface-app)",
         position: "relative",
         overflow: "hidden",
@@ -169,13 +171,13 @@ function Shell() {
             zIndex: 200,
             display: "flex",
             alignItems: "center",
-            gap: 12,
-            padding: "12px 18px",
-            borderRadius: 18,
+            gap: space(12),
+            padding: space("12px 18px"),
+            borderRadius: corner(18),
             maxWidth: 520,
             background: "var(--surface-card-raised)",
             border: `1px solid ${
-              banner.tone === "error" ? "rgba(255,84,112,.4)" : "var(--border-default)"
+              banner.tone === "error" ? "color-mix(in srgb, var(--red-500) 40%, transparent)" : "var(--border-default)"
             }`,
             boxShadow: "var(--shadow-pop)",
           }}
@@ -185,7 +187,7 @@ function Shell() {
             size={16}
             color={banner.tone === "error" ? "var(--status-danger)" : "var(--accent-quaternary)"}
           />
-          <span style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.45 }}>
+          <span style={{ fontSize: textSize(13), color: "var(--text-secondary)", lineHeight: 1.45 }}>
             {banner.message}
           </span>
           <button onClick={dismissBanner} style={{ cursor: "pointer", display: "flex" }}>
@@ -301,13 +303,13 @@ function SyncIndicator() {
         zIndex: 150,
         display: "flex",
         alignItems: "center",
-        gap: 8,
-        padding: "6px 12px",
+        gap: space(8),
+        padding: space("6px 12px"),
         borderRadius: 999,
         background: "var(--surface-card-raised)",
-        border: "1px solid rgba(255,194,77,.4)",
+        border: "1px solid color-mix(in srgb, var(--amber-500) 40%, transparent)",
         fontFamily: "var(--font-mono)",
-        fontSize: 10.5,
+        fontSize: textSize(10.5),
         color: "var(--status-warning)",
       }}
       title={

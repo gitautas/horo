@@ -25,6 +25,7 @@ import type { ImagePack, PackImage, PackRoom, PackTarget } from "../lib/types";
 import { useStore } from "../store";
 import { Card, Heading, inputStyle } from "./settingsUi";
 import { Button, Icon, RaveLabel, Spinner, Toggle } from "./ui";
+import { corner, headingSize, space, textSize } from "../lib/scale";
 
 export function PacksSection() {
   const showBanner = useStore((s) => s.showBanner);
@@ -85,14 +86,14 @@ export function PacksSection() {
       <Heading>emotes &amp; stickers</Heading>
 
       {packs === null ? (
-        <div style={{ display: "flex", justifyContent: "center", padding: 40 }}>
+        <div style={{ display: "flex", justifyContent: "center", padding: space(40) }}>
           <Spinner />
         </div>
       ) : (
         <>
           {roomPacks.length === 0 && !legacyPack ? (
             <Card>
-              <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.55 }}>
+              <div style={{ fontSize: textSize(13), color: "var(--text-secondary)", lineHeight: 1.55 }}>
                 no packs yet. make as many as you like — one for your own images, or
                 one in a room to share with everyone in it.
               </div>
@@ -134,7 +135,7 @@ function PackCard({
 
   return (
     <Card>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: space(10), marginBottom: 14 }}>
         <Icon
           name={pack.source === "user" ? "user-circle" : "users-three"}
           size={17}
@@ -142,7 +143,7 @@ function PackCard({
         />
 
         {locked ? (
-          <div style={{ flex: 1, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15 }}>
+          <div style={{ flex: 1, fontFamily: "var(--font-heading)", fontWeight: 700, fontSize: headingSize(15) }}>
             {pack.displayName}
           </div>
         ) : (
@@ -158,10 +159,10 @@ function PackCard({
             style={{
               ...inputStyle,
               flex: 1,
-              padding: "6px 11px",
+              padding: space("6px 11px"),
               fontFamily: "var(--font-display)",
               fontWeight: 700,
-              fontSize: 15,
+              fontSize: textSize(15),
             }}
           />
         )}
@@ -184,7 +185,7 @@ function PackCard({
           style={{
             marginTop: -8,
             marginBottom: 12,
-            fontSize: 12,
+            fontSize: textSize(12),
             color: "var(--text-tertiary)",
             lineHeight: 1.5,
           }}
@@ -199,7 +200,7 @@ function PackCard({
       )}
 
       {pack.images.length === 0 ? (
-        <div style={{ fontSize: 13, color: "var(--text-tertiary)", padding: "4px 0 12px" }}>
+        <div style={{ fontSize: textSize(13), color: "var(--text-tertiary)", padding: space("4px 0 12px") }}>
           nothing in here yet~
         </div>
       ) : (
@@ -207,7 +208,7 @@ function PackCard({
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(auto-fill, minmax(56px, 1fr))",
-            gap: 6,
+            gap: space(6),
             marginBottom: 12,
           }}
         >
@@ -220,7 +221,7 @@ function PackCard({
               disabled={locked}
               style={{
                 height: 56,
-                borderRadius: 14,
+                borderRadius: corner(14),
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -298,10 +299,10 @@ function ImageEditor({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        padding: 12,
+        gap: space(10),
+        padding: space(12),
         marginBottom: 12,
-        borderRadius: 16,
+        borderRadius: corner(16),
         background: "var(--surface-inset)",
         border: "1px solid var(--border-subtle)",
         flexWrap: "wrap",
@@ -309,7 +310,7 @@ function ImageEditor({
     >
       <Thumb image={image} size={34} />
 
-      <div style={{ display: "flex", alignItems: "center", gap: 4, flex: 1, minWidth: 160 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: space(4), flex: 1, minWidth: 160 }}>
         <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-tertiary)" }}>:</span>
         <input
           value={shortcode}
@@ -328,7 +329,7 @@ function ImageEditor({
             }
           }}
           aria-label="shortcode"
-          style={{ ...inputStyle, padding: "6px 10px", fontFamily: "var(--font-mono)" }}
+          style={{ ...inputStyle, padding: space("6px 10px"), fontFamily: "var(--font-mono)" }}
         />
         <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-tertiary)" }}>:</span>
       </div>
@@ -357,7 +358,7 @@ function ImageEditor({
         disabled={busy}
         title={`remove :${image.shortcode}:`}
         aria-label={`remove :${image.shortcode}:`}
-        style={{ cursor: "pointer", display: "flex", padding: 6 }}
+        style={{ cursor: "pointer", display: "flex", padding: space(6) }}
       >
         <Icon name="trash" size={15} color="var(--status-danger)" />
       </button>
@@ -381,11 +382,11 @@ function UsagePill({
       aria-checked={on}
       aria-label={label}
       style={{
-        padding: "5px 12px",
+        padding: space("5px 12px"),
         borderRadius: 999,
         cursor: "pointer",
         fontFamily: "var(--font-mono)",
-        fontSize: 11.5,
+        fontSize: textSize(11.5),
         color: on ? "var(--accent-primary)" : "var(--text-tertiary)",
         background: on
           ? "color-mix(in srgb, var(--accent-primary) 14%, transparent)"
@@ -471,7 +472,7 @@ function NewPack({
     <>
       <Card>
         <RaveLabel style={{ marginBottom: 10 }}>new pack of your own</RaveLabel>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: space(8), flexWrap: "wrap" }}>
           <input
             value={mineName}
             onChange={(e) => setMineName(e.target.value)}
@@ -494,7 +495,7 @@ function NewPack({
         <div
           style={{
             marginTop: 10,
-            fontSize: 12,
+            fontSize: textSize(12),
             color: "var(--text-tertiary)",
             lineHeight: 1.5,
           }}
@@ -529,7 +530,7 @@ function NewRoomPack({
   return (
     <Card>
       <RaveLabel style={{ marginBottom: 10 }}>new pack in a room</RaveLabel>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: space(8), flexWrap: "wrap" }}>
         <select
           value={roomId}
           onChange={(e) => setRoomId(e.target.value)}
@@ -573,7 +574,7 @@ function NewRoomPack({
       <div
         style={{
           marginTop: 10,
-          fontSize: 12,
+          fontSize: textSize(12),
           color: "var(--text-tertiary)",
           lineHeight: 1.5,
         }}
@@ -590,7 +591,7 @@ function NewRoomPack({
 
 function Thumb({ image, size }: { image: PackImage; size: number }) {
   const src = mediaUrl(image.url, { width: size * 2, height: size * 2 });
-  if (!src) return <span style={{ fontSize: 10 }}>{image.shortcode}</span>;
+  if (!src) return <span style={{ fontSize: textSize(10) }}>{image.shortcode}</span>;
 
   return (
     <img

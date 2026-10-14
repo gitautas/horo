@@ -1,8 +1,12 @@
-:root{
+/* Also matched by `data-theme="classic"`, like colors.css. */
+:root,[data-theme="classic"]{
 --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;--space-8:32px;--space-10:40px;--space-12:48px;--space-16:64px;--space-20:80px;--space-24:96px;
 --container-max:1200px;
 /* The device's own intrusions — notch, home indicator, rounded corners.
    Zero everywhere except a phone, so they can be added unconditionally. */
 --safe-top:env(safe-area-inset-top,0px);--safe-right:env(safe-area-inset-right,0px);--safe-bottom:env(safe-area-inset-bottom,0px);--safe-left:env(safe-area-inset-left,0px);
+/* Theme scales, read through `src/lib/scale.ts`. Components write the design's
+   own px and these stretch them; 1 is the classic theme exactly. */
+--radius-scale:1;/* @kind other */--density:1;/* @kind other */--text-scale:1;/* @kind other */--tilt-scale:1;/* @kind other */
 --radius-xs:8px;--radius-sm:12px;--radius-md:16px;--radius-lg:20px;--radius-xl:28px;--radius-pill:999px;
 }

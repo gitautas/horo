@@ -21,6 +21,7 @@ import { useStore } from "../store";
 import { EmojiPicker } from "./EmojiPicker";
 import { AvatarButton, useProfileAnchor } from "./ProfileCard";
 import { Icon, Spinner } from "./ui";
+import { corner, headingSize, space, textSize } from "../lib/scale";
 
 export function MessageRow({
   item,
@@ -150,15 +151,15 @@ export function MessageRow({
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 10,
-          padding: "6px 0 6px 52px",
+          gap: space(10),
+          padding: `${space("6px 0 6px")} calc(40px + ${space(12)})`,
           color: "var(--text-tertiary)",
-          fontSize: 12,
+          fontSize: textSize(12),
         }}
       >
         <Icon name={systemIcon(item.content)} size={12} color="var(--accent-primary)" />
         <span className="selectable">{systemText(item, author)}</span>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5 }}>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: textSize(10.5) }}>
           {formatTime(item.timestamp)}
         </span>
       </div>
@@ -175,12 +176,12 @@ export function MessageRow({
       style={{
         position: "relative",
         display: "flex",
-        gap: 12,
-        padding: "5px 8px",
-        borderRadius: 16,
+        gap: space(12),
+        padding: space("5px 8px"),
+        borderRadius: corner(16),
         transition: "background var(--dur-fast) var(--ease-out)",
         background: item.isHighlighted
-          ? "rgba(255,97,135,.08)"
+          ? "color-mix(in srgb, var(--pink-500) 8%, transparent)"
           : hovered
             ? "rgba(255,255,255,.035)"
             : "transparent",
@@ -193,7 +194,7 @@ export function MessageRow({
           flex: "none",
           display: "flex",
           justifyContent: "center",
-          paddingTop: 2,
+          paddingTop: space(2),
         }}
       >
         {showHeader ? (
@@ -209,9 +210,9 @@ export function MessageRow({
             <span
               style={{
                 fontFamily: "var(--font-mono)",
-                fontSize: 9.5,
+                fontSize: textSize(9.5),
                 color: "var(--text-tertiary)",
-                paddingTop: 4,
+                paddingTop: space(4),
               }}
             >
               {formatTime(item.timestamp)}
@@ -226,7 +227,7 @@ export function MessageRow({
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 8,
+              gap: space(8),
               marginBottom: 3,
               flexWrap: "wrap",
             }}
@@ -237,7 +238,7 @@ export function MessageRow({
               style={{
                 fontFamily: "var(--font-display)",
                 fontWeight: 800,
-                fontSize: 14.5,
+                fontSize: textSize(14.5),
                 color: accent,
                 cursor: "pointer",
                 padding: 0,
@@ -248,7 +249,7 @@ export function MessageRow({
             <span
               style={{
                 fontFamily: "var(--font-mono)",
-                fontSize: 10.5,
+                fontSize: textSize(10.5),
                 color: "var(--text-tertiary)",
               }}
             >
@@ -278,10 +279,10 @@ export function MessageRow({
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 8,
+              gap: space(8),
               marginBottom: 5,
-              padding: "5px 11px",
-              borderRadius: 12,
+              padding: space("5px 11px"),
+              borderRadius: corner(12),
               background: "rgba(255,255,255,.04)",
               borderLeft: "2px solid var(--accent-tertiary)",
               maxWidth: "min(520px, 100%)",
@@ -292,7 +293,7 @@ export function MessageRow({
               className="uwu-ellipsis"
               // Without this the nowrap text reports its full width as the
               // row's minimum and pushes the message list off-screen.
-              style={{ minWidth: 0, fontSize: 12, color: "var(--text-secondary)" }}
+              style={{ minWidth: 0, fontSize: textSize(12), color: "var(--text-secondary)" }}
             >
               {item.reply.senderName ??
                 (item.reply.sender ? localpart(item.reply.sender) : "someone")}
@@ -307,7 +308,7 @@ export function MessageRow({
           <span
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: 10,
+              fontSize: textSize(10),
               color: "var(--text-tertiary)",
               marginLeft: 6,
             }}
@@ -317,7 +318,7 @@ export function MessageRow({
         )}
 
         {item.reactions.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 7 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: space(6), marginTop: 7 }}>
             {item.reactions.map((reaction) => (
               <button
                 key={reaction.key}
@@ -326,17 +327,17 @@ export function MessageRow({
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
-                  gap: 6,
-                  padding: "3px 10px",
+                  gap: space(6),
+                  padding: space("3px 10px"),
                   borderRadius: 999,
                   cursor: "pointer",
                   fontFamily: "var(--font-mono)",
-                  fontSize: 11.5,
+                  fontSize: textSize(11.5),
                   opacity: reaction.pending ? 0.55 : 1,
                   transition: "all var(--dur-fast) var(--ease-bounce)",
                   ...(reaction.mine
                     ? {
-                        background: "rgba(200,255,77,.16)",
+                        background: "color-mix(in srgb, var(--acid-500) 16%, transparent)",
                         border: "1px solid var(--accent-primary)",
                         color: "var(--accent-primary)",
                       }
@@ -360,9 +361,9 @@ export function MessageRow({
             style={{
               display: "inline-flex",
               alignItems: "center",
-              gap: 8,
+              gap: space(8),
               marginTop: 8,
-              padding: "6px 12px 6px 8px",
+              padding: space("6px 12px 6px 8px"),
               borderRadius: 999,
               background: "var(--surface-card)",
               border: "1px solid var(--border-subtle)",
@@ -374,7 +375,7 @@ export function MessageRow({
               style={{
                 fontFamily: "var(--font-display)",
                 fontWeight: 700,
-                fontSize: 12.5,
+                fontSize: textSize(12.5),
                 color: "var(--accent-quaternary)",
               }}
             >
@@ -388,11 +389,11 @@ export function MessageRow({
           <div
             style={{
               marginTop: 6,
-              fontSize: 11.5,
+              fontSize: textSize(11.5),
               color: "var(--status-danger)",
               display: "flex",
               alignItems: "center",
-              gap: 6,
+              gap: space(6),
             }}
           >
             <Icon name="warning-circle" size={12} color="var(--status-danger)" />
@@ -405,7 +406,7 @@ export function MessageRow({
         <span
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 10,
+            fontSize: textSize(10),
             color: "var(--text-tertiary)",
             alignSelf: "flex-end",
             animation: "uwuPulse 1.2s infinite",
@@ -429,9 +430,9 @@ export function MessageRow({
             right: 12,
             display: "flex",
             alignItems: "center",
-            gap: 2,
-            padding: 3,
-            borderRadius: 12,
+            gap: space(2),
+            padding: space(3),
+            borderRadius: corner(12),
             background: "var(--surface-card-raised)",
             border: "1px solid var(--border-default)",
             boxShadow: "var(--shadow-card)",
@@ -446,8 +447,8 @@ export function MessageRow({
               style={{
                 width: 26,
                 height: 26,
-                borderRadius: 9,
-                fontSize: 15,
+                borderRadius: corner(9),
+                fontSize: textSize(15),
                 lineHeight: 1,
                 display: "flex",
                 alignItems: "center",
@@ -578,7 +579,7 @@ function MessageActionSheet({
           borderTop: "1px solid var(--border-default)",
           borderTopLeftRadius: 22,
           borderTopRightRadius: 22,
-          padding: "10px 10px calc(var(--safe-bottom) + 10px)",
+          padding: space("10px 10px calc(var(--safe-bottom) + 10px)"),
           boxShadow: "var(--shadow-pop)",
         }}
       >
@@ -586,8 +587,8 @@ function MessageActionSheet({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 4,
-            padding: "6px 4px 10px",
+            gap: space(4),
+            padding: space("6px 4px 10px"),
             borderBottom: "1px solid var(--border-subtle)",
             marginBottom: 6,
           }}
@@ -603,8 +604,8 @@ function MessageActionSheet({
               style={{
                 flex: 1,
                 height: 44,
-                borderRadius: 12,
-                fontSize: 22,
+                borderRadius: corner(12),
+                fontSize: textSize(22),
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -624,7 +625,7 @@ function MessageActionSheet({
               flex: "none",
               width: 44,
               height: 44,
-              borderRadius: 12,
+              borderRadius: corner(12),
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -646,16 +647,16 @@ function MessageActionSheet({
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 12,
+              gap: space(12),
               width: "100%",
               height: 48,
-              padding: "0 12px",
-              borderRadius: 14,
+              padding: space("0 12px"),
+              borderRadius: corner(14),
               cursor: "pointer",
               textAlign: "left",
               fontFamily: "var(--font-display)",
               fontWeight: 700,
-              fontSize: 15,
+              fontSize: textSize(15),
               color: action.danger ? "var(--status-danger)" : "var(--text-primary)",
             }}
           >
@@ -726,7 +727,7 @@ function ActionButton({
       style={{
         width: 28,
         height: 26,
-        borderRadius: 9,
+        borderRadius: corner(9),
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -793,7 +794,7 @@ function ContentBody({ content, emojiOnly }: { content: Content; emojiOnly: bool
             ...textStyle,
             color: "var(--text-secondary)",
             fontFamily: "var(--font-mono)",
-            fontSize: 13,
+            fontSize: textSize(13),
           }}
         >
           <Body body={content.body} formatted={content.formatted} />
@@ -817,7 +818,7 @@ function ContentBody({ content, emojiOnly }: { content: Content; emojiOnly: bool
       return (
         <a
           href={content.geoUri}
-          style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 14 }}
+          style={{ display: "inline-flex", alignItems: "center", gap: space(8), fontSize: textSize(14) }}
         >
           <Icon name="map-pin" size={16} color="var(--accent-quaternary)" />
           {content.body || "shared a location"}
@@ -828,25 +829,25 @@ function ContentBody({ content, emojiOnly }: { content: Content; emojiOnly: bool
       return (
         <div
           style={{
-            padding: 14,
-            borderRadius: 16,
+            padding: space(14),
+            borderRadius: corner(16),
             background: "var(--surface-card)",
             border: "1px solid var(--border-subtle)",
             maxWidth: 420,
           }}
         >
-          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14.5 }}>
+          <div style={{ fontFamily: "var(--font-heading)", fontWeight: 700, fontSize: headingSize(14.5) }}>
             {content.question}
           </div>
-          <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: space(6) }}>
             {content.answers.map((answer, i) => (
               <div
                 key={i}
                 style={{
-                  padding: "7px 12px",
-                  borderRadius: 12,
+                  padding: space("7px 12px"),
+                  borderRadius: corner(12),
                   background: "var(--surface-card-raised)",
-                  fontSize: 13,
+                  fontSize: textSize(13),
                   color: "var(--text-secondary)",
                 }}
               >
@@ -855,7 +856,7 @@ function ContentBody({ content, emojiOnly }: { content: Content; emojiOnly: bool
             ))}
           </div>
           {content.ended && (
-            <div style={{ marginTop: 8, fontSize: 11, color: "var(--text-tertiary)" }}>
+            <div style={{ marginTop: 8, fontSize: textSize(11), color: "var(--text-tertiary)" }}>
               this poll has ended
             </div>
           )}
@@ -864,7 +865,7 @@ function ContentBody({ content, emojiOnly }: { content: Content; emojiOnly: bool
 
     case "redacted":
       return (
-        <div style={{ fontSize: 13.5, color: "var(--text-tertiary)", fontStyle: "italic" }}>
+        <div style={{ fontSize: textSize(13.5), color: "var(--text-tertiary)", fontStyle: "italic" }}>
           message deleted
         </div>
       );
@@ -875,12 +876,12 @@ function ContentBody({ content, emojiOnly }: { content: Content; emojiOnly: bool
           style={{
             display: "inline-flex",
             alignItems: "center",
-            gap: 8,
-            padding: "7px 13px",
-            borderRadius: 14,
-            background: "rgba(177,78,255,.08)",
-            border: "1px dashed rgba(177,78,255,.4)",
-            fontSize: 13,
+            gap: space(8),
+            padding: space("7px 13px"),
+            borderRadius: corner(14),
+            background: "color-mix(in srgb, var(--violet-500) 8%, transparent)",
+            border: "1px dashed color-mix(in srgb, var(--violet-500) 40%, transparent)",
+            fontSize: textSize(13),
             color: "var(--text-secondary)",
           }}
           title={content.reason}
@@ -897,8 +898,8 @@ function ContentBody({ content, emojiOnly }: { content: Content; emojiOnly: bool
           style={{
             display: "inline-flex",
             alignItems: "center",
-            gap: 8,
-            fontSize: 13.5,
+            gap: space(8),
+            fontSize: textSize(13.5),
             color: "var(--text-secondary)",
           }}
         >
@@ -909,7 +910,7 @@ function ContentBody({ content, emojiOnly }: { content: Content; emojiOnly: bool
 
     default:
       return (
-        <div style={{ fontSize: 13, color: "var(--text-tertiary)", fontStyle: "italic" }}>
+        <div style={{ fontSize: textSize(13), color: "var(--text-tertiary)", fontStyle: "italic" }}>
           unsupported message
         </div>
       );
@@ -961,7 +962,7 @@ function ImageBody({
   const cutout = useIsCutout(sticker ? null : media.mxc, media.mimetype, { width, height });
   const frameless = sticker || cutout;
 
-  if (!src) return <div style={{ fontSize: 13, color: "var(--text-tertiary)" }}>{body}</div>;
+  if (!src) return <div style={{ fontSize: textSize(13), color: "var(--text-tertiary)" }}>{body}</div>;
 
   return (
     <img
@@ -986,7 +987,7 @@ function ImageBody({
         // `contain` for a cut-out: cropping one would slice off the edges of
         // whatever was cut out.
         objectFit: cutout ? "contain" : "cover",
-        borderRadius: frameless ? 8 : 16,
+        borderRadius: corner(frameless ? 8 : 16),
         border: frameless ? "none" : "1px solid var(--border-subtle)",
         background: cutout ? "transparent" : "var(--surface-card)",
       }}
@@ -1001,7 +1002,7 @@ function VideoBody({ body, media }: { body: string; media: MediaInfo }) {
     marginTop: 4,
     maxWidth: "min(400px, 100%)",
     maxHeight: 320,
-    borderRadius: 16,
+    borderRadius: corner(16),
     border: "1px solid var(--border-subtle)",
     background: "var(--ink-950)",
   };
@@ -1009,7 +1010,7 @@ function VideoBody({ body, media }: { body: string; media: MediaInfo }) {
   if (error) {
     return (
       <div
-        style={{ ...frame, padding: "12px 16px", fontSize: 13, color: "var(--status-danger)" }}
+        style={{ ...frame, padding: space("12px 16px"), fontSize: textSize(13), color: "var(--status-danger)" }}
       >
         couldn't load {body}
       </div>
@@ -1045,9 +1046,9 @@ function AudioBody({ body, media }: { body: string; media: MediaInfo }) {
         marginTop: 4,
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        padding: "9px 14px",
-        borderRadius: 16,
+        gap: space(10),
+        padding: space("9px 14px"),
+        borderRadius: corner(16),
         background: "var(--surface-card)",
         border: "1px solid var(--border-subtle)",
         maxWidth: "min(340px, 100%)",
@@ -1069,7 +1070,7 @@ function AudioBody({ body, media }: { body: string; media: MediaInfo }) {
         <span
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 10.5,
+            fontSize: textSize(10.5),
             color: "var(--text-tertiary)",
           }}
         >
@@ -1104,9 +1105,9 @@ function FileBody({ body, media }: { body: string; media: MediaInfo }) {
         marginTop: 4,
         display: "inline-flex",
         alignItems: "center",
-        gap: 11,
-        padding: "11px 14px",
-        borderRadius: 16,
+        gap: space(11),
+        padding: space("11px 14px"),
+        borderRadius: corner(16),
         background: "var(--surface-card)",
         border: "1px solid var(--border-subtle)",
         maxWidth: "min(360px, 100%)",
@@ -1128,14 +1129,14 @@ function FileBody({ body, media }: { body: string; media: MediaInfo }) {
       <div style={{ minWidth: 0 }}>
         <div
           className="uwu-ellipsis"
-          style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13 }}
+          style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: textSize(13) }}
         >
           {body}
         </div>
         <div
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 10.5,
+            fontSize: textSize(10.5),
             color: "var(--text-tertiary)",
           }}
         >

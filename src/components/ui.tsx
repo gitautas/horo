@@ -7,6 +7,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { accentFor, initialsFor } from "../lib/display";
 import { mediaUrl } from "../lib/ipc";
 import logoUrl from "../../src-tauri/icons/horo_logo.svg";
+import { corner, headingSize, labelText, space, textSize } from "../lib/scale";
 
 /**
  * The window has no title bar on macOS, so parts of the chrome double as its
@@ -118,7 +119,7 @@ export function Avatar({
         width: size,
         height: size,
         flex: "none",
-        borderRadius: radius ?? Math.round(size * 0.36),
+        borderRadius: corner(radius ?? Math.round(size * 0.36)),
         border: "2px solid var(--ink-950)",
         background: loaded ? "var(--ink-900)" : accentFor(id),
         color: "var(--text-on-accent)",
@@ -287,7 +288,7 @@ export function Toggle({
   );
 }
 
-/** The uppercase, letter-spaced section label used throughout the design. */
+/** The section label used throughout the design — uppercase and letter-spaced under classic. */
 export function RaveLabel({
   children,
   style,
@@ -298,11 +299,7 @@ export function RaveLabel({
   return (
     <div
       style={{
-        fontFamily: "var(--font-rave)",
-        fontSize: 9.5,
-        fontWeight: 800,
-        letterSpacing: "0.14em",
-        textTransform: "uppercase",
+        ...labelText(9.5),
         color: "var(--text-tertiary)",
         ...style,
       }}
@@ -354,11 +351,11 @@ export function Button({
       onClick={onClick}
       disabled={disabled}
       style={{
-        padding: size === "sm" ? "7px 15px" : "10px 20px",
+        padding: space(size === "sm" ? "7px 15px" : "10px 20px"),
         borderRadius: 999,
         fontFamily: "var(--font-display)",
         fontWeight: 700,
-        fontSize: size === "sm" ? 13 : 14.5,
+        fontSize: textSize(size === "sm" ? 13 : 14.5),
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.45 : 1,
         transition: "transform var(--dur-fast) var(--ease-bounce)",
@@ -396,14 +393,14 @@ export function Tag({
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 5,
-        padding: "3px 9px",
+        gap: space(5),
+        padding: space("3px 9px"),
         borderRadius: 999,
         border: `1px solid color-mix(in srgb, ${colour} 40%, transparent)`,
         background: `color-mix(in srgb, ${colour} 12%, transparent)`,
         color: colour,
         fontFamily: "var(--font-rave)",
-        fontSize: 9,
+        fontSize: textSize(9),
         fontWeight: 800,
         letterSpacing: "0.1em",
         textTransform: "uppercase",
@@ -452,8 +449,8 @@ export function Modal({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 24,
-        background: "rgba(11,11,15,.7)",
+        padding: space(24),
+        background: "color-mix(in srgb, var(--ink-950) 70%, transparent)",
       }}
     >
       <div
@@ -464,19 +461,19 @@ export function Modal({
           maxWidth: "100%",
           maxHeight: "calc(100vh - 48px)",
           overflowY: "auto",
-          padding: 24,
-          borderRadius: 24,
+          padding: space(24),
+          borderRadius: corner(24),
           background: "var(--surface-card-raised)",
           border: "1px solid var(--border-default)",
           boxShadow: "var(--shadow-pop)",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space(10), marginBottom: 18 }}>
           <div
             style={{
-              fontFamily: "var(--font-display)",
+              fontFamily: "var(--font-heading)",
               fontWeight: 800,
-              fontSize: 20,
+              fontSize: headingSize(20),
               flex: 1,
             }}
           >

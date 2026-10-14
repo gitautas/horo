@@ -5,6 +5,7 @@ import type { HomeserverInfo } from "../lib/types";
 import { useIsMobile } from "../lib/viewport";
 import { useStore } from "../store";
 import { BackdropPattern, Button, dragRegion, Icon, Logo, RaveLabel, Spinner } from "./ui";
+import { corner, space, textSize } from "../lib/scale";
 
 type Stage = "server" | "credentials";
 
@@ -86,15 +87,15 @@ export function LoginScreen() {
           position: "relative",
           zIndex: 1,
           width: 396,
-          padding: 30,
-          borderRadius: 28,
+          padding: space(30),
+          borderRadius: corner(28),
           background: "var(--surface-card)",
           border: "1px solid var(--border-subtle)",
           boxShadow: "var(--shadow-pop)",
         }}
       >
         <Logo height={40} />
-        <div style={{ color: "var(--text-secondary)", fontSize: 13.5, marginTop: 10 }}>
+        <div style={{ color: "var(--text-secondary)", fontSize: textSize(13.5), marginTop: 10 }}>
           a cute matrix client~
         </div>
 
@@ -114,7 +115,7 @@ export function LoginScreen() {
               />
               <div
                 style={{
-                  fontSize: 12,
+                  fontSize: textSize(12),
                   color: "var(--text-tertiary)",
                   marginTop: 8,
                   lineHeight: 1.5,
@@ -129,10 +130,10 @@ export function LoginScreen() {
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 8,
+                  gap: space(8),
                   marginBottom: 12,
                   fontFamily: "var(--font-mono)",
-                  fontSize: 11,
+                  fontSize: textSize(11),
                   color: "var(--text-tertiary)",
                 }}
               >
@@ -148,7 +149,7 @@ export function LoginScreen() {
                     marginLeft: "auto",
                     color: "var(--accent-quaternary)",
                     cursor: "pointer",
-                    fontSize: 11,
+                    fontSize: textSize(11),
                     fontFamily: "var(--font-mono)",
                   }}
                 >
@@ -183,7 +184,7 @@ export function LoginScreen() {
                       style={{
                         display: "flex",
                         alignItems: "center",
-                        gap: 10,
+                        gap: space(10),
                         margin: "4px 0 14px",
                       }}
                     >
@@ -192,7 +193,7 @@ export function LoginScreen() {
                       <span style={{ flex: 1, height: 1, background: "var(--border-subtle)" }} />
                     </div>
                   )}
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: space(8) }}>
                     {(info.ssoProviders.length
                       ? info.ssoProviders
                       : [{ id: "", name: "single sign-on", icon: null }]
@@ -212,7 +213,7 @@ export function LoginScreen() {
               )}
 
               {!info?.supportsPassword && !info?.supportsSso && (
-                <div style={{ fontSize: 13, color: "var(--status-warning)" }}>
+                <div style={{ fontSize: textSize(13), color: "var(--status-warning)" }}>
                   this server doesn't offer a sign-in method horo supports yet.
                 </div>
               )}
@@ -224,12 +225,12 @@ export function LoginScreen() {
           <div
             style={{
               marginTop: 16,
-              padding: "10px 14px",
-              borderRadius: 14,
-              background: "rgba(255,84,112,.12)",
-              border: "1px solid rgba(255,84,112,.35)",
+              padding: space("10px 14px"),
+              borderRadius: corner(14),
+              background: "color-mix(in srgb, var(--red-500) 12%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--red-500) 35%, transparent)",
               color: "var(--status-danger)",
-              fontSize: 12.5,
+              fontSize: textSize(12.5),
               lineHeight: 1.5,
             }}
           >
@@ -238,7 +239,7 @@ export function LoginScreen() {
         )}
 
         {(stage === "server" || info?.supportsPassword) && (
-          <div style={{ marginTop: 22, display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ marginTop: 22, display: "flex", alignItems: "center", gap: space(12) }}>
             <Button
               type="submit"
               disabled={
@@ -258,9 +259,9 @@ export function LoginScreen() {
             marginTop: 20,
             display: "flex",
             alignItems: "center",
-            gap: 8,
+            gap: space(8),
             fontFamily: "var(--font-mono)",
-            fontSize: 10.5,
+            fontSize: textSize(10.5),
             color: "var(--text-tertiary)",
           }}
         >
@@ -292,11 +293,11 @@ function Field({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
+        gap: space(10),
         background: "var(--surface-inset)",
         border: "1px solid var(--border-subtle)",
         borderRadius: 999,
-        padding: "11px 16px",
+        padding: space("11px 16px"),
       }}
     >
       <Icon name={icon} size={14} color="var(--text-tertiary)" />
@@ -316,7 +317,7 @@ function Field({
           border: "none",
           outline: "none",
           color: "var(--text-primary)",
-          fontSize: 14,
+          fontSize: textSize(14),
         }}
       />
     </label>

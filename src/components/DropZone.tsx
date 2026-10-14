@@ -5,6 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { uploadPaths } from "../lib/upload";
 import { selectActiveRoom, useStore } from "../store";
 import { Icon } from "./ui";
+import { corner, headingSize, space, textSize } from "../lib/scale";
 
 /**
  * The "drop it here" overlay, and the drop itself.
@@ -70,8 +71,8 @@ export function DropZone() {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 28,
-        background: "rgba(11,11,15,.78)",
+        padding: space(28),
+        background: "color-mix(in srgb, var(--ink-950) 78%, transparent)",
         // Purely decorative: the OS owns the drag, and a pointer-events target
         // here would only get in its way.
         pointerEvents: "none",
@@ -82,13 +83,13 @@ export function DropZone() {
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          gap: 14,
-          padding: "44px 64px",
-          borderRadius: 28,
+          gap: space(14),
+          padding: space("44px 64px"),
+          borderRadius: corner(28),
           border: `2px dashed ${room ? "var(--accent-primary)" : "var(--border-strong)"}`,
           background: "var(--surface-card-raised)",
           boxShadow: "var(--shadow-pop)",
-          transform: "rotate(-1.5deg)",
+          transform: "rotate(calc(-1.5deg * var(--tilt-scale)))",
           textAlign: "center",
         }}
       >
@@ -97,10 +98,10 @@ export function DropZone() {
           size={40}
           color={room ? "var(--accent-primary)" : "var(--text-tertiary)"}
         />
-        <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 22 }}>
+        <div style={{ fontFamily: "var(--font-heading)", fontWeight: 800, fontSize: headingSize(22) }}>
           {room ? "drop it here~" : "open a room first~"}
         </div>
-        <div style={{ fontSize: 13, color: "var(--text-secondary)", maxWidth: 320 }}>
+        <div style={{ fontSize: textSize(13), color: "var(--text-secondary)", maxWidth: 320 }}>
           {room
             ? activeThreadRoot
               ? `it'll go to the thread you have open in ${room.name}`

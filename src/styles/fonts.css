@@ -1,0 +1,9 @@
+/* The horo theme's faces: Sora for body and UI text, Crimson Pro for headings
+   and section labels. Self-hosted like the rest — the CSP forbids remote
+   fonts. Both are variable and under the OFL; the licences sit beside the
+   files in `src/assets/fonts/`. */
+
+@font-face{font-family:'Sora';src:url('../assets/fonts/sora/Sora-Variable.woff2') format('woff2');font-weight:100 800;font-style:normal;font-display:swap}
+@font-face{font-family:'Sora';src:url('../assets/fonts/sora/Sora-VariableItalic.woff2') format('woff2');font-weight:100 800;font-style:italic;font-display:swap}
+@font-face{font-family:'Crimson Pro';src:url('../assets/fonts/crimson-pro/CrimsonPro-Variable.woff2') format('woff2');font-weight:200 900;font-style:normal;font-display:swap}
+@font-face{font-family:'Crimson Pro';src:url('../assets/fonts/crimson-pro/CrimsonPro-VariableItalic.woff2') format('woff2');font-weight:200 900;font-style:italic;font-display:swap}

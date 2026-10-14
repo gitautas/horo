@@ -5,6 +5,7 @@ import type { SasStateInfo } from "../lib/types";
 import * as ipc from "../lib/ipc";
 import { useStore } from "../store";
 import { Button, Icon } from "./ui";
+import { corner, headingSize, space, textSize } from "../lib/scale";
 
 /**
  * Emoji SAS verification.
@@ -67,19 +68,19 @@ export function VerificationModal() {
         style={{
           // Fits a phone without a horizontal scroll; unchanged on desktop.
         width: "min(440px, calc(100vw - 32px))",
-          padding: 28,
-          borderRadius: 28,
+          padding: space(28),
+          borderRadius: corner(28),
           background: "var(--surface-card)",
-          border: "1px solid rgba(177,78,255,.35)",
+          border: "1px solid color-mix(in srgb, var(--violet-500) 35%, transparent)",
           boxShadow: "var(--shadow-pop), var(--glow-violet)",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space(12) }}>
           <div
             style={{
               width: 42,
               height: 42,
-              borderRadius: 15,
+              borderRadius: corner(15),
               background: "var(--accent-tertiary)",
               color: "var(--text-on-accent)",
               display: "flex",
@@ -91,7 +92,7 @@ export function VerificationModal() {
           </div>
           <div>
             <div
-              style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 18 }}
+              style={{ fontFamily: "var(--font-heading)", fontWeight: 800, fontSize: headingSize(18) }}
             >
               {done ? "verified~" : cancelled ? "verification stopped" : "verify " + who}
             </div>
@@ -99,7 +100,7 @@ export function VerificationModal() {
               className="selectable"
               style={{
                 fontFamily: "var(--font-mono)",
-                fontSize: 11,
+                fontSize: textSize(11),
                 color: "var(--text-tertiary)",
               }}
             >
@@ -130,7 +131,7 @@ export function VerificationModal() {
           ) : emoji ? (
             <>
               <div
-                style={{ fontSize: 13.5, color: "var(--text-secondary)", lineHeight: 1.55 }}
+                style={{ fontSize: textSize(13.5), color: "var(--text-secondary)", lineHeight: 1.55 }}
               >
                 compare these with {who}. they should be in the{" "}
                 <strong style={{ color: "var(--text-primary)" }}>same order</strong> on both
@@ -141,7 +142,7 @@ export function VerificationModal() {
                 style={{
                   display: "grid",
                   gridTemplateColumns: "repeat(4, 1fr)",
-                  gap: 10,
+                  gap: space(10),
                   margin: "18px 0 6px",
                 }}
               >
@@ -149,19 +150,19 @@ export function VerificationModal() {
                   <div
                     key={i}
                     style={{
-                      padding: "12px 4px 9px",
-                      borderRadius: 16,
+                      padding: space("12px 4px 9px"),
+                      borderRadius: corner(16),
                       background: "var(--surface-card-raised)",
                       border: "1px solid var(--border-subtle)",
                       textAlign: "center",
                     }}
                   >
-                    <div style={{ fontSize: 28, lineHeight: 1 }}>{e.symbol}</div>
+                    <div style={{ fontSize: textSize(28), lineHeight: 1 }}>{e.symbol}</div>
                     <div
                       style={{
                         marginTop: 6,
                         fontFamily: "var(--font-mono)",
-                        fontSize: 9.5,
+                        fontSize: textSize(9.5),
                         color: "var(--text-tertiary)",
                       }}
                     >
@@ -184,7 +185,7 @@ export function VerificationModal() {
           )}
         </div>
 
-        <div style={{ marginTop: 22, display: "flex", gap: 10, justifyContent: "flex-end" }}>
+        <div style={{ marginTop: 22, display: "flex", gap: space(10), justifyContent: "flex-end" }}>
           {done || cancelled ? (
             <Button onClick={() => setRequest(null)}>close</Button>
           ) : emoji ? (
@@ -271,15 +272,15 @@ function Outcome({
   body: string;
 }) {
   return (
-    <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+    <div style={{ display: "flex", gap: space(12), alignItems: "flex-start" }}>
       <Icon name={icon} size={22} color={colour} style={{ marginTop: 2 }} />
       <div>
-        <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15 }}>
+        <div style={{ fontFamily: "var(--font-heading)", fontWeight: 700, fontSize: headingSize(15) }}>
           {title}
         </div>
         <div
           style={{
-            fontSize: 13,
+            fontSize: textSize(13),
             color: "var(--text-secondary)",
             lineHeight: 1.55,
             marginTop: 4,
@@ -298,13 +299,13 @@ function Waiting({ text }: { text: string }) {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        padding: "22px 0",
+        gap: space(10),
+        padding: space("22px 0"),
         color: "var(--text-secondary)",
-        fontSize: 13.5,
+        fontSize: textSize(13.5),
       }}
     >
-      <span style={{ display: "inline-flex", gap: 4 }}>
+      <span style={{ display: "inline-flex", gap: space(4) }}>
         {[0, 0.2, 0.4].map((d) => (
           <span
             key={d}
@@ -347,12 +348,12 @@ export function VerifyBanner() {
         margin: "14px 22px 0",
         display: "flex",
         alignItems: "center",
-        gap: 14,
-        padding: "13px 16px",
-        borderRadius: 20,
+        gap: space(14),
+        padding: space("13px 16px"),
+        borderRadius: corner(20),
         background: "var(--surface-card-raised)",
-        border: "1px solid rgba(177,78,255,.35)",
-        boxShadow: "0 0 24px rgba(177,78,255,.16)",
+        border: "1px solid color-mix(in srgb, var(--violet-500) 35%, transparent)",
+        boxShadow: "0 0 24px color-mix(in srgb, var(--violet-500) 16%, transparent)",
       }}
     >
       <div
@@ -360,7 +361,7 @@ export function VerifyBanner() {
           width: 38,
           height: 38,
           flex: "none",
-          borderRadius: 14,
+          borderRadius: corner(14),
           background: "var(--accent-tertiary)",
           display: "flex",
           alignItems: "center",
@@ -370,14 +371,14 @@ export function VerifyBanner() {
         <Icon name="shield-star" size={19} color="var(--text-on-accent)" />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15 }}>
+        <div style={{ fontFamily: "var(--font-heading)", fontWeight: 700, fontSize: headingSize(15) }}>
           new device wants in~
         </div>
-        <div style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
+        <div style={{ fontSize: textSize(12.5), color: "var(--text-secondary)" }}>
           {who} asked to verify. verify it so your messages stay readable everywhere.
         </div>
       </div>
-      <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ display: "flex", gap: space(8) }}>
         <Button
           size="sm"
           onClick={() =>

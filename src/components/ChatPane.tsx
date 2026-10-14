@@ -12,6 +12,7 @@ import { Composer } from "./Composer";
 import { TimelineView } from "./TimelineView";
 import { VerifyBanner } from "./VerificationModal";
 import { Avatar, ChannelBadge, dragOff, dragRegion, Icon } from "./ui";
+import { corner, headingSize, space, textSize } from "../lib/scale";
 
 /**
  * `onBack` is supplied only by the mobile shell, where this pane is the whole
@@ -67,12 +68,12 @@ export function ChatPane({ room, onBack }: { room: RoomSummary; onBack?: () => v
         style={{
           display: "flex",
           alignItems: "center",
-          gap: onBack ? 10 : 14,
+          gap: space(onBack ? 10 : 14),
           // The header is the top of the screen on a phone, so it carries the
           // notch inset itself rather than letting the status bar overlap it.
-          padding: onBack ? "calc(var(--safe-top) + 8px) 12px 8px" : "14px 22px",
+          padding: space(onBack ? "calc(var(--safe-top) + 8px) 12px 8px" : "14px 22px"),
           borderBottom: "1px solid var(--border-subtle)",
-          background: "rgba(17,17,23,.6)",
+          background: "color-mix(in srgb, var(--ink-900) 60%, transparent)",
         }}
       >
         {onBack && (
@@ -120,16 +121,16 @@ export function ChatPane({ room, onBack }: { room: RoomSummary; onBack?: () => v
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 8,
+              gap: space(8),
               minWidth: 0,
             }}
           >
             <span
               className="uwu-ellipsis"
               style={{
-                fontFamily: "var(--font-display)",
+                fontFamily: "var(--font-heading)",
                 fontWeight: 800,
-                fontSize: 19,
+                fontSize: headingSize(19),
                 letterSpacing: "-0.01em",
               }}
             >
@@ -156,7 +157,7 @@ export function ChatPane({ room, onBack }: { room: RoomSummary; onBack?: () => v
               userId={room.dmUserId}
               style={{
                 marginTop: 3,
-                fontSize: 11.5,
+                fontSize: textSize(11.5),
                 // "last seen 3h ago" wraps to three lines in a narrow header
                 // and doubles its height. `PresenceLine` is a flex row, so
                 // `text-overflow` would do nothing here — keeping it on one
@@ -170,7 +171,7 @@ export function ChatPane({ room, onBack }: { room: RoomSummary; onBack?: () => v
             <div
               className="uwu-ellipsis"
               style={{
-                fontSize: 12.5,
+                fontSize: textSize(12.5),
                 color: "var(--text-secondary)",
                 maxWidth: 520,
               }}
@@ -180,7 +181,7 @@ export function ChatPane({ room, onBack }: { room: RoomSummary; onBack?: () => v
                 style={{
                   fontFamily: "var(--font-mono)",
                   color: "var(--text-tertiary)",
-                  fontSize: 11.5,
+                  fontSize: textSize(11.5),
                 }}
               >
                 {room.canonicalAlias ?? ""}
@@ -191,13 +192,13 @@ export function ChatPane({ room, onBack }: { room: RoomSummary; onBack?: () => v
 
         <div
           {...dragOff}
-          style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}
+          style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: space(8) }}
         >
           {!onBack && (
             <span
               style={{
                 fontFamily: "var(--font-mono)",
-                fontSize: 11,
+                fontSize: textSize(11),
                 color: "var(--text-tertiary)",
                 marginRight: 4,
               }}
@@ -275,9 +276,9 @@ function ThreadHeader({
         margin: "14px 22px 0",
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        padding: "10px 14px",
-        borderRadius: 16,
+        gap: space(10),
+        padding: space("10px 14px"),
+        borderRadius: corner(16),
         background: "var(--surface-card)",
         border: "1px solid var(--border-subtle)",
         borderLeft: "2px solid var(--accent-quaternary)",
@@ -286,7 +287,7 @@ function ThreadHeader({
       <Icon name="chats-circle" size={15} color="var(--accent-quaternary)" />
       <span
         className="uwu-ellipsis"
-        style={{ flex: 1, fontSize: 13, color: "var(--text-secondary)" }}
+        style={{ flex: 1, fontSize: textSize(13), color: "var(--text-secondary)" }}
       >
         thread{preview ? ` · ${preview}` : ""}
       </span>
@@ -315,8 +316,8 @@ function HeaderButton({
       onClick={onClick}
       title={title}
       style={{
-        padding: 9,
-        borderRadius: 12,
+        padding: space(9),
+        borderRadius: corner(12),
         background: danger ? "var(--status-danger)" : "var(--surface-card-raised)",
         display: "flex",
         cursor: "pointer",
@@ -351,7 +352,7 @@ export function EmptyPane() {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        gap: 14,
+        gap: space(14),
         background: "var(--surface-canvas)",
         color: "var(--text-tertiary)",
       }}
@@ -360,28 +361,28 @@ export function EmptyPane() {
         style={{
           width: 84,
           height: 84,
-          borderRadius: 28,
+          borderRadius: corner(28),
           background: "var(--surface-card)",
           border: "2px dashed var(--border-strong)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          transform: "rotate(-4deg)",
+          transform: "rotate(calc(-4deg * var(--tilt-scale)))",
         }}
       >
         <Icon name="chats-teardrop" size={34} color="var(--text-tertiary)" />
       </div>
       <div
         style={{
-          fontFamily: "var(--font-display)",
+          fontFamily: "var(--font-heading)",
           fontWeight: 800,
-          fontSize: 19,
+          fontSize: headingSize(19),
           color: "var(--text-secondary)",
         }}
       >
         pick a room~
       </div>
-      <div style={{ fontSize: 13 }}>
+      <div style={{ fontSize: textSize(13) }}>
         {rooms.length === 0
           ? "still syncing your rooms…"
           : `${rooms.filter((r) => !r.isSpace).length} rooms waiting for you`}

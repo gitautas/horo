@@ -9,12 +9,44 @@ the two disagree, this file is what to argue from.
 
 ## The one rule
 
-`src/styles/tokens/` is the only place a colour, size, radius, shadow or easing
-is written down. Everything else references a token through `var()`.
+`src/styles/tokens/` and `src/styles/themes/` are the only places a colour,
+radius, shadow or easing is written down. Everything else references a token
+through `var()`.
 
-There is currently **no raw hex anywhere in `src/`** outside the token files.
-Worth keeping that way — it's the property that makes the accent switcher work
-at all, and the thing that quietly rots first.
+There is currently **no raw hex anywhere in `src/`** outside those files. Worth
+keeping that way — it's the property that makes the accent switcher and the
+themes work at all, and the thing that quietly rots first. A translucent brand
+colour is `color-mix(in srgb, var(--acid-500) 35%, transparent)`, not an
+`rgba()` of its value.
+
+Components still write sizes as px, but through `corner()`, `space()` and
+`textSize()` from `src/lib/scale.ts`, so a theme can scale them. A raw
+`borderRadius: 16` won't follow the theme.
+
+Emphasis has its own tokens, so a theme can give it a different face from the
+furniture: a title or heading is `--font-heading` sized with `headingSize()`,
+and a section label is `labelText()` (or `RaveLabel`). Under classic these are
+Baloo 2 and Unbounded caps, exactly as below. Buttons, badges and monograms stay
+on `--font-display` / `--font-rave`.
+
+## Themes
+
+`data-theme` on `<html>` picks one; the `theme` setting switches it.
+
+- **horo** (default, `themes/horo.css`) — grounded and compact, in the logo's
+  colours: slate `#2b302e` base, cream `#fbecdc` text, gold `#f2ba25` accent.
+  **Sora** for body and UI text, **Crimson Pro** for headings and section
+  labels (sentence case, not rave caps). Small radii, tighter spacing, no tilts,
+  no patterns, no glow. Both faces are bundled from `src/assets/fonts/` (OFL).
+- **classic** (`tokens/` as written) — everything the rest of this document
+  describes.
+
+A theme only redefines tokens. It keeps the ramp names (`--acid-*`, `--pink-*`,
+…) and puts its own colours in them — under horo they are gold, clay, heather
+and sage — so the accent switcher works unchanged. The scale tokens
+(`--radius-scale`, `--density`, `--text-scale`, `--tilt-scale`) are what make
+it compact; classic has them all at 1. The rest of this document describes
+classic.
 
 ## Colour
 

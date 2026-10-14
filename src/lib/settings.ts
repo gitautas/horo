@@ -7,7 +7,14 @@ import type { SkinTone } from "./emoji";
 
 export type Accent = "acid" | "pink" | "violet" | "cyan";
 
+/**
+ * A stylesheet of token overrides, keyed by `data-theme` on `<html>`: `classic`
+ * is `tokens/` as written, `horo` is `themes/horo.css` on top.
+ */
+export type Theme = "horo" | "classic";
+
 export interface Settings {
+  theme: Theme;
   accent: Accent;
   /**
    * The CSS font family for body text, or "" for the design's own. Anything
@@ -68,6 +75,7 @@ export const GATE_OFF_DB = -80;
 export const MAX_RECENT_REACTIONS = 6;
 
 export const DEFAULTS: Settings = {
+  theme: "horo",
   accent: "acid",
   fontFamily: "",
   messageFontSize: 14.5,
@@ -95,7 +103,7 @@ export const MESSAGE_FONT_SIZE_RANGE = { min: 12, max: 22, step: 0.5 } as const;
 
 /** One-click choices for the font picker; anything else is typed in by name. */
 export const FONT_PRESETS: { label: string; family: string }[] = [
-  { label: "nunito", family: "" },
+  { label: "default", family: "" },
   { label: "system", family: "system-ui" },
   { label: "baloo", family: "'Baloo 2'" },
   { label: "mono", family: "'JetBrains Mono Variable'" },
@@ -124,6 +132,20 @@ export const ACCENT_SWATCHES = Object.entries(ACCENTS).map(([name, [base]]) => (
   colour: `var(${base})`,
 }));
 
+export const THEMES: { name: Theme; label: string; hint: string }[] = [
+  { name: "horo", label: "horo", hint: "grounded and compact, in the logo's colours" },
+  { name: "classic", label: "classic", hint: "the original neon rave flyer" },
+];
+
+/**
+ * What each accent is called under each theme. The ramps keep their classic
+ * names in code, but horo fills them with different colours.
+ */
+export const ACCENT_LABELS: Record<Theme, Record<Accent, string>> = {
+  horo: { acid: "gold", pink: "clay", violet: "heather", cyan: "sage" },
+  classic: { acid: "acid", pink: "pink", violet: "violet", cyan: "cyan" },
+};
+
 export function load(): Settings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -145,6 +167,13 @@ export function save(settings: Settings): void {
   }
 }
 
+/** Switch the document to a theme's stylesheet. */
+export function applyTheme(theme: Theme): void {
+  document.documentElement.dataset.theme = THEMES.some((t) => t.name === theme)
+    ? theme
+    : DEFAULTS.theme;
+}
+
 /** Paint the chosen accent onto the document, as the design's `accent` prop does. */
 export function applyAccent(accent: Accent): void {
   const [base, hover, press] = ACCENTS[accent] ?? ACCENTS.acid;
@@ -156,14 +185,12 @@ export function applyAccent(accent: Accent): void {
   root.style.setProperty("--accent-primary-press", `var(${press})`);
 }
 
-/** The font stack `tokens/typography.css` gives body text. */
-const DEFAULT_BODY_FONT = "'Nunito Variable', 'Nunito', ui-sans-serif, system-ui, sans-serif";
-
 /**
  * Paint the chosen font and message size onto the document.
  *
- * A custom family is put in front of the design's stack rather than replacing
- * it, so a misspelt or uninstalled font lands on Nunito instead of Times.
+ * A custom family is put in front of the theme's own stack rather than replacing
+ * it, so a misspelt or uninstalled font lands on that instead of Times. The
+ * stack is referenced, not copied, so it follows a theme switch.
  */
 export function applyTypography({
   fontFamily,
@@ -173,7 +200,7 @@ export function applyTypography({
   const family = fontFamily.trim();
   root.style.setProperty(
     "--font-body",
-    family ? `${family}, ${DEFAULT_BODY_FONT}` : DEFAULT_BODY_FONT,
+    family ? `${family}, var(--font-body-default)` : "var(--font-body-default)",
   );
   root.style.setProperty("--text-message", `${messageFontSize}px`);
 }

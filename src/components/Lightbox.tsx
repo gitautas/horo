@@ -5,6 +5,7 @@ import { saveAttachment } from "../lib/download";
 import { mediaUrl } from "../lib/ipc";
 import { useStore } from "../store";
 import { Icon, Spinner } from "./ui";
+import { corner, space, textSize } from "../lib/scale";
 
 /**
  * A picture, full size, over everything else.
@@ -59,9 +60,9 @@ function Frame({ mxc, name }: { mxc: string; name: string }) {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        gap: 14,
-        padding: 40,
-        background: "rgba(11,11,15,.86)",
+        gap: space(14),
+        padding: space(40),
+        background: "color-mix(in srgb, var(--ink-950) 86%, transparent)",
         cursor: "zoom-out",
       }}
     >
@@ -71,7 +72,7 @@ function Frame({ mxc, name }: { mxc: string; name: string }) {
           top: 18,
           right: 18,
           display: "flex",
-          gap: 8,
+          gap: space(8),
           // The controls sit on the backdrop, which closes on click.
           cursor: "default",
         }}
@@ -101,7 +102,7 @@ function Frame({ mxc, name }: { mxc: string; name: string }) {
             maxWidth: "100%",
             maxHeight: "100%",
             objectFit: "contain",
-            borderRadius: 16,
+            borderRadius: corner(16),
             border: "1px solid var(--border-subtle)",
             boxShadow: "var(--shadow-pop)",
             cursor: "default",
@@ -116,7 +117,7 @@ function Frame({ mxc, name }: { mxc: string; name: string }) {
           onClick={(e) => e.stopPropagation()}
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 11.5,
+            fontSize: textSize(11.5),
             color: "var(--text-tertiary)",
             cursor: "default",
             maxWidth: "80%",

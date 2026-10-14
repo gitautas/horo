@@ -12,6 +12,7 @@ import {
 } from "../store";
 import { PresenceDot } from "./Presence";
 import { Avatar, Button, ChannelBadge, dragOff, dragRegion, HoverRow, Icon } from "./ui";
+import { corner, headingSize, labelText, space, textSize } from "../lib/scale";
 
 const FILTERS: RoomFilter[] = ["all", "unread", "dms", "muted"];
 
@@ -76,15 +77,15 @@ export function RoomList({ onOpenSpaces }: { onOpenSpaces?: () => void } = {}) {
         display: "flex",
         flexDirection: "column",
         borderRight: "1px solid var(--border-subtle)",
-        background: "rgba(17,17,23,.72)",
+        background: "color-mix(in srgb, var(--ink-900) 72%, transparent)",
       }}
     >
       <div
         {...dragRegion(!onOpenSpaces)}
         style={{
-          padding: onOpenSpaces
+          padding: space(onOpenSpaces
             ? "calc(var(--safe-top) + 12px) 14px 12px"
-            : "18px 18px 12px",
+            : "18px 18px 12px"),
         }}
       >
         <div
@@ -94,7 +95,7 @@ export function RoomList({ onOpenSpaces }: { onOpenSpaces?: () => void } = {}) {
             // is in it.
             alignItems: onOpenSpaces ? "center" : "baseline",
             justifyContent: "space-between",
-            gap: 8,
+            gap: space(8),
           }}
         >
           {onOpenSpaces && (
@@ -120,9 +121,9 @@ export function RoomList({ onOpenSpaces }: { onOpenSpaces?: () => void } = {}) {
           <div
             className="uwu-ellipsis"
             style={{
-              fontFamily: "var(--font-display)",
+              fontFamily: "var(--font-heading)",
               fontWeight: 800,
-              fontSize: 22,
+              fontSize: headingSize(22),
               letterSpacing: "-0.02em",
             }}
           >
@@ -130,12 +131,12 @@ export function RoomList({ onOpenSpaces }: { onOpenSpaces?: () => void } = {}) {
           </div>
           <div
             {...dragOff}
-            style={{ display: "flex", alignItems: "center", gap: 10 }}
+            style={{ display: "flex", alignItems: "center", gap: space(10) }}
           >
             <span
               style={{
                 fontFamily: "var(--font-mono)",
-                fontSize: 11,
+                fontSize: textSize(11),
                 color: "var(--text-tertiary)",
                 whiteSpace: "nowrap",
               }}
@@ -177,11 +178,11 @@ export function RoomList({ onOpenSpaces }: { onOpenSpaces?: () => void } = {}) {
             marginTop: 12,
             display: "flex",
             alignItems: "center",
-            gap: 8,
+            gap: space(8),
             background: "var(--surface-inset)",
             border: "1px solid var(--border-subtle)",
             borderRadius: 999,
-            padding: "9px 14px",
+            padding: space("9px 14px"),
           }}
         >
           <Icon
@@ -200,7 +201,7 @@ export function RoomList({ onOpenSpaces }: { onOpenSpaces?: () => void } = {}) {
               border: "none",
               outline: "none",
               color: "var(--text-primary)",
-              fontSize: 13,
+              fontSize: textSize(13),
             }}
           />
           {search && (
@@ -245,7 +246,7 @@ export function RoomList({ onOpenSpaces }: { onOpenSpaces?: () => void } = {}) {
         {filtersOpen && (
           <div
             {...dragOff}
-            style={{ display: "flex", gap: 6, marginTop: 12 }}
+            style={{ display: "flex", gap: space(6), marginTop: 12 }}
           >
             {FILTERS.map((f) => (
               <button
@@ -253,12 +254,12 @@ export function RoomList({ onOpenSpaces }: { onOpenSpaces?: () => void } = {}) {
                 onClick={() => setFilter(f)}
                 style={{
                   fontFamily: "var(--font-rave)",
-                  fontSize: 9.5,
+                  fontSize: textSize(9.5),
                   fontWeight: 800,
                   letterSpacing: "0.1em",
                   textTransform: "uppercase",
-                  padding: "6px 11px",
-                  borderRadius: 12,
+                  padding: space("6px 11px"),
+                  borderRadius: corner(12),
                   cursor: "pointer",
                   transition: "all var(--dur-fast) var(--ease-bounce)",
                   ...(filter === f
@@ -281,14 +282,14 @@ export function RoomList({ onOpenSpaces }: { onOpenSpaces?: () => void } = {}) {
         )}
       </div>
 
-      <div className="uwu-scroll" style={{ flex: 1, padding: "0 10px 16px" }}>
+      <div className="uwu-scroll" style={{ flex: 1, padding: space("0 10px 16px") }}>
         {groups.length === 0 && (
           <div
             style={{
-              padding: "40px 16px",
+              padding: space("40px 16px"),
               textAlign: "center",
               color: "var(--text-tertiary)",
-              fontSize: 13,
+              fontSize: textSize(13),
               lineHeight: 1.6,
             }}
           >
@@ -319,16 +320,12 @@ export function RoomList({ onOpenSpaces }: { onOpenSpaces?: () => void } = {}) {
           <div key={group.title}>
             <div
               style={{
-                padding: "14px 8px 6px",
-                fontFamily: "var(--font-rave)",
-                fontSize: 9.5,
-                fontWeight: 800,
-                letterSpacing: "0.14em",
-                textTransform: "uppercase",
+                padding: space("14px 8px 6px"),
+                ...labelText(9.5),
                 color: "var(--text-tertiary)",
                 display: "flex",
                 alignItems: "center",
-                gap: 8,
+                gap: space(8),
               }}
             >
               <span>{group.title}</span>
@@ -376,10 +373,10 @@ function RoomRow({
       title={room.canonicalAlias ?? room.id}
       style={{
         display: "flex",
-        gap: 10,
+        gap: space(10),
         alignItems: "center",
-        padding: "9px 10px",
-        borderRadius: 16,
+        padding: space("9px 10px"),
+        borderRadius: corner(16),
         marginBottom: 2,
         ...(active ? { boxShadow: `inset 3px 0 0 ${accent}` } : {}),
       }}
@@ -423,13 +420,13 @@ function RoomRow({
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space(5) }}>
           <span
             className="uwu-ellipsis"
             style={{
               fontFamily: "var(--font-display)",
               fontWeight: 700,
-              fontSize: 14.5,
+              fontSize: textSize(14.5),
               color: room.hasUnread
                 ? "var(--text-primary)"
                 : "var(--text-secondary)",
@@ -446,7 +443,7 @@ function RoomRow({
         </div>
         <div
           className="uwu-ellipsis"
-          style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 1 }}
+          style={{ fontSize: textSize(12), color: "var(--text-tertiary)", marginTop: 1 }}
         >
           {preview}
         </div>
@@ -457,14 +454,14 @@ function RoomRow({
           display: "flex",
           flexDirection: "column",
           alignItems: "flex-end",
-          gap: 4,
+          gap: space(4),
           flex: "none",
         }}
       >
         <span
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 10,
+            fontSize: textSize(10),
             color: "var(--text-tertiary)",
           }}
         >
@@ -475,13 +472,13 @@ function RoomRow({
             style={{
               minWidth: 19,
               height: 19,
-              padding: "0 6px",
+              padding: space("0 6px"),
               borderRadius: 999,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               fontFamily: "var(--font-rave)",
-              fontSize: 9.5,
+              fontSize: textSize(9.5),
               fontWeight: 800,
               color: "var(--text-on-accent)",
               background:

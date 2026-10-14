@@ -5,6 +5,7 @@ import { mediaUrl } from "../lib/ipc";
 import { useStore } from "../store";
 import { AvatarButton } from "./ProfileCard";
 import { dragRegion, Icon, Logo, PresenceDot } from "./ui";
+import { corner, space, textSize } from "../lib/scale";
 
 /**
  * The narrow left rail: the uwu mark, one tile per space, and your own avatar
@@ -47,7 +48,7 @@ export function SpacesRail({
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        gap: 14,
+        gap: space(14),
         // The window has no title bar, so the top of this rail sits under the
         // macOS traffic lights; leave them room. As a drawer there are no
         // traffic lights, but there is a notch.
@@ -88,7 +89,7 @@ export function SpacesRail({
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          gap: 12,
+          gap: space(12),
           flex: 1,
           minHeight: 0,
           width: "100%",
@@ -114,7 +115,7 @@ export function SpacesRail({
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          gap: 12,
+          gap: space(12),
         }}
       >
         <button
@@ -189,10 +190,10 @@ function SpaceTile({
         style={{
           width: 46,
           height: 46,
-          borderRadius: 16,
+          borderRadius: corner(16),
           cursor: "pointer",
           fontFamily: "var(--font-rave)",
-          fontSize: 13,
+          fontSize: textSize(13),
           fontWeight: 800,
           letterSpacing: "0.02em",
           display: "flex",
@@ -207,7 +208,7 @@ function SpaceTile({
                 color: "var(--text-on-accent)",
                 border: "2px solid var(--ink-950)",
                 boxShadow: "var(--shadow-sticker-ink)",
-                transform: "rotate(-3deg)",
+                transform: "rotate(calc(-3deg * var(--tilt-scale)))",
               }
             : {
                 background: "var(--surface-card-raised)",
@@ -216,10 +217,10 @@ function SpaceTile({
               }),
         }}
         onMouseEnter={(e) => {
-          if (!active) e.currentTarget.style.transform = "translateY(-2px) rotate(-3deg)";
+          if (!active) e.currentTarget.style.transform = "translateY(-2px) rotate(calc(-3deg * var(--tilt-scale)))";
         }}
         onMouseLeave={(e) => {
-          e.currentTarget.style.transform = active ? "rotate(-3deg)" : "";
+          e.currentTarget.style.transform = active ? "rotate(calc(-3deg * var(--tilt-scale)))" : "";
         }}
       >
         {src ? (
@@ -242,7 +243,7 @@ function SpaceTile({
             right: -4,
             minWidth: 18,
             height: 18,
-            padding: "0 5px",
+            padding: space("0 5px"),
             borderRadius: 999,
             background: "var(--accent-secondary)",
             color: "var(--text-on-accent)",
@@ -251,7 +252,7 @@ function SpaceTile({
             alignItems: "center",
             justifyContent: "center",
             fontFamily: "var(--font-rave)",
-            fontSize: 9,
+            fontSize: textSize(9),
             fontWeight: 800,
           }}
         >

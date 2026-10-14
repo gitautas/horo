@@ -8,6 +8,7 @@ import type { Profile, SharedRoom, UserContext } from "../lib/types";
 import { useStore } from "../store";
 import { ProfileHeader } from "./ProfileHeader";
 import { Avatar, Icon, RaveLabel, Spinner, Tag } from "./ui";
+import { corner, space, textSize } from "../lib/scale";
 
 const WIDTH = 320;
 /** How far the card sits from the avatar that opened it, on every side. */
@@ -76,7 +77,7 @@ export function AvatarButton({
         display: "flex",
         padding: 0,
         cursor: "pointer",
-        borderRadius: radius ?? Math.round(size * 0.36),
+        borderRadius: corner(radius ?? Math.round(size * 0.36)),
         transition: "filter var(--dur-fast) var(--ease-bounce)",
       }}
       onMouseEnter={(e) => {
@@ -187,7 +188,7 @@ function Card({ userId, anchor }: { userId: string; anchor: DOMRect }) {
         width: WIDTH,
         maxHeight: `calc(100vh - ${GAP * 2}px)`,
         overflowY: "auto",
-        borderRadius: 20,
+        borderRadius: corner(20),
         background: "var(--surface-card-raised)",
         border: "1px solid var(--border-default)",
         boxShadow: "var(--shadow-pop)",
@@ -201,9 +202,9 @@ function Card({ userId, anchor }: { userId: string; anchor: DOMRect }) {
         badge={verified ? <Tag icon="seal-check">verified</Tag> : null}
       />
 
-      <div style={{ padding: "0 16px 16px" }}>
+      <div style={{ padding: space("0 16px 16px") }}>
         {!profile && !context && (
-          <div style={{ display: "flex", justifyContent: "center", padding: 16 }}>
+          <div style={{ display: "flex", justifyContent: "center", padding: space(16) }}>
             <Spinner size={14} />
           </div>
         )}
@@ -215,7 +216,7 @@ function Card({ userId, anchor }: { userId: string; anchor: DOMRect }) {
             <div
               className="selectable"
               style={{
-                fontSize: 13,
+                fontSize: textSize(13),
                 lineHeight: 1.55,
                 color: "var(--text-secondary)",
                 whiteSpace: "pre-wrap",
@@ -236,7 +237,7 @@ function Card({ userId, anchor }: { userId: string; anchor: DOMRect }) {
 
         {/* Held back until the context lands, so nobody sees "message" on
             their own card for a frame. */}
-        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <div style={{ display: "flex", gap: space(8), marginTop: 14 }}>
           {!context ? null : isMe ? (
             <CardButton
               icon="pencil-simple"
@@ -338,7 +339,7 @@ function SharedRooms({
       <RaveLabel style={{ marginBottom: 8 }}>
         shared with you · {rooms.length}
       </RaveLabel>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: space(6) }}>
         {shown.map((room) => (
           <button
             key={room.id}
@@ -360,14 +361,14 @@ function SharedRooms({
             style={{
               width: 32,
               height: 32,
-              borderRadius: 11,
+              borderRadius: corner(11),
               border: "1px solid var(--border-subtle)",
               background: "var(--surface-card)",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               fontFamily: "var(--font-mono)",
-              fontSize: 10.5,
+              fontSize: textSize(10.5),
               color: "var(--text-tertiary)",
             }}
             title={rooms
@@ -402,17 +403,17 @@ function CardButton({
       disabled={disabled}
       style={{
         flex: 1,
-        padding: "9px 0",
+        padding: space("9px 0"),
         borderRadius: 999,
         cursor: disabled ? "default" : "pointer",
         opacity: disabled ? 0.55 : 1,
         fontFamily: "var(--font-display)",
         fontWeight: 700,
-        fontSize: 13,
+        fontSize: textSize(13),
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        gap: 7,
+        gap: space(7),
         transition: "transform var(--dur-fast) var(--ease-bounce)",
         ...(primary
           ? {

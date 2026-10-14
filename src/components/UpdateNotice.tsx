@@ -14,6 +14,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useUpdate } from "../lib/update";
 import { Card } from "./settingsUi";
 import { Button, Icon, Spinner } from "./ui";
+import { corner, space, textSize } from "../lib/scale";
 
 /** Shared by both faces: what this phase says, and what the button does. */
 function useUpdateCopy() {
@@ -91,9 +92,9 @@ export function UpdateBanner() {
         zIndex: 200,
         display: "flex",
         alignItems: "center",
-        gap: 12,
-        padding: "10px 16px",
-        borderRadius: 18,
+        gap: space(12),
+        padding: space("10px 16px"),
+        borderRadius: corner(18),
         maxWidth: 520,
         overflow: "hidden",
         background: "var(--surface-card-raised)",
@@ -107,7 +108,7 @@ export function UpdateBanner() {
         <Icon name="sparkle" size={15} color="var(--accent-primary)" />
       )}
 
-      <span style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.45 }}>
+      <span style={{ fontSize: textSize(13), color: "var(--text-secondary)", lineHeight: 1.45 }}>
         {line}
       </span>
 
@@ -151,13 +152,13 @@ export function UpdateSettings() {
 
   return (
     <Card tone={phase === "error" ? "warning" : undefined}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: space(12) }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13.5, color: "var(--text-primary)" }}>updates</div>
+          <div style={{ fontSize: textSize(13.5), color: "var(--text-primary)" }}>updates</div>
           <div
             style={{
               marginTop: 4,
-              fontSize: 12,
+              fontSize: textSize(12),
               color: phase === "error" ? "var(--status-warning)" : "var(--text-tertiary)",
               lineHeight: 1.5,
             }}

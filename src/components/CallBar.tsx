@@ -4,6 +4,7 @@ import { call, IDLE_CALL, type CallState } from "../lib/call";
 import { localpart } from "../lib/display";
 import { useStore } from "../store";
 import { Avatar, Icon } from "./ui";
+import { corner, space, textSize } from "../lib/scale";
 
 export function useCallState(): CallState {
   const [state, setState] = useState<CallState>(IDLE_CALL);
@@ -29,12 +30,12 @@ export function CallBar() {
         margin: "0 22px 10px",
         display: "flex",
         alignItems: "center",
-        gap: 14,
-        padding: "11px 14px",
-        borderRadius: 20,
+        gap: space(14),
+        padding: space("11px 14px"),
+        borderRadius: corner(20),
         background: "var(--surface-card-raised)",
-        border: `1px solid ${reconnecting ? "rgba(255,194,77,.4)" : "rgba(200,255,77,.35)"}`,
-        boxShadow: reconnecting ? "none" : "0 0 24px rgba(200,255,77,.12)",
+        border: `1px solid ${reconnecting ? "color-mix(in srgb, var(--amber-500) 40%, transparent)" : "color-mix(in srgb, var(--acid-500) 35%, transparent)"}`,
+        boxShadow: reconnecting ? "none" : "0 0 24px color-mix(in srgb, var(--acid-500) 12%, transparent)",
       }}
     >
       <div
@@ -42,7 +43,7 @@ export function CallBar() {
           width: 34,
           height: 34,
           flex: "none",
-          borderRadius: 13,
+          borderRadius: corner(13),
           background: reconnecting ? "var(--status-warning)" : "var(--accent-primary)",
           display: "flex",
           alignItems: "center",
@@ -60,7 +61,7 @@ export function CallBar() {
           style={{
             fontFamily: "var(--font-display)",
             fontWeight: 700,
-            fontSize: 14,
+            fontSize: textSize(14),
             cursor: "pointer",
             display: "block",
             textAlign: "left",
@@ -72,7 +73,7 @@ export function CallBar() {
         <div
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 10.5,
+            fontSize: textSize(10.5),
             color: "var(--text-tertiary)",
           }}
         >
@@ -84,7 +85,7 @@ export function CallBar() {
         </div>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: space(6) }}>
         {state.participants
           .filter((p) => !p.isLocal)
           .slice(0, 4)
@@ -94,7 +95,7 @@ export function CallBar() {
               title={localpart(participant.userId)}
               style={{
                 position: "relative",
-                borderRadius: 12,
+                borderRadius: corner(12),
                 outline: participant.isSpeaking
                   ? "2px solid var(--accent-primary)"
                   : "2px solid transparent",
@@ -131,7 +132,7 @@ export function CallBar() {
           ))}
       </div>
 
-      <div style={{ display: "flex", gap: 6 }}>
+      <div style={{ display: "flex", gap: space(6) }}>
         <CallButton
           icon={state.micEnabled ? "microphone" : "microphone-slash"}
           active={!state.micEnabled}
@@ -181,7 +182,7 @@ function CallButton({
       style={{
         width: 34,
         height: 34,
-        borderRadius: 12,
+        borderRadius: corner(12),
         background,
         border: "1px solid var(--border-subtle)",
         display: "flex",

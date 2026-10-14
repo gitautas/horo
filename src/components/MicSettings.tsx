@@ -23,6 +23,7 @@ import {
 import { useStore } from "../store";
 import { useCallState } from "./CallBar";
 import { Field } from "./settingsUi";
+import { space, textSize } from "../lib/scale";
 
 /** Where a level lands on the meter, 0 to 100. */
 function percent(db: number): number {
@@ -116,7 +117,7 @@ export function MicSettings() {
               : "everything gets through. to cut out background noise, stay quiet and drag the marker just past where the bar stops.")
         }
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space(10) }}>
           <div
             style={{
               position: "relative",
@@ -166,7 +167,7 @@ export function MicSettings() {
                 flex: "none",
                 textAlign: "right",
                 fontFamily: "var(--font-mono)",
-                fontSize: 10.5,
+                fontSize: textSize(10.5),
                 color: open ? "var(--accent-primary)" : "var(--text-tertiary)",
               }}
             >

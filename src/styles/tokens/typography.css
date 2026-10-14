@@ -1,12 +1,24 @@
-:root{
+/* Also matched by `data-theme="classic"`, like colors.css. */
+:root,[data-theme="classic"]{
 --font-display:'Baloo 2',ui-rounded,'Segoe UI',sans-serif;
 --font-rave:'Unbounded',ui-sans-serif,sans-serif;
---font-body:'Nunito Variable','Nunito',ui-sans-serif,system-ui,sans-serif;
+/* The theme's own body face. `--font-body` itself is set inline by the font
+   setting, which puts a chosen family in front of this one. */
+--font-body-default:'Nunito Variable','Nunito',ui-sans-serif,system-ui,sans-serif;
+--font-body:var(--font-body-default);
+/* Emphasis: titles and headings, and the small section labels ("rooms",
+   "accent"). Classic draws them in its display and rave faces. */
+--font-heading:var(--font-display);
+--font-label:var(--font-rave);
 --font-mono:'JetBrains Mono Variable','JetBrains Mono',ui-monospace,'SFMono-Regular',monospace;
 --text-display-xl:clamp(40px,6vw,72px);
 --text-display-lg:40px;--text-display-md:32px;--text-display-sm:26px;
 --text-body-lg:18px;--text-body-md:15px;--text-body-sm:13px;--text-caption:11.5px;
 --text-message:14.5px;
+/* How a theme adjusts emphasis type, read through `headingSize` and
+   `labelText` in src/lib/scale.ts. */
+--heading-scale:1;/* @kind other */
+--label-scale:1;/* @kind other */--label-weight:800;/* @kind other */--label-case:uppercase;/* @kind other */--label-tracking:1;/* @kind other */
 --lh-tight:1.08;/* @kind other */--lh-snug:1.25;/* @kind other */--lh-normal:1.5;/* @kind other */--lh-relaxed:1.65;/* @kind other */
 --ls-tight:-0.01em;/* @kind other */--ls-wide:0.06em;/* @kind other */--ls-widest:0.14em;/* @kind other */
 --fw-regular:400;/* @kind other */--fw-medium:500;/* @kind other */--fw-semibold:600;/* @kind other */--fw-bold:700;/* @kind other */--fw-black:800;/* @kind other */

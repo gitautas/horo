@@ -11,11 +11,13 @@ import * as ipc from "../lib/ipc";
 import { mediaUrl } from "../lib/ipc";
 import { invalidateProfile } from "../lib/profiles";
 import {
+  ACCENT_LABELS,
   ACCENT_SWATCHES,
   DEFAULTS,
   FONT_PRESETS,
   listMediaDevices,
   MESSAGE_FONT_SIZE_RANGE,
+  THEMES,
   type Accent,
   type AudioDevice,
   type MediaDevices,
@@ -36,6 +38,7 @@ import { PacksSection } from "./PackSettings";
 import { Card, Field, Heading, inputStyle, Row } from "./settingsUi";
 import { Avatar, Button, dragRegion, Icon, Logo, RaveLabel, Spinner, Toggle } from "./ui";
 import { UpdateSettings } from "./UpdateNotice";
+import { corner, headingSize, space, textSize } from "../lib/scale";
 
 type Section =
   | "account"
@@ -110,6 +113,7 @@ export function SettingsView() {
         style={{
           width: isMobile ? "100%" : 232,
           flex: "none",
+          // Not theme-scaled: the top clears the macOS window controls.
           padding: isMobile
             ? "calc(var(--safe-top) + 10px) 10px 8px"
             : "52px 12px 20px",
@@ -117,12 +121,12 @@ export function SettingsView() {
           borderRight: isMobile ? undefined : "1px solid var(--border-subtle)",
           borderBottom: isMobile ? "1px solid var(--border-subtle)" : undefined,
           display: isMobile ? "flex" : undefined,
-          gap: isMobile ? 6 : undefined,
+          gap: isMobile ? space(6) : undefined,
           overflowX: isMobile ? "auto" : undefined,
           overflowY: isMobile ? "hidden" : undefined,
         }}
       >
-        {!isMobile && <RaveLabel style={{ padding: "0 10px 10px" }}>settings</RaveLabel>}
+        {!isMobile && <RaveLabel style={{ padding: space("0 10px 10px") }}>settings</RaveLabel>}
         {SECTIONS.map((entry) => (
           <button
             key={entry.id}
@@ -130,21 +134,21 @@ export function SettingsView() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 10,
+              gap: space(10),
               width: isMobile ? "auto" : "100%",
               flex: isMobile ? "none" : undefined,
               whiteSpace: isMobile ? "nowrap" : undefined,
-              padding: "9px 12px",
+              padding: space("9px 12px"),
               marginBottom: isMobile ? 0 : 3,
-              borderRadius: 12,
+              borderRadius: corner(12),
               cursor: "pointer",
               textAlign: "left",
               background: section === entry.id ? "rgba(255,255,255,.07)" : "transparent",
               color:
                 section === entry.id ? "var(--text-primary)" : "var(--text-secondary)",
-              fontFamily: "var(--font-display)",
+              fontFamily: "var(--font-heading)",
               fontWeight: 700,
-              fontSize: 14,
+              fontSize: headingSize(14),
             }}
           >
             <Icon
@@ -171,7 +175,7 @@ export function SettingsView() {
           style={{
             maxWidth: 620,
             margin: "0 auto",
-            padding: isMobile ? "0 16px" : "0 40px",
+            padding: space(isMobile ? "0 16px" : "0 40px"),
           }}
         >
           {section === "account" && <AccountSection />}
@@ -236,7 +240,7 @@ function AccountSection() {
       <Heading>account</Heading>
 
       <Card>
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space(16) }}>
           <Avatar
             id={session.userId}
             name={session.displayName ?? session.userId}
@@ -246,7 +250,7 @@ function AccountSection() {
           />
           <div style={{ minWidth: 0 }}>
             <div
-              style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 20 }}
+              style={{ fontFamily: "var(--font-heading)", fontWeight: 800, fontSize: headingSize(20) }}
             >
               {session.displayName ?? session.userId}
             </div>
@@ -254,7 +258,7 @@ function AccountSection() {
               className="selectable"
               style={{
                 fontFamily: "var(--font-mono)",
-                fontSize: 12,
+                fontSize: textSize(12),
                 color: "var(--text-tertiary)",
               }}
             >
@@ -274,9 +278,9 @@ function AccountSection() {
 
       {session.insecureStorage && (
         <Card tone="warning">
-          <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ display: "flex", gap: space(12) }}>
             <Icon name="warning" size={20} color="var(--status-warning)" />
-            <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.55 }}>
+            <div style={{ fontSize: textSize(13), color: "var(--text-secondary)", lineHeight: 1.55 }}>
               no system keychain was available, so your access token and encryption
               keys are in a file readable only by your user account. anyone who can
               read your home directory can read them.
@@ -287,11 +291,11 @@ function AccountSection() {
 
       <Heading>sign out</Heading>
       <Card>
-        <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+        <div style={{ fontSize: textSize(13), color: "var(--text-secondary)", lineHeight: 1.6 }}>
           signing out keeps your local encryption keys, so you can sign back in and
           still read your history.
         </div>
-        <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: space(10), marginTop: 14, flexWrap: "wrap" }}>
           <Button variant="ghost" onClick={() => void signOut(false)}>
             sign out
           </Button>
@@ -309,7 +313,7 @@ function AccountSection() {
           <div
             style={{
               marginTop: 12,
-              fontSize: 12.5,
+              fontSize: textSize(12.5),
               color: "var(--status-danger)",
               lineHeight: 1.55,
             }}
@@ -408,7 +412,7 @@ function ProfileEditor() {
   if (!profile) {
     return (
       <Card>
-        <div style={{ display: "flex", justifyContent: "center", padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "center", padding: space(20) }}>
           <Spinner />
         </div>
       </Card>
@@ -423,7 +427,7 @@ function ProfileEditor() {
         <div
           style={{
             height: 96,
-            borderRadius: 16,
+            borderRadius: corner(16),
             marginBottom: 10,
             border: "1px solid var(--border-subtle)",
             background: coverPreview
@@ -433,12 +437,12 @@ function ProfileEditor() {
             alignItems: "center",
             justifyContent: "center",
             color: "var(--text-tertiary)",
-            fontSize: 12.5,
+            fontSize: textSize(12.5),
           }}
         >
           {!coverPreview && "no cover yet"}
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: space(8) }}>
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => void pickCover()}>
             choose an image
           </Button>
@@ -477,7 +481,7 @@ function ProfileEditor() {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 12,
+          gap: space(12),
           marginTop: 4,
         }}
       >
@@ -486,12 +490,12 @@ function ProfileEditor() {
         </Button>
         {busy && <Spinner size={14} />}
         {saved && !dirty && (
-          <span style={{ fontSize: 12.5, color: "var(--accent-primary)" }}>saved~</span>
+          <span style={{ fontSize: textSize(12.5), color: "var(--accent-primary)" }}>saved~</span>
         )}
         <span
           style={{
             marginLeft: "auto",
-            fontSize: 11.5,
+            fontSize: textSize(11.5),
             color: "var(--text-tertiary)",
             textAlign: "right",
             lineHeight: 1.45,
@@ -544,7 +548,7 @@ function SecuritySection() {
       <Card>
         <div
           style={{
-            fontSize: 13,
+            fontSize: textSize(13),
             color: "var(--text-secondary)",
             lineHeight: 1.6,
             marginBottom: 6,
@@ -555,7 +559,7 @@ function SecuritySection() {
         </div>
 
         {!devices && (
-          <div style={{ display: "flex", justifyContent: "center", padding: 20 }}>
+          <div style={{ display: "flex", justifyContent: "center", padding: space(20) }}>
             <Spinner />
           </div>
         )}
@@ -565,13 +569,13 @@ function SecuritySection() {
             key={device.deviceId}
             icon={device.isCurrent ? "desktop" : "devices"}
             title={
-              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: space(8) }}>
                 {device.displayName ?? device.deviceId}
                 {device.isCurrent && (
                   <span
                     style={{
                       fontFamily: "var(--font-rave)",
-                      fontSize: 8.5,
+                      fontSize: textSize(8.5),
                       fontWeight: 800,
                       letterSpacing: "0.1em",
                       textTransform: "uppercase",
@@ -590,9 +594,9 @@ function SecuritySection() {
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
-                  gap: 6,
+                  gap: space(6),
                   color: "var(--accent-primary)",
-                  fontSize: 12.5,
+                  fontSize: textSize(12.5),
                 }}
               >
                 <Icon name="seal-check" size={15} color="var(--accent-primary)" />
@@ -647,11 +651,11 @@ function SecuritySection() {
               <div
                 style={{
                   margin: "14px 0",
-                  padding: 14,
-                  borderRadius: 16,
-                  background: "rgba(255,194,77,.08)",
-                  border: "1px solid rgba(255,194,77,.35)",
-                  fontSize: 13,
+                  padding: space(14),
+                  borderRadius: corner(16),
+                  background: "color-mix(in srgb, var(--amber-500) 8%, transparent)",
+                  border: "1px solid color-mix(in srgb, var(--amber-500) 35%, transparent)",
+                  fontSize: textSize(13),
                   color: "var(--text-secondary)",
                   lineHeight: 1.6,
                 }}
@@ -666,7 +670,7 @@ function SecuritySection() {
             ) : (
               <div
                 style={{
-                  fontSize: 13,
+                  fontSize: textSize(13),
                   color: "var(--text-secondary)",
                   lineHeight: 1.6,
                   margin: "14px 0",
@@ -681,8 +685,8 @@ function SecuritySection() {
             {recoveryKey ? (
               <div
                 style={{
-                  padding: 16,
-                  borderRadius: 16,
+                  padding: space(16),
+                  borderRadius: corner(16),
                   background: "var(--ink-950)",
                   border: "1px solid var(--accent-primary)",
                 }}
@@ -694,7 +698,7 @@ function SecuritySection() {
                   className="selectable"
                   style={{
                     fontFamily: "var(--font-mono)",
-                    fontSize: 14,
+                    fontSize: textSize(14),
                     color: "var(--accent-primary)",
                     wordBreak: "break-all",
                     lineHeight: 1.6,
@@ -712,7 +716,7 @@ function SecuritySection() {
                 </Button>
               </div>
             ) : (
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: space(10), flexWrap: "wrap" }}>
                 {recovery.state !== "enabled" && (
                   <Button
                     disabled={busy}
@@ -733,7 +737,7 @@ function SecuritySection() {
                 label="restore from a recovery key"
                 hint="paste the key you saved when you turned on backup."
               >
-                <div style={{ display: "flex", gap: 8 }}>
+                <div style={{ display: "flex", gap: space(8) }}>
                   <input
                     className="selectable"
                     value={restoreKey}
@@ -758,7 +762,7 @@ function SecuritySection() {
             </div>
           </>
         ) : (
-          <div style={{ display: "flex", justifyContent: "center", padding: 20 }}>
+          <div style={{ display: "flex", justifyContent: "center", padding: space(20) }}>
             <Spinner />
           </div>
         )}
@@ -808,12 +812,12 @@ function VoiceSection() {
   }, []);
 
   const spinner = (
-    <div style={{ display: "flex", justifyContent: "center", padding: 20 }}>
+    <div style={{ display: "flex", justifyContent: "center", padding: space(20) }}>
       <Spinner />
     </div>
   );
   const missing = (what: string) => (
-    <div style={{ fontSize: 12.5, color: "var(--status-warning)" }}>
+    <div style={{ fontSize: textSize(12.5), color: "var(--status-warning)" }}>
       no {what} found — check that horo has permission in system settings.
     </div>
   );
@@ -961,7 +965,7 @@ function NotificationsSection() {
 
       {permitted === false && (
         <Card tone="warning">
-          <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+          <div style={{ fontSize: textSize(13), color: "var(--text-secondary)", lineHeight: 1.6 }}>
             your system isn't letting horo show banners yet. sounds still work — but
             for pop-ups, allow notifications for horo in system settings.
           </div>
@@ -1065,7 +1069,7 @@ function SoundPicker({
 }) {
   return (
     <Field label={label} hint={hint}>
-      <div style={{ display: "flex", gap: 10 }}>
+      <div style={{ display: "flex", gap: space(10) }}>
         <select
           value={value}
           onChange={(e) => {
@@ -1112,17 +1116,30 @@ function AppearanceSection() {
       <Heading>appearance</Heading>
 
       <Card>
+        <Field label="theme">
+          <div style={{ display: "flex", flexWrap: "wrap", gap: space(12) }}>
+            {THEMES.map((theme) => (
+              <ThemeTile
+                key={theme.name}
+                {...theme}
+                active={settings.theme === theme.name}
+                onPick={() => updateSettings({ theme: theme.name })}
+              />
+            ))}
+          </div>
+        </Field>
+
         <Field label="accent" hint="the colour of buttons, badges and highlights.">
-          <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ display: "flex", gap: space(12) }}>
             {ACCENT_SWATCHES.map(({ name, colour }) => (
               <button
                 key={name}
                 onClick={() => updateSettings({ accent: name as Accent })}
-                title={name}
+                title={ACCENT_LABELS[settings.theme]?.[name] ?? name}
                 style={{
                   width: 54,
                   height: 54,
-                  borderRadius: 18,
+                  borderRadius: corner(18),
                   background: colour,
                   cursor: "pointer",
                   border:
@@ -1131,7 +1148,7 @@ function AppearanceSection() {
                       : "2px solid var(--ink-950)",
                   boxShadow:
                     settings.accent === name ? "var(--shadow-sticker-ink)" : "none",
-                  transform: settings.accent === name ? "rotate(-3deg)" : "none",
+                  transform: settings.accent === name ? "rotate(calc(-3deg * var(--tilt-scale)))" : "none",
                   transition: "all var(--dur-fast) var(--ease-bounce)",
                 }}
               />
@@ -1150,7 +1167,7 @@ function AppearanceSection() {
           label={`message text — ${settings.messageFontSize}px`}
           hint="the size of messages and the composer. the rest of the app stays put."
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: space(12) }}>
             <input
               type="range"
               min={MESSAGE_FONT_SIZE_RANGE.min}
@@ -1175,8 +1192,8 @@ function AppearanceSection() {
           style={{
             background: "var(--surface-inset)",
             border: "1px solid var(--border-subtle)",
-            borderRadius: 14,
-            padding: "12px 14px",
+            borderRadius: corner(14),
+            padding: space("12px 14px"),
             fontSize: "var(--text-message)",
             lineHeight: 1.55,
           }}
@@ -1185,6 +1202,75 @@ function AppearanceSection() {
         </div>
       </Card>
     </>
+  );
+}
+
+/**
+ * A theme, drawn in its own colours. The tile carries `data-theme`, which is
+ * all a theme stylesheet matches on, so its tokens resolve to that theme's
+ * values whichever one the rest of the app is using.
+ */
+function ThemeTile({
+  name,
+  label,
+  hint,
+  active,
+  onPick,
+}: {
+  name: string;
+  label: string;
+  hint: string;
+  active: boolean;
+  onPick: () => void;
+}) {
+  return (
+    <button
+      data-theme={name}
+      onClick={onPick}
+      aria-pressed={active}
+      style={{
+        flex: "1 1 180px",
+        minWidth: 0,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-start",
+        gap: space(8),
+        padding: space(14),
+        borderRadius: corner(18),
+        background: "var(--ink-950)",
+        border: active ? "2px solid var(--text-primary)" : "2px solid var(--border-default)",
+        boxShadow: active ? "var(--shadow-sticker-ink)" : "none",
+        cursor: "pointer",
+        textAlign: "left",
+        transition: "all var(--dur-fast) var(--ease-bounce)",
+      }}
+    >
+      <span
+        style={{
+          fontFamily: "var(--font-heading)",
+          fontWeight: 800,
+          fontSize: headingSize(17),
+          color: "var(--text-primary)",
+        }}
+      >
+        {label}
+      </span>
+      <span style={{ fontSize: textSize(12), color: "var(--text-secondary)" }}>{hint}</span>
+      <span style={{ display: "flex", gap: space(6), marginTop: 2 }}>
+        {["--acid-500", "--pink-500", "--violet-500", "--cyan-500", "--ink-700"].map((token) => (
+          <span
+            key={token}
+            style={{
+              width: 18,
+              height: 18,
+              borderRadius: corner(7),
+              background: `var(${token})`,
+              border: "1px solid var(--border-subtle)",
+            }}
+          />
+        ))}
+      </span>
+    </button>
   );
 }
 
@@ -1216,9 +1302,9 @@ function FontPicker({
   return (
     <Field
       label="font"
-      hint="type the name of any font installed on this machine. one that isn't falls back to nunito."
+      hint="type the name of any font installed on this machine. one that isn't falls back to the theme's own."
     >
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: space(8), marginBottom: 10 }}>
         {FONT_PRESETS.map((p) => {
           const active = p.family === value;
           return (
@@ -1226,11 +1312,11 @@ function FontPicker({
               key={p.label}
               onClick={() => onChange(p.family)}
               style={{
-                padding: "7px 14px",
+                padding: space("7px 14px"),
                 borderRadius: 999,
                 cursor: "pointer",
-                fontFamily: p.family || "'Nunito Variable'",
-                fontSize: 13.5,
+                fontFamily: p.family || "var(--font-body-default)",
+                fontSize: textSize(13.5),
                 fontWeight: 700,
                 color: active ? "var(--text-on-accent)" : "var(--text-primary)",
                 background: active ? "var(--accent-primary)" : "var(--surface-inset)",
@@ -1273,14 +1359,14 @@ function AboutSection() {
       <Heading>about</Heading>
       <Card>
         <Logo height={32} />
-        <div style={{ color: "var(--text-secondary)", fontSize: 13.5, marginTop: 10 }}>
+        <div style={{ color: "var(--text-secondary)", fontSize: textSize(13.5), marginTop: 10 }}>
           a cute matrix client~
         </div>
         <div
           style={{
             marginTop: 16,
             fontFamily: "var(--font-mono)",
-            fontSize: 11.5,
+            fontSize: textSize(11.5),
             color: "var(--text-tertiary)",
             lineHeight: 1.9,
           }}

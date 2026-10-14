@@ -8,14 +8,15 @@
 import type { ReactNode } from "react";
 
 import { Icon, RaveLabel } from "./ui";
+import { corner, headingSize, space, textSize } from "../lib/scale";
 
 export function Heading({ children }: { children: ReactNode }) {
   return (
     <h2
       style={{
-        fontFamily: "var(--font-display)",
+        fontFamily: "var(--font-heading)",
         fontWeight: 800,
-        fontSize: 26,
+        fontSize: headingSize(26),
         letterSpacing: "-0.02em",
         marginBottom: 20,
       }}
@@ -42,9 +43,9 @@ export function Card({
         // popover that has to hang over the edge.
         ...(backdrop != null && { position: "relative", overflow: "hidden" }),
         background: "var(--surface-card)",
-        border: `1px solid ${tone === "warning" ? "rgba(255,194,77,.35)" : "var(--border-subtle)"}`,
-        borderRadius: 20,
-        padding: 18,
+        border: `1px solid ${tone === "warning" ? "color-mix(in srgb, var(--amber-500) 35%, transparent)" : "var(--border-subtle)"}`,
+        borderRadius: corner(20),
+        padding: space(18),
         marginBottom: 14,
       }}
     >
@@ -77,7 +78,7 @@ export function Field({
         <div
           style={{
             marginTop: 6,
-            fontSize: 12,
+            fontSize: textSize(12),
             color: "var(--text-tertiary)",
             lineHeight: 1.5,
           }}
@@ -93,10 +94,10 @@ export const inputStyle = {
   width: "100%",
   background: "var(--surface-inset)",
   border: "1px solid var(--border-subtle)",
-  borderRadius: 14,
-  padding: "10px 14px",
+  borderRadius: corner(14),
+  padding: space("10px 14px"),
   color: "var(--text-primary)",
-  fontSize: 13.5,
+  fontSize: textSize(13.5),
   outline: "none",
 } as const;
 
@@ -116,14 +117,14 @@ export function Row({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 12,
-        padding: "10px 0",
+        gap: space(12),
+        padding: space("10px 0"),
         borderBottom: "1px solid var(--border-subtle)",
       }}
     >
       {icon && <Icon name={icon} size={18} color="var(--text-tertiary)" />}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14 }}>
+        <div style={{ fontFamily: "var(--font-heading)", fontWeight: 700, fontSize: headingSize(14) }}>
           {title}
         </div>
         {subtitle && (
@@ -131,7 +132,7 @@ export function Row({
             className="selectable"
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: 11,
+              fontSize: textSize(11),
               color: "var(--text-tertiary)",
               marginTop: 2,
             }}

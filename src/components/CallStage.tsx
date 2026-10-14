@@ -8,6 +8,7 @@ import * as ipc from "../lib/ipc";
 import { useStore } from "../store";
 import { useCallState } from "./CallBar";
 import { Avatar, Icon, Spinner } from "./ui";
+import { corner, space, textSize } from "../lib/scale";
 
 /**
  * The video stage: a grid of participant tiles above the timeline, in the shape
@@ -59,10 +60,10 @@ export function CallStage({ roomId }: { roomId: string }) {
         zIndex: fullscreen ? 90 : 1,
         display: "flex",
         flexDirection: "column",
-        gap: 10,
+        gap: space(10),
         margin: fullscreen ? 0 : "12px 22px 0",
-        padding: fullscreen ? 24 : 12,
-        borderRadius: fullscreen ? 0 : 20,
+        padding: space(fullscreen ? 24 : 12),
+        borderRadius: corner(fullscreen ? 0 : 20),
         background: fullscreen ? "var(--surface-app)" : "var(--surface-card)",
         border: fullscreen ? "none" : "1px solid var(--border-subtle)",
         // Enough to be useful, not so much that chat disappears.
@@ -78,16 +79,16 @@ export function CallStage({ roomId }: { roomId: string }) {
             flexDirection: "column",
             alignItems: "center",
             justifyContent: "center",
-            gap: 12,
+            gap: space(12),
             color: "var(--text-tertiary)",
-            fontSize: 13,
+            fontSize: textSize(13),
           }}
         >
           <Spinner size={22} />
           connecting to the call…
         </div>
       ) : shared ? (
-        <div style={{ flex: 1, display: "flex", gap: 10, minHeight: 0 }}>
+        <div style={{ flex: 1, display: "flex", gap: space(10), minHeight: 0 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <Tile participant={shared} track={shared.screenTrack} label="screen" contain />
           </div>
@@ -98,7 +99,7 @@ export function CallStage({ roomId }: { roomId: string }) {
               flex: "none",
               display: "flex",
               flexDirection: "column",
-              gap: 8,
+              gap: space(8),
             }}
           >
             {state.participants.map((p) => (
@@ -114,7 +115,7 @@ export function CallStage({ roomId }: { roomId: string }) {
             flex: 1,
             minHeight: 0,
             display: "grid",
-            gap: 10,
+            gap: space(10),
             // Tiles get bigger as the call gets smaller, without a breakpoint
             // for every headcount.
             gridTemplateColumns: `repeat(auto-fit, minmax(${
@@ -135,11 +136,11 @@ export function CallStage({ roomId }: { roomId: string }) {
         </div>
       )}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: space(8) }}>
         <span
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 10.5,
+            fontSize: textSize(10.5),
             color: reconnecting ? "var(--status-warning)" : "var(--text-tertiary)",
             marginRight: "auto",
           }}
@@ -233,7 +234,7 @@ function Tile({
         position: "relative",
         width: "100%",
         height: "100%",
-        borderRadius: 16,
+        borderRadius: corner(16),
         overflow: "hidden",
         background: "var(--ink-900)",
         border: "1px solid var(--border-subtle)",
@@ -274,18 +275,18 @@ function Tile({
           right: 8,
           display: "flex",
           alignItems: "center",
-          gap: 6,
+          gap: space(6),
         }}
       >
         <span
           className="uwu-ellipsis"
           style={{
-            padding: "3px 9px",
+            padding: space("3px 9px"),
             borderRadius: 999,
-            background: "rgba(11,11,15,.72)",
+            background: "color-mix(in srgb, var(--ink-950) 72%, transparent)",
             fontFamily: "var(--font-display)",
             fontWeight: 700,
-            fontSize: 12,
+            fontSize: textSize(12),
             color: "var(--text-primary)",
           }}
         >
@@ -299,7 +300,7 @@ function Tile({
               height: 20,
               flex: "none",
               borderRadius: "50%",
-              background: "rgba(11,11,15,.72)",
+              background: "color-mix(in srgb, var(--ink-950) 72%, transparent)",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -352,7 +353,7 @@ function Control({
       style={{
         width: 36,
         height: 36,
-        borderRadius: 12,
+        borderRadius: corner(12),
         background,
         border: "1px solid var(--border-subtle)",
         display: "flex",

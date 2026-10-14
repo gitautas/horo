@@ -5,6 +5,7 @@ import * as ipc from "../lib/ipc";
 import type { RoomPermissions, RoomSummary } from "../lib/types";
 import { useStore } from "../store";
 import { Button, Modal } from "./ui";
+import { corner, space, textSize } from "../lib/scale";
 
 /**
  * Renaming a room.
@@ -50,7 +51,7 @@ export function RoomSettingsDialog({
         <RoomEditor room={room} permissions={permissions!} />
       ) : (
         permissions && (
-          <div style={{ fontSize: 12.5, color: "var(--text-tertiary)", lineHeight: 1.5 }}>
+          <div style={{ fontSize: textSize(12.5), color: "var(--text-tertiary)", lineHeight: 1.5 }}>
             you can't rename this one — that needs more power than you have here.
           </div>
         )
@@ -102,7 +103,7 @@ function LeaveRoom({ room, onLeft }: { room: RoomSummary; onLeft: () => void }) 
     <div
       style={{
         marginTop: 20,
-        paddingTop: 14,
+        paddingTop: space(14),
         borderTop: "1px solid var(--border-subtle)",
       }}
     >
@@ -110,7 +111,7 @@ function LeaveRoom({ room, onLeft }: { room: RoomSummary; onLeft: () => void }) 
         <>
           <div
             style={{
-              fontSize: 12.5,
+              fontSize: textSize(12.5),
               color: "var(--text-secondary)",
               lineHeight: 1.55,
               marginBottom: 10,
@@ -120,7 +121,7 @@ function LeaveRoom({ room, onLeft }: { room: RoomSummary; onLeft: () => void }) 
               ? `decline the invite to ${room.name}?`
               : `leave ${room.name}? it drops off your list, and you'd need an invite to get back into a private room.`}
           </div>
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <div style={{ display: "flex", gap: space(8), justifyContent: "flex-end" }}>
             <Button size="sm" variant="ghost" onClick={() => setAsked(false)}>
               stay
             </Button>
@@ -143,7 +144,7 @@ function LeaveRoom({ room, onLeft }: { room: RoomSummary; onLeft: () => void }) 
             border: "none",
             padding: 0,
             fontFamily: "var(--font-body)",
-            fontSize: 12.5,
+            fontSize: textSize(12.5),
             color: "var(--status-danger)",
           }}
         >
@@ -231,12 +232,12 @@ function RoomEditor({
 
 const inputStyle = {
   width: "100%",
-  padding: "9px 12px",
-  borderRadius: 14,
+  padding: space("9px 12px"),
+  borderRadius: corner(14),
   background: "var(--surface-inset)",
   border: "1px solid var(--border-subtle)",
   outline: "none",
   color: "var(--text-primary)",
-  fontSize: 13,
+  fontSize: textSize(13),
   fontFamily: "var(--font-body)",
 } as const;

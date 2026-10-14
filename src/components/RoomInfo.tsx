@@ -10,6 +10,7 @@ import { AvatarButton, useProfileAnchor } from "./ProfileCard";
 import { ProfileHeader } from "./ProfileHeader";
 import { RoomSettingsDialog } from "./RoomSettings";
 import { Avatar, Icon, RaveLabel, Spinner } from "./ui";
+import { corner, headingSize, space, textSize } from "../lib/scale";
 
 /** Matches the panel below, so a full-bleed cover is asked for at its width. */
 const PANEL_WIDTH = 296;
@@ -78,10 +79,10 @@ export function RoomInfo({ room, onBack }: { room: RoomSummary; onBack?: () => v
         // The border separates this from the timeline beside it. As a pushed
         // view there is nothing to its left to separate it from.
         borderLeft: onBack ? undefined : "1px solid var(--border-subtle)",
-        background: "rgba(17,17,23,.72)",
-        padding: onBack
+        background: "color-mix(in srgb, var(--ink-900) 72%, transparent)",
+        padding: space(onBack
           ? "calc(var(--safe-top) + 56px) 16px calc(var(--safe-bottom) + 24px)"
-          : "18px 16px 24px",
+          : "18px 16px 24px"),
       }}
     >
       {onBack && (
@@ -112,7 +113,7 @@ export function RoomInfo({ room, onBack }: { room: RoomSummary; onBack?: () => v
           top: onBack ? "calc(var(--safe-top) + 14px)" : 14,
           right: 14,
           display: "flex",
-          gap: 6,
+          gap: space(6),
           zIndex: 2,
         }}
       >
@@ -133,14 +134,14 @@ export function RoomInfo({ room, onBack }: { room: RoomSummary; onBack?: () => v
       {partner ? (
         <DmHeader partner={partner} />
       ) : (
-        <div style={{ textAlign: "center", padding: "8px 0 16px" }}>
+        <div style={{ textAlign: "center", padding: space("8px 0 16px") }}>
           <button
             onClick={() => room.avatarUrl && openLightbox(room.avatarUrl, room.name)}
             aria-label={`${room.name}'s picture, full size`}
             style={{
               display: "inline-block",
               padding: 0,
-              transform: "rotate(-3deg)",
+              transform: "rotate(calc(-3deg * var(--tilt-scale)))",
               cursor: room.avatarUrl ? "zoom-in" : "default",
             }}
           >
@@ -155,9 +156,9 @@ export function RoomInfo({ room, onBack }: { room: RoomSummary; onBack?: () => v
           </button>
           <div
             style={{
-              fontFamily: "var(--font-display)",
+              fontFamily: "var(--font-heading)",
               fontWeight: 800,
-              fontSize: 19,
+              fontSize: headingSize(19),
               marginTop: 12,
             }}
           >
@@ -167,7 +168,7 @@ export function RoomInfo({ room, onBack }: { room: RoomSummary; onBack?: () => v
             className="selectable uwu-ellipsis"
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: 11,
+              fontSize: textSize(11),
               color: "var(--text-tertiary)",
             }}
           >
@@ -180,10 +181,10 @@ export function RoomInfo({ room, onBack }: { room: RoomSummary; onBack?: () => v
         <div
           className="selectable"
           style={{
-            fontSize: 12.5,
+            fontSize: textSize(12.5),
             color: "var(--text-secondary)",
             lineHeight: 1.55,
-            padding: "0 4px 16px",
+            padding: space("0 4px 16px"),
           }}
         >
           {room.topic}
@@ -192,12 +193,12 @@ export function RoomInfo({ room, onBack }: { room: RoomSummary; onBack?: () => v
 
       <EncryptionCard room={room} unverified={unverified} total={joined.length} />
 
-      <RaveLabel style={{ padding: "20px 4px 8px" }}>
+      <RaveLabel style={{ padding: space("20px 4px 8px") }}>
         members · {members ? joined.length : "…"}
       </RaveLabel>
 
       {!members && (
-        <div style={{ display: "flex", justifyContent: "center", padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "center", padding: space(20) }}>
           <Spinner />
         </div>
       )}
@@ -297,10 +298,10 @@ function DmHeader({ partner }: { partner: RoomMember }) {
         <div
           className="selectable"
           style={{
-            fontSize: 12.5,
+            fontSize: textSize(12.5),
             color: "var(--text-secondary)",
             lineHeight: 1.55,
-            padding: "12px 4px 4px",
+            padding: space("12px 4px 4px"),
             whiteSpace: "pre-wrap",
             wordBreak: "break-word",
           }}
@@ -328,20 +329,20 @@ function EncryptionCard({
       <div
         style={{
           background: "var(--surface-card)",
-          border: "1px solid rgba(255,194,77,.3)",
-          borderRadius: 20,
-          padding: 14,
+          border: "1px solid color-mix(in srgb, var(--amber-500) 30%, transparent)",
+          borderRadius: corner(20),
+          padding: space(14),
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space(8) }}>
           <Icon name="lock-key-open" size={16} color="var(--status-warning)" />
-          <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14 }}>
+          <span style={{ fontFamily: "var(--font-heading)", fontWeight: 700, fontSize: headingSize(14) }}>
             not encrypted
           </span>
         </div>
         <div
           style={{
-            fontSize: 12.5,
+            fontSize: textSize(12.5),
             color: "var(--text-secondary)",
             marginTop: 5,
             lineHeight: 1.5,
@@ -360,24 +361,24 @@ function EncryptionCard({
       style={{
         background: "var(--surface-card)",
         border: "1px solid var(--border-subtle)",
-        borderRadius: 20,
-        padding: 14,
+        borderRadius: corner(20),
+        padding: space(14),
         boxShadow: "var(--shadow-card)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: space(8) }}>
         <Icon
           name={allVerified ? "shield-check" : "shield-warning"}
           size={16}
           color={allVerified ? "var(--accent-primary)" : "var(--status-warning)"}
         />
-        <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14 }}>
+        <span style={{ fontFamily: "var(--font-heading)", fontWeight: 700, fontSize: headingSize(14) }}>
           {allVerified ? "everyone verified~" : "some devices unverified"}
         </span>
       </div>
       <div
         style={{
-          fontSize: 12.5,
+          fontSize: textSize(12.5),
           color: "var(--text-secondary)",
           marginTop: 5,
           lineHeight: 1.5,
@@ -390,10 +391,10 @@ function EncryptionCard({
       <div
         style={{
           display: "flex",
-          gap: 6,
+          gap: space(6),
           marginTop: 10,
           fontFamily: "var(--font-mono)",
-          fontSize: 10.5,
+          fontSize: textSize(10.5),
           color: "var(--text-tertiary)",
         }}
       >
@@ -415,9 +416,9 @@ function MemberRow({ member }: { member: RoomMember }) {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        padding: "8px 6px",
-        borderRadius: 14,
+        gap: space(10),
+        padding: space("8px 6px"),
+        borderRadius: corner(14),
       }}
       onMouseEnter={(e) => {
         e.currentTarget.style.background = "rgba(255,255,255,.05)";
@@ -446,7 +447,7 @@ function MemberRow({ member }: { member: RoomMember }) {
           style={{
             fontFamily: "var(--font-display)",
             fontWeight: 700,
-            fontSize: 13.5,
+            fontSize: textSize(13.5),
             color: accentFor(member.userId),
           }}
         >
@@ -456,7 +457,7 @@ function MemberRow({ member }: { member: RoomMember }) {
           className="uwu-ellipsis selectable"
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 10.5,
+            fontSize: textSize(10.5),
             color: "var(--text-tertiary)",
           }}
         >

@@ -8,6 +8,7 @@ import type { TimelineItem, TypingUser } from "../lib/types";
 import { useStore } from "../store";
 import { MessageRow } from "./MessageRow";
 import { Avatar, Spinner } from "./ui";
+import { space, textSize } from "../lib/scale";
 
 /**
  * Shared empties for rooms we haven't loaded yet.
@@ -244,10 +245,10 @@ export function TimelineView({
       style={{
         flex: 1,
         // 22px each side is a fifth of a phone's width spent on margin.
-        padding: isMobile ? "12px 12px 8px" : "18px 22px 8px",
+        padding: space(isMobile ? "12px 12px 8px" : "18px 22px 8px"),
         display: "flex",
         flexDirection: "column",
-        gap: 3,
+        gap: space(3),
       }}
     >
       {paginating && (
@@ -255,7 +256,7 @@ export function TimelineView({
           style={{
             display: "flex",
             justifyContent: "center",
-            padding: "10px 0",
+            padding: space("10px 0"),
           }}
         >
           <Spinner />
@@ -266,8 +267,8 @@ export function TimelineView({
         <div
           style={{
             alignSelf: "center",
-            padding: "14px 0 18px",
-            fontSize: 12.5,
+            padding: space("14px 0 18px"),
+            fontSize: textSize(12.5),
             color: "var(--text-tertiary)",
           }}
         >
@@ -284,7 +285,7 @@ export function TimelineView({
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 12,
+                gap: space(12),
                 margin: "18px 0 10px",
               }}
             >
@@ -293,7 +294,7 @@ export function TimelineView({
               />
               <span
                 style={{
-                  fontSize: 11,
+                  fontSize: textSize(11),
                   fontWeight: 600,
                   color: "var(--text-tertiary)",
                   whiteSpace: "nowrap",
@@ -315,7 +316,7 @@ export function TimelineView({
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 10,
+                gap: space(10),
                 margin: "8px 0",
               }}
             >
@@ -329,7 +330,7 @@ export function TimelineView({
               <span
                 style={{
                   fontFamily: "var(--font-rave)",
-                  fontSize: 8.5,
+                  fontSize: textSize(8.5),
                   fontWeight: 800,
                   letterSpacing: "0.14em",
                   textTransform: "uppercase",
@@ -367,13 +368,13 @@ export function TimelineView({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 9,
-            padding: "2px 8px 10px 60px",
+            gap: space(9),
+            padding: `${space("2px 8px 10px")} calc(40px + ${space(20)})`,
             color: "var(--text-secondary)",
-            fontSize: 12.5,
+            fontSize: textSize(12.5),
           }}
         >
-          <span style={{ display: "inline-flex", gap: 3 }}>
+          <span style={{ display: "inline-flex", gap: space(3) }}>
             {[0, 0.2, 0.4].map((delay) => (
               <span
                 key={delay}
@@ -433,8 +434,8 @@ export function ReadReceipts({ items }: { items: TimelineItem[] }) {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 8,
-        padding: "4px 8px 10px 60px",
+        gap: space(8),
+        padding: `${space("4px 8px 10px")} calc(40px + ${space(20)})`,
       }}
     >
       {receipts.slice(0, MAX_FACES).map((userId) => (
@@ -444,7 +445,7 @@ export function ReadReceipts({ items }: { items: TimelineItem[] }) {
         <span
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 10.5,
+            fontSize: textSize(10.5),
             color: "var(--text-tertiary)",
           }}
         >
