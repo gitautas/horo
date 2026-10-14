@@ -24,7 +24,7 @@ import { SpacesRail } from "./components/SpacesRail";
 import { IncomingCallModal } from "./components/IncomingCallModal";
 import { UpdateBanner } from "./components/UpdateNotice";
 import { VerificationModal } from "./components/VerificationModal";
-import { BackdropPattern, dragRegion, Icon, Spinner } from "./components/ui";
+import { BackdropPattern, dragRegion, Icon, Logo, Spinner } from "./components/ui";
 
 export default function App() {
   const { session, bootstrapped, setSession, setBootstrapped, showBanner } = useStore(
@@ -89,19 +89,8 @@ function Booting() {
       }}
     >
       <BackdropPattern />
-      <div
-        style={{
-          position: "relative",
-          zIndex: 1,
-          fontFamily: "var(--font-display)",
-          fontWeight: 800,
-          fontSize: 44,
-          letterSpacing: "-0.03em",
-          color: "var(--accent-secondary)",
-        }}
-        className="uwu-wobble"
-      >
-        horo
+      <div style={{ position: "relative", zIndex: 1 }} className="uwu-wobble">
+        <Logo height={44} />
       </div>
       <div style={{ position: "relative", zIndex: 1 }}>
         <Spinner size={20} />

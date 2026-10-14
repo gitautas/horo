@@ -4,7 +4,7 @@ import * as ipc from "../lib/ipc";
 import type { HomeserverInfo } from "../lib/types";
 import { useIsMobile } from "../lib/viewport";
 import { useStore } from "../store";
-import { BackdropPattern, Button, dragRegion, Icon, RaveLabel, Spinner } from "./ui";
+import { BackdropPattern, Button, dragRegion, Icon, Logo, RaveLabel, Spinner } from "./ui";
 
 type Stage = "server" | "credentials";
 
@@ -93,19 +93,8 @@ export function LoginScreen() {
           boxShadow: "var(--shadow-pop)",
         }}
       >
-        <div
-          style={{
-            fontFamily: "var(--font-display)",
-            fontWeight: 800,
-            fontSize: 40,
-            letterSpacing: "-0.03em",
-            color: "var(--accent-secondary)",
-            lineHeight: 1,
-          }}
-        >
-          horo
-        </div>
-        <div style={{ color: "var(--text-secondary)", fontSize: 13.5, marginTop: 6 }}>
+        <Logo height={40} />
+        <div style={{ color: "var(--text-secondary)", fontSize: 13.5, marginTop: 10 }}>
           a cute matrix client~
         </div>
 

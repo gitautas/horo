@@ -34,7 +34,7 @@ import { CameraBackdrop } from "./CameraBackdrop";
 import { MicSettings } from "./MicSettings";
 import { PacksSection } from "./PackSettings";
 import { Card, Field, Heading, inputStyle, Row } from "./settingsUi";
-import { Avatar, Button, dragRegion, Icon, RaveLabel, Spinner, Toggle } from "./ui";
+import { Avatar, Button, dragRegion, Icon, Logo, RaveLabel, Spinner, Toggle } from "./ui";
 import { UpdateSettings } from "./UpdateNotice";
 
 type Section =
@@ -1272,18 +1272,8 @@ function AboutSection() {
     <>
       <Heading>about</Heading>
       <Card>
-        <div
-          style={{
-            fontFamily: "var(--font-display)",
-            fontWeight: 800,
-            fontSize: 34,
-            color: "var(--accent-secondary)",
-            letterSpacing: "-0.03em",
-          }}
-        >
-          horo
-        </div>
-        <div style={{ color: "var(--text-secondary)", fontSize: 13.5, marginTop: 6 }}>
+        <Logo height={32} />
+        <div style={{ color: "var(--text-secondary)", fontSize: 13.5, marginTop: 10 }}>
           a cute matrix client~
         </div>
         <div

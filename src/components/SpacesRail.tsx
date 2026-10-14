@@ -4,7 +4,7 @@ import { accentFor, initialsFor } from "../lib/display";
 import { mediaUrl } from "../lib/ipc";
 import { useStore } from "../store";
 import { AvatarButton } from "./ProfileCard";
-import { dragRegion, Icon, PresenceDot } from "./ui";
+import { dragRegion, Icon, Logo, PresenceDot } from "./ui";
 
 /**
  * The narrow left rail: the uwu mark, one tile per space, and your own avatar
@@ -64,18 +64,7 @@ export function SpacesRail({
         style={{ position: "absolute", top: 0, left: 0, right: 0, height: 40 }}
       />
 
-      <div
-        style={{
-          fontFamily: "var(--font-display)",
-          fontWeight: 800,
-          fontSize: 15,
-          color: "var(--accent-secondary)",
-          letterSpacing: "-0.02em",
-          lineHeight: 1,
-        }}
-      >
-        uwu
-      </div>
+      <Logo height={18} />
       <div
         style={{
           width: 26,

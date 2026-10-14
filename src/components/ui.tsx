@@ -6,6 +6,7 @@ import type { CSSProperties, ReactNode } from "react";
 
 import { accentFor, initialsFor } from "../lib/display";
 import { mediaUrl } from "../lib/ipc";
+import logoUrl from "../../src-tauri/icons/horo_logo.svg";
 
 /**
  * The window has no title bar on macOS, so parts of the chrome double as its
@@ -498,6 +499,21 @@ export function Modal({
 }
 
 /** The full-bleed ray pattern behind the whole app. */
+/**
+ * The horo wordmark, sized by height. It keeps its own cream and gold rather
+ * than following the accent, since it is the brand mark.
+ */
+export function Logo({ height, style }: { height: number; style?: CSSProperties }) {
+  return (
+    <img
+      src={logoUrl}
+      alt="horo"
+      draggable={false}
+      style={{ display: "block", height, width: "auto", ...style }}
+    />
+  );
+}
+
 export function BackdropPattern() {
   return (
     <div className="uwu-pattern">
