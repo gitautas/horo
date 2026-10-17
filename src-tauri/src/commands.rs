@@ -8,8 +8,8 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::{
     dto::{
-        HomeserverInfo, RoomMemberDto, RoomsSnapshot, SendOptions, SessionInfo, SpaceSummary,
-        StickerOptions, TimelineItemDto,
+        HomeserverInfo, RegisterAuth, RegisterStep, RoomMemberDto, RoomsSnapshot, SendOptions,
+        SessionInfo, SpaceSummary, StickerOptions, TimelineItemDto,
     },
     error::{Error, Result},
     matrix::{auth, core::AppState, media, packs, presence, profile, rooms, timeline},
@@ -60,6 +60,30 @@ pub async fn login_sso(
 ) -> Result<SessionInfo> {
     let dir = data_dir(&app)?;
     auth::login_sso(app.clone(), &state, &dir, &server, provider_id).await
+}
+
+#[tauri::command]
+pub async fn register_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    server: String,
+    username: String,
+    password: String,
+    session: Option<String>,
+    auth: Option<RegisterAuth>,
+) -> Result<RegisterStep> {
+    let dir = data_dir(&app)?;
+    auth::register(
+        app.clone(),
+        &state,
+        &dir,
+        &server,
+        &username,
+        &password,
+        session,
+        auth,
+    )
+    .await
 }
 
 #[tauri::command]

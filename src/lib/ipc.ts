@@ -26,6 +26,8 @@ import type {
   PresenceUpdate,
   RecentPhotos,
   RecoveryStatus,
+  RegisterAuth,
+  RegisterStep,
   RoomMember,
   RoomPermissions,
   RoomsSnapshot,
@@ -72,6 +74,23 @@ export const loginPassword = (server: string, username: string, password: string
 
 export const loginSso = (server: string, providerId?: string) =>
   invoke<SessionInfo>("login_sso", { server, providerId: providerId ?? null });
+
+/**
+ * One step of creating an account. Start with no `session`/`auth`; answer each
+ * `needsAuth` with the session it carried and the stage just completed.
+ */
+export const registerAccount = (args: {
+  server: string;
+  username: string;
+  password: string;
+  session?: string | null;
+  auth?: RegisterAuth | null;
+}) =>
+  invoke<RegisterStep>("register_account", {
+    ...args,
+    session: args.session ?? null,
+    auth: args.auth ?? null,
+  });
 
 export const restoreSession = () => invoke<SessionInfo | null>("restore_session");
 

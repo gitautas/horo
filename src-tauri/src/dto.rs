@@ -57,6 +57,84 @@ pub struct SessionInfo {
     pub insecure_storage: bool,
 }
 
+/// One answer to a homeserver's sign-up questions, sent with the `session` the
+/// previous [`RegisterStep::NeedsAuth`] handed out.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum RegisterAuth {
+    /// `m.login.dummy` — a stage that asks nothing, there to make a flow non-empty.
+    Dummy,
+    /// `m.login.registration_token` — an invite code from the server's admin.
+    #[serde(rename_all = "camelCase")]
+    RegistrationToken { token: String },
+    /// `m.login.terms` — the policies were shown and agreed to.
+    Terms,
+    /// Any stage finished in the browser on the server's fallback page.
+    Fallback,
+}
+
+/// How the frontend can get through one stage of a sign-up flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub enum RegisterStageKind {
+    Dummy,
+    RegistrationToken,
+    Terms,
+    /// Done on the homeserver's own web page (captcha, mostly), then acknowledged.
+    Fallback,
+    /// Email and phone verification: these need an identity-server round trip
+    /// and have no fallback page, so a flow containing one can't be finished.
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterStage {
+    pub kind: RegisterStageKind,
+    /// The raw `m.login.*` type — what `completed` lists.
+    pub auth_type: String,
+    /// Where to send the user for a [`RegisterStageKind::Fallback`] stage.
+    pub fallback_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct TermsPolicy {
+    pub name: String,
+    pub url: String,
+}
+
+/// What the server still wants before it creates the account.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterChallenge {
+    pub session: Option<String>,
+    /// Each inner list is one acceptable sequence of stages.
+    pub flows: Vec<Vec<RegisterStage>>,
+    /// Stage types already passed in this session.
+    pub completed: Vec<String>,
+    /// The documents behind an `m.login.terms` stage, if any flow has one.
+    pub policies: Vec<TermsPolicy>,
+    /// Why the last answer was rejected (a wrong token, say).
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase", tag = "status")]
+pub enum RegisterStep {
+    /// The account exists and is signed in.
+    #[serde(rename_all = "camelCase")]
+    Done { session: SessionInfo },
+    #[serde(rename_all = "camelCase")]
+    NeedsAuth { challenge: RegisterChallenge },
+}
+
 // ---------------------------------------------------------------------------
 // rooms
 // ---------------------------------------------------------------------------

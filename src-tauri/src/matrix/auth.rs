@@ -6,17 +6,27 @@ use std::{
 };
 
 use matrix_sdk::{
-    Client,
+    Client, HttpError, SessionMeta, SessionTokens,
     authentication::matrix::MatrixSession,
     encryption::{BackupDownloadStrategy, EncryptionSettings},
-    ruma::{RoomId, api::client::session::get_login_types::v3::LoginType},
+    ruma::{
+        RoomId,
+        api::client::{
+            account::register,
+            session::get_login_types::v3::LoginType,
+            uiaa::{self, AuthType, LoginTermsParams, UiaaInfo},
+        },
+    },
     store::RoomLoadSettings,
 };
 use matrix_sdk_ui::sync_service::SyncService;
 use tokio::sync::Mutex;
 
 use crate::{
-    dto::{HomeserverInfo, SessionInfo, SsoProvider},
+    dto::{
+        HomeserverInfo, RegisterAuth, RegisterChallenge, RegisterStage, RegisterStageKind,
+        RegisterStep, SessionInfo, SsoProvider, TermsPolicy,
+    },
     error::{Error, Result},
     events,
     matrix::{
@@ -216,6 +226,198 @@ pub async fn login_sso(
     let homeserver = probe.homeserver().to_string();
     let session = MatrixSession::from(&response);
     finish_login(app, state, data_dir, &homeserver, session).await
+}
+
+/// One turn of account registration.
+///
+/// Registration is user-interactive auth: the first request comes back with
+/// the flows the server accepts, and each request after that answers one stage
+/// of one flow. Most stages need the person at the keyboard — a token, a terms
+/// checkbox, a captcha — so the frontend drives the loop and this is a single
+/// step of it. Username and password go with every step; the server keys the
+/// attempt by `session`.
+#[allow(clippy::too_many_arguments)]
+pub async fn register(
+    app: tauri::AppHandle,
+    state: &AppState,
+    data_dir: &Path,
+    server: &str,
+    username: &str,
+    password: &str,
+    session: Option<String>,
+    auth: Option<RegisterAuth>,
+) -> Result<RegisterStep> {
+    // Serialised against restore and against a second click, like login.
+    let _gate = state.session_gate.lock().await;
+
+    let probe = probe_client(server).await?;
+
+    let mut request = register::v3::Request::new();
+    request.username = Some(username.trim().to_owned());
+    request.password = Some(password.to_owned());
+    request.initial_device_display_name = Some(DEVICE_NAME.to_owned());
+    request.refresh_token = true;
+    request.auth = auth.map(|answer| auth_data(answer, session)).transpose()?;
+
+    // `send` rather than `matrix_auth().register()`: the latter also signs the
+    // probe client in, and the probe is about to be thrown away.
+    let response = match probe.send(request).await {
+        Ok(response) => response,
+        Err(e) => {
+            return match e.as_uiaa_response() {
+                Some(info) => Ok(RegisterStep::NeedsAuth {
+                    challenge: challenge(probe.homeserver(), info),
+                }),
+                None => Err(Error::Auth(friendly_register_error(&e))),
+            };
+        }
+    };
+
+    // Both are only absent with `inhibit_login`, which we never set; a server
+    // that leaves them out anyway has still made the account.
+    let (Some(device_id), Some(access_token)) = (response.device_id, response.access_token) else {
+        return Err(Error::Auth(
+            "your account was made, but the server didn't sign it in — sign in to continue".into(),
+        ));
+    };
+
+    let session = MatrixSession {
+        meta: SessionMeta {
+            user_id: response.user_id,
+            device_id,
+        },
+        tokens: SessionTokens {
+            access_token,
+            refresh_token: response.refresh_token,
+        },
+    };
+    let homeserver = probe.homeserver().to_string();
+    let info = finish_login(app, state, data_dir, &homeserver, session).await?;
+    Ok(RegisterStep::Done { session: info })
+}
+
+fn auth_data(answer: RegisterAuth, session: Option<String>) -> Result<uiaa::AuthData> {
+    Ok(match answer {
+        RegisterAuth::Dummy => {
+            let mut dummy = uiaa::Dummy::new();
+            dummy.session = session;
+            uiaa::AuthData::Dummy(dummy)
+        }
+        RegisterAuth::RegistrationToken { token } => {
+            let mut token = uiaa::RegistrationToken::new(token.trim().to_owned());
+            token.session = session;
+            uiaa::AuthData::RegistrationToken(token)
+        }
+        RegisterAuth::Terms => {
+            let mut terms = uiaa::Terms::new();
+            terms.session = session;
+            uiaa::AuthData::Terms(terms)
+        }
+        RegisterAuth::Fallback => {
+            let session = session
+                .ok_or_else(|| Error::Auth("the server didn't start a sign-up session".into()))?;
+            uiaa::AuthData::FallbackAcknowledgement(uiaa::FallbackAcknowledgement::new(session))
+        }
+    })
+}
+
+/// Flatten the server's 401 into what the sign-up form needs to render.
+fn challenge(homeserver: url::Url, info: &UiaaInfo) -> RegisterChallenge {
+    let session = info.session.clone();
+
+    let stage = |auth_type: &AuthType| {
+        let kind = match auth_type {
+            AuthType::Dummy => RegisterStageKind::Dummy,
+            AuthType::RegistrationToken => RegisterStageKind::RegistrationToken,
+            AuthType::Terms => RegisterStageKind::Terms,
+            AuthType::EmailIdentity | AuthType::Msisdn => RegisterStageKind::Unsupported,
+            // Anything else — reCAPTCHA above all — has a web page on the
+            // homeserver that does the stage for us.
+            _ if session.is_some() => RegisterStageKind::Fallback,
+            _ => RegisterStageKind::Unsupported,
+        };
+        RegisterStage {
+            kind,
+            auth_type: auth_type.as_str().to_owned(),
+            fallback_url: (kind == RegisterStageKind::Fallback)
+                .then(|| fallback_url(&homeserver, auth_type, session.as_deref()?))
+                .flatten(),
+        }
+    };
+
+    let policies = info
+        .params::<LoginTermsParams>(&AuthType::Terms)
+        .ok()
+        .flatten()
+        .map(|terms| {
+            terms
+                .policies
+                .into_values()
+                .filter_map(|policy| {
+                    let translation = policy
+                        .translations
+                        .get("en")
+                        .or_else(|| policy.translations.values().next())?;
+                    Some(TermsPolicy {
+                        name: translation.name.clone(),
+                        url: translation.url.clone(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    RegisterChallenge {
+        flows: info
+            .flows
+            .iter()
+            .map(|flow| flow.stages.iter().map(stage).collect())
+            .collect(),
+        completed: info
+            .completed
+            .iter()
+            .map(|t| t.as_str().to_owned())
+            .collect(),
+        policies,
+        error: info.auth_error.as_ref().map(|e| e.message.clone()),
+        session,
+    }
+}
+
+fn fallback_url(homeserver: &url::Url, auth_type: &AuthType, session: &str) -> Option<String> {
+    let mut url = homeserver
+        .join(&format!(
+            "_matrix/client/v3/auth/{}/fallback/web",
+            auth_type.as_str()
+        ))
+        .ok()?;
+    url.query_pairs_mut().append_pair("session", session);
+    Some(url.to_string())
+}
+
+/// Registration's version of [`friendly_login_error`].
+fn friendly_register_error(error: &HttpError) -> String {
+    use matrix_sdk::ruma::api::error::{ErrorBody, ErrorKind, StandardErrorBody};
+
+    let server_says = || match error.as_client_api_error().map(|e| &e.body) {
+        Some(ErrorBody::Standard(StandardErrorBody { message, .. })) => message.clone(),
+        _ => error.to_string(),
+    };
+
+    match error.client_api_error_kind() {
+        Some(ErrorKind::UserInUse) => "that username is taken".to_owned(),
+        Some(ErrorKind::Exclusive) => "that username is reserved on this server".to_owned(),
+        Some(ErrorKind::Forbidden) => "this server isn't taking sign-ups".to_owned(),
+        // Servers that hand accounts to an OAuth provider (matrix.org among
+        // them) don't serve `/register` at all.
+        Some(ErrorKind::Unrecognized) => {
+            "this server signs people up on its website, not in apps".to_owned()
+        }
+        Some(ErrorKind::LimitExceeded { .. }) => "too many attempts — wait a moment".to_owned(),
+        // Invalid usernames and weak passwords: the server's own wording says
+        // what it wants, which is more than we could.
+        _ => server_says(),
+    }
 }
 
 /// Shared tail of both login flows: build the real, store-backed client,

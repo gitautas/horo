@@ -47,6 +47,7 @@ pub fn run() {
             commands::discover_homeserver,
             commands::login_password,
             commands::login_sso,
+            commands::register_account,
             commands::restore_session,
             commands::logout,
             commands::current_session,
