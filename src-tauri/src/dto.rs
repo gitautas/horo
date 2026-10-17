@@ -70,8 +70,23 @@ pub enum RegisterAuth {
     RegistrationToken { token: String },
     /// `m.login.terms` — the policies were shown and agreed to.
     Terms,
+    /// `m.login.email.identity` — the link in the email from
+    /// [`RegisterEmailToken`] has been clicked.
+    #[serde(rename_all = "camelCase")]
+    Email { sid: String, client_secret: String },
     /// Any stage finished in the browser on the server's fallback page.
     Fallback,
+}
+
+/// A verification email the homeserver has sent for sign-up. Both halves go
+/// back in [`RegisterAuth::Email`] once the link in it has been followed.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterEmailToken {
+    pub sid: String,
+    /// Generated here; pass it back to re-send to the same address.
+    pub client_secret: String,
 }
 
 /// How the frontend can get through one stage of a sign-up flow.
@@ -82,10 +97,12 @@ pub enum RegisterStageKind {
     Dummy,
     RegistrationToken,
     Terms,
+    /// An address to verify by clicking a link the homeserver emails.
+    Email,
     /// Done on the homeserver's own web page (captcha, mostly), then acknowledged.
     Fallback,
-    /// Email and phone verification: these need an identity-server round trip
-    /// and have no fallback page, so a flow containing one can't be finished.
+    /// Phone verification, and anything else with no fallback page, so a flow
+    /// containing one can't be finished.
     Unsupported,
 }
 

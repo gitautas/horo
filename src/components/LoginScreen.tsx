@@ -3,7 +3,12 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import * as ipc from "../lib/ipc";
 import { nextStage } from "../lib/registration";
-import type { HomeserverInfo, RegisterAuth, RegisterChallenge } from "../lib/types";
+import type {
+  HomeserverInfo,
+  RegisterAuth,
+  RegisterChallenge,
+  RegisterEmailToken,
+} from "../lib/types";
 import { useIsMobile } from "../lib/viewport";
 import { useStore } from "../store";
 import { BackdropPattern, Button, dragRegion, Icon, Logo, RaveLabel, Spinner, Toggle } from "./ui";
@@ -25,6 +30,10 @@ export function LoginScreen() {
   const [challenge, setChallenge] = useState<RegisterChallenge | null>(null);
   const [token, setToken] = useState("");
   const [agreed, setAgreed] = useState(false);
+  const [email, setEmail] = useState("");
+  // The verification email in flight, and how many times it has been sent.
+  const [emailToken, setEmailToken] = useState<RegisterEmailToken | null>(null);
+  const [sendAttempt, setSendAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,6 +71,37 @@ export function LoginScreen() {
     setChallenge(null);
     setToken("");
     setAgreed(false);
+    setEmailToken(null);
+    setSendAttempt(0);
+    setError(null);
+  }
+
+  /** Send (or, with `resend`, send again) the sign-up verification email. */
+  async function sendEmail(resend = false) {
+    setBusy(true);
+    setError(null);
+    try {
+      const attempt = resend ? sendAttempt + 1 : 1;
+      setEmailToken(
+        await ipc.requestRegisterEmail({
+          server,
+          email,
+          clientSecret: resend ? emailToken?.clientSecret : null,
+          sendAttempt: attempt,
+        }),
+      );
+      setSendAttempt(attempt);
+    } catch (e) {
+      setError(ipc.asUwuError(e).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Back to the address field, to fix a typo. */
+  function changeEmail() {
+    setEmailToken(null);
+    setSendAttempt(0);
     setError(null);
   }
 
@@ -116,6 +156,9 @@ export function LoginScreen() {
         return register({ type: "registrationToken", token });
       case "terms":
         return register({ type: "terms" });
+      case "email":
+        if (!emailToken) return sendEmail();
+        return register({ type: "email", ...emailToken });
       case "fallback":
         return register({ type: "fallback" });
     }
@@ -127,6 +170,7 @@ export function LoginScreen() {
     if (!challenge) return !!username.trim() && !!password && !!confirm;
     if (next?.kind === "registrationToken") return !!token.trim();
     if (next?.kind === "terms") return agreed;
+    if (next?.kind === "email" && !emailToken) return email.includes("@");
     return true;
   }
 
@@ -139,7 +183,9 @@ export function LoginScreen() {
           ? "create account~"
           : next?.kind === "fallback"
             ? "i've done it~"
-            : "continue~";
+            : next?.kind === "email" && !emailToken
+              ? "send link~"
+              : "continue~";
 
   const showSubmit =
     stage === "server" ||
@@ -273,6 +319,11 @@ export function LoginScreen() {
                   setToken={setToken}
                   agreed={agreed}
                   setAgreed={setAgreed}
+                  email={email}
+                  setEmail={setEmail}
+                  emailSent={!!emailToken}
+                  resendEmail={() => void sendEmail(true)}
+                  changeEmail={changeEmail}
                   busy={busy}
                 />
               ) : (
@@ -422,6 +473,11 @@ function RegisterBody({
   setToken,
   agreed,
   setAgreed,
+  email,
+  setEmail,
+  emailSent,
+  resendEmail,
+  changeEmail,
   busy,
 }: {
   challenge: RegisterChallenge | null;
@@ -436,6 +492,11 @@ function RegisterBody({
   setToken: (v: string) => void;
   agreed: boolean;
   setAgreed: (v: boolean) => void;
+  email: string;
+  setEmail: (v: string) => void;
+  emailSent: boolean;
+  resendEmail: () => void;
+  changeEmail: () => void;
   busy: boolean;
 }) {
   if (!challenge) {
@@ -532,6 +593,40 @@ function RegisterBody({
         </>
       );
 
+    case "email":
+      if (!emailSent) {
+        return (
+          <>
+            <Hint>this server wants an email address for your account. we'll send it a link.</Hint>
+            <Field
+              icon="envelope-simple"
+              value={email}
+              onChange={setEmail}
+              placeholder="you@example.com"
+              type="email"
+              autoComplete="email"
+              autoFocus
+            />
+          </>
+        );
+      }
+      return (
+        <>
+          <Hint>
+            check your inbox at <strong>{email.trim()}</strong>, click the link in the email, then
+            press continue.
+          </Hint>
+          <div style={{ display: "flex", gap: space(14) }}>
+            <TextButton disabled={busy} onClick={resendEmail}>
+              send it again
+            </TextButton>
+            <TextButton disabled={busy} onClick={changeEmail}>
+              use a different address
+            </TextButton>
+          </div>
+        </>
+      );
+
     case "fallback":
       return (
         <>
@@ -557,11 +652,39 @@ function RegisterBody({
     default:
       return (
         <div style={{ fontSize: textSize(13), color: "var(--status-warning)", lineHeight: 1.5 }}>
-          this server needs an email address or phone number to sign up, which horo can't do yet.
+          this server needs a phone number to sign up, which horo can't do yet.
           sign up on the server's website, then sign in here.
         </div>
       );
   }
+}
+
+function TextButton({
+  children,
+  onClick,
+  disabled,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: 0,
+        color: "var(--accent-quaternary)",
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.5 : 1,
+        fontSize: textSize(12),
+        fontFamily: "var(--font-mono)",
+      }}
+    >
+      {children}
+    </button>
+  );
 }
 
 function Hint({ children }: { children: ReactNode }) {

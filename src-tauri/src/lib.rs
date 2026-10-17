@@ -48,6 +48,7 @@ pub fn run() {
             commands::login_password,
             commands::login_sso,
             commands::register_account,
+            commands::request_register_email,
             commands::restore_session,
             commands::logout,
             commands::current_session,

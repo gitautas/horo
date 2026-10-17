@@ -14,13 +14,15 @@ const EFFORT: Record<RegisterStageKind, number> = {
   terms: 1,
   registrationToken: 2,
   fallback: 3,
+  // Leaving the app for an inbox and back is the most asked of anyone.
+  email: 4,
   unsupported: Infinity,
 };
 
 /**
  * The flow to follow: one that contains every stage already completed and
  * nothing horo can't do, asking the least of the person. `null` when every
- * flow needs something unsupported — an email or phone number, in practice.
+ * flow needs something unsupported — a phone number, in practice.
  */
 export function chooseFlow(challenge: RegisterChallenge): RegisterStage[] | null {
   const candidates = challenge.flows.filter(

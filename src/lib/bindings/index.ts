@@ -33,6 +33,7 @@ export type * from "./RecoveryState";
 export type * from "./RecoveryStatus";
 export type * from "./RegisterAuth";
 export type * from "./RegisterChallenge";
+export type * from "./RegisterEmailToken";
 export type * from "./RegisterStage";
 export type * from "./RegisterStageKind";
 export type * from "./RegisterStep";

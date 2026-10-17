@@ -8,8 +8,8 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::{
     dto::{
-        HomeserverInfo, RegisterAuth, RegisterStep, RoomMemberDto, RoomsSnapshot, SendOptions,
-        SessionInfo, SpaceSummary, StickerOptions, TimelineItemDto,
+        HomeserverInfo, RegisterAuth, RegisterEmailToken, RegisterStep, RoomMemberDto, RoomsSnapshot,
+        SendOptions, SessionInfo, SpaceSummary, StickerOptions, TimelineItemDto,
     },
     error::{Error, Result},
     matrix::{auth, core::AppState, media, packs, presence, profile, rooms, timeline},
@@ -84,6 +84,16 @@ pub async fn register_account(
         auth,
     )
     .await
+}
+
+#[tauri::command]
+pub async fn request_register_email(
+    server: String,
+    email: String,
+    client_secret: Option<String>,
+    send_attempt: u32,
+) -> Result<RegisterEmailToken> {
+    auth::request_register_email(&server, &email, client_secret, send_attempt).await
 }
 
 #[tauri::command]

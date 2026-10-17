@@ -4,4 +4,4 @@
  * One answer to a homeserver's sign-up questions, sent with the `session` the
  * previous [`RegisterStep::NeedsAuth`] handed out.
  */
-export type RegisterAuth = { "type": "dummy" } | { "type": "registrationToken", token: string, } | { "type": "terms" } | { "type": "fallback" };
+export type RegisterAuth = { "type": "dummy" } | { "type": "registrationToken", token: string, } | { "type": "terms" } | { "type": "email", sid: string, clientSecret: string, } | { "type": "fallback" };

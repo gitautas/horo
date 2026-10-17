@@ -10,9 +10,9 @@ use matrix_sdk::{
     authentication::matrix::MatrixSession,
     encryption::{BackupDownloadStrategy, EncryptionSettings},
     ruma::{
-        RoomId,
+        ClientSecret, OwnedClientSecret, OwnedSessionId, RoomId, UInt,
         api::client::{
-            account::register,
+            account::{register, request_registration_token_via_email},
             session::get_login_types::v3::LoginType,
             uiaa::{self, AuthType, LoginTermsParams, UiaaInfo},
         },
@@ -24,8 +24,8 @@ use tokio::sync::Mutex;
 
 use crate::{
     dto::{
-        HomeserverInfo, RegisterAuth, RegisterChallenge, RegisterStage, RegisterStageKind,
-        RegisterStep, SessionInfo, SsoProvider, TermsPolicy,
+        HomeserverInfo, RegisterAuth, RegisterChallenge, RegisterEmailToken, RegisterStage,
+        RegisterStageKind, RegisterStep, SessionInfo, SsoProvider, TermsPolicy,
     },
     error::{Error, Result},
     events,
@@ -313,11 +313,58 @@ fn auth_data(answer: RegisterAuth, session: Option<String>) -> Result<uiaa::Auth
             terms.session = session;
             uiaa::AuthData::Terms(terms)
         }
+        RegisterAuth::Email { sid, client_secret } => {
+            let creds = uiaa::ThirdpartyIdCredentials::new(
+                OwnedSessionId::try_from(sid)
+                    .map_err(|e| Error::Auth(format!("bad email session: {e}")))?,
+                OwnedClientSecret::try_from(client_secret)
+                    .map_err(|e| Error::Auth(format!("bad email secret: {e}")))?,
+            );
+            // `EmailIdentity` has no constructor outside ruma, so it goes in as JSON.
+            let mut data = serde_json::Map::new();
+            data.insert("type".into(), AuthType::EmailIdentity.as_str().into());
+            data.insert("threepid_creds".into(), serde_json::to_value(creds)?);
+            uiaa::AuthData::new(AuthType::EmailIdentity.as_str(), session, data)?
+        }
         RegisterAuth::Fallback => {
             let session = session
                 .ok_or_else(|| Error::Auth("the server didn't start a sign-up session".into()))?;
             uiaa::AuthData::FallbackAcknowledgement(uiaa::FallbackAcknowledgement::new(session))
         }
+    })
+}
+
+/// Have the homeserver email a verification link for an `m.login.email.identity`
+/// stage. Pass back the `client_secret` from a previous call, with a higher
+/// `send_attempt`, to re-send rather than start over.
+pub async fn request_register_email(
+    server: &str,
+    email: &str,
+    client_secret: Option<String>,
+    send_attempt: u32,
+) -> Result<RegisterEmailToken> {
+    let email = email.trim();
+    if email.is_empty() {
+        return Err(Error::Auth("enter an email address".into()));
+    }
+
+    let client_secret = match client_secret {
+        Some(secret) => OwnedClientSecret::try_from(secret)
+            .map_err(|e| Error::Auth(format!("bad email secret: {e}")))?,
+        None => ClientSecret::new(),
+    };
+    let request = request_registration_token_via_email::v3::Request::new(
+        client_secret.clone(),
+        email.to_owned(),
+        UInt::from(send_attempt),
+    );
+
+    let probe = probe_client(server).await?;
+    let response = probe.send(request).await.map_err(|e| Error::Auth(friendly_email_error(&e)))?;
+
+    Ok(RegisterEmailToken {
+        sid: response.sid.to_string(),
+        client_secret: client_secret.to_string(),
     })
 }
 
@@ -330,7 +377,8 @@ fn challenge(homeserver: url::Url, info: &UiaaInfo) -> RegisterChallenge {
             AuthType::Dummy => RegisterStageKind::Dummy,
             AuthType::RegistrationToken => RegisterStageKind::RegistrationToken,
             AuthType::Terms => RegisterStageKind::Terms,
-            AuthType::EmailIdentity | AuthType::Msisdn => RegisterStageKind::Unsupported,
+            AuthType::EmailIdentity => RegisterStageKind::Email,
+            AuthType::Msisdn => RegisterStageKind::Unsupported,
             // Anything else — reCAPTCHA above all — has a web page on the
             // homeserver that does the stage for us.
             _ if session.is_some() => RegisterStageKind::Fallback,
@@ -417,6 +465,18 @@ fn friendly_register_error(error: &HttpError) -> String {
         // Invalid usernames and weak passwords: the server's own wording says
         // what it wants, which is more than we could.
         _ => server_says(),
+    }
+}
+
+/// [`friendly_register_error`] for the verification-email request.
+fn friendly_email_error(error: &HttpError) -> String {
+    use matrix_sdk::ruma::api::error::ErrorKind;
+
+    match error.client_api_error_kind() {
+        Some(ErrorKind::ThreepidInUse) => "that email already has an account".to_owned(),
+        Some(ErrorKind::ThreepidDenied) => "this server doesn't take that email address".to_owned(),
+        Some(ErrorKind::ThreepidMediumNotSupported) => "this server can't send email".to_owned(),
+        _ => friendly_register_error(error),
     }
 }
 
@@ -620,4 +680,27 @@ pub async fn resolve_room(
     }
     let alias = matrix_sdk::ruma::RoomAliasId::parse(alias_or_id)?;
     Ok(client.resolve_room_alias(&alias).await?.room_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn email_answer_has_the_spec_shape() {
+        let answer = RegisterAuth::Email {
+            sid: "abc".into(),
+            client_secret: "s3cret".into(),
+        };
+        let auth = auth_data(answer, Some("sess".into())).unwrap();
+        assert!(matches!(auth, uiaa::AuthData::EmailIdentity(_)));
+        assert_eq!(
+            serde_json::to_value(&auth).unwrap(),
+            serde_json::json!({
+                "type": "m.login.email.identity",
+                "threepid_creds": { "sid": "abc", "client_secret": "s3cret" },
+                "session": "sess",
+            })
+        );
+    }
 }

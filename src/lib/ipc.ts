@@ -27,6 +27,7 @@ import type {
   RecentPhotos,
   RecoveryStatus,
   RegisterAuth,
+  RegisterEmailToken,
   RegisterStep,
   RoomMember,
   RoomPermissions,
@@ -90,6 +91,21 @@ export const registerAccount = (args: {
     ...args,
     session: args.session ?? null,
     auth: args.auth ?? null,
+  });
+
+/**
+ * Have the server email a sign-up verification link. Pass the previous
+ * `clientSecret` with a higher `sendAttempt` to re-send to the same address.
+ */
+export const requestRegisterEmail = (args: {
+  server: string;
+  email: string;
+  clientSecret?: string | null;
+  sendAttempt: number;
+}) =>
+  invoke<RegisterEmailToken>("request_register_email", {
+    ...args,
+    clientSecret: args.clientSecret ?? null,
   });
 
 export const restoreSession = () => invoke<SessionInfo | null>("restore_session");

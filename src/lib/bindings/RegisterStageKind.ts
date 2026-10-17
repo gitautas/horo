@@ -3,4 +3,4 @@
 /**
  * How the frontend can get through one stage of a sign-up flow.
  */
-export type RegisterStageKind = "dummy" | "registrationToken" | "terms" | "fallback" | "unsupported";
+export type RegisterStageKind = "dummy" | "registrationToken" | "terms" | "email" | "fallback" | "unsupported";

@@ -16,8 +16,13 @@ const captcha: RegisterStage = {
   fallbackUrl: "https://hs.example/_matrix/client/v3/auth/m.login.recaptcha/fallback/web?session=s",
 };
 const email: RegisterStage = {
-  kind: "unsupported",
+  kind: "email",
   authType: "m.login.email.identity",
+  fallbackUrl: null,
+};
+const phone: RegisterStage = {
+  kind: "unsupported",
+  authType: "m.login.msisdn",
   fallbackUrl: null,
 };
 
@@ -30,7 +35,7 @@ describe("chooseFlow", () => {
     expect(
       chooseFlow(
         challenge([
-          [email, terms],
+          [phone, terms],
           [captcha, terms],
         ]),
       ),
@@ -47,8 +52,29 @@ describe("chooseFlow", () => {
     expect(chooseFlow(c)).toEqual([token, terms]);
   });
 
-  it("gives up when every flow needs an email", () => {
-    expect(chooseFlow(challenge([[email], [email, terms]]))).toBeNull();
+  it("follows an email flow when that's all there is", () => {
+    expect(chooseFlow(challenge([[phone], [email, terms]]))).toEqual([email, terms]);
+  });
+
+  it("would rather a captcha than an inbox", () => {
+    expect(
+      chooseFlow(
+        challenge([
+          [email, terms],
+          [captcha, terms],
+        ]),
+      ),
+    ).toEqual([captcha, terms]);
+  });
+
+  it("stays on the email flow once the address is verified", () => {
+    const c = challenge([[captcha, terms], [email, terms]], [email.authType]);
+    expect(chooseFlow(c)).toEqual([email, terms]);
+    expect(nextStage(c)).toEqual(terms);
+  });
+
+  it("gives up when every flow needs a phone number", () => {
+    expect(chooseFlow(challenge([[phone], [phone, terms]]))).toBeNull();
   });
 });
 
@@ -60,6 +86,6 @@ describe("nextStage", () => {
   });
 
   it("has nothing to offer when no flow fits", () => {
-    expect(nextStage(challenge([[email]]))).toBeNull();
+    expect(nextStage(challenge([[phone]]))).toBeNull();
   });
 });
