@@ -19,7 +19,10 @@ const FILTERS: RoomFilter[] = ["all", "unread", "dms", "muted"];
 /** `onOpenSpaces` is passed only by the mobile shell, where this list is the
     root view and the spaces rail is a drawer rather than a permanent column.
     See `ChatPane` for why the prop doubles as the layout switch. */
-export function RoomList({ onOpenSpaces }: { onOpenSpaces?: () => void } = {}) {
+export function RoomList({
+  onOpenSpaces,
+  width = 298,
+}: { onOpenSpaces?: () => void; width?: number } = {}) {
   const {
     allRooms,
     activeRoomId,
@@ -72,7 +75,7 @@ export function RoomList({ onOpenSpaces }: { onOpenSpaces?: () => void } = {}) {
       style={{
         position: "relative",
         zIndex: 1,
-        width: onOpenSpaces ? "100%" : 298,
+        width: onOpenSpaces ? "100%" : width,
         flex: onOpenSpaces ? 1 : "none",
         display: "flex",
         flexDirection: "column",

@@ -48,6 +48,10 @@ export interface Settings {
   inputSensitivity: number;
   /** Show the room info panel beside the timeline. */
   showInfoPanel: boolean;
+  /** Width of the room list, in px, within `ROOM_LIST_WIDTH_RANGE`. */
+  roomListWidth: number;
+  /** Width of the room info panel, in px, within `INFO_PANEL_WIDTH_RANGE`. */
+  infoPanelWidth: number;
   /** Which skin tone the emoji picker offers. 0 is the default yellow. */
   skinTone: SkinTone;
   /** Show a desktop notification when a message arrives you'd be pinged for. */
@@ -101,6 +105,8 @@ export const DEFAULTS: Settings = {
   // mid-word, which is worse than the background noise it was meant to hide.
   inputSensitivity: GATE_OFF_DB,
   showInfoPanel: true,
+  roomListWidth: 298,
+  infoPanelWidth: 296,
   skinTone: 0,
   notifyMessages: true,
   notifyCalls: true,
@@ -115,6 +121,15 @@ export const DEFAULTS: Settings = {
 
 /** The range the message text size slider covers, in px. */
 export const MESSAGE_FONT_SIZE_RANGE = { min: 12, max: 22, step: 0.5 } as const;
+
+/**
+ * How far the desktop sidebars can be dragged, in px.
+ *
+ * The floor is where the room list's header row and the info panel's member
+ * rows start to truncate; the ceiling keeps either from eating the timeline.
+ */
+export const ROOM_LIST_WIDTH_RANGE = { min: 240, max: 420 } as const;
+export const INFO_PANEL_WIDTH_RANGE = { min: 240, max: 420 } as const;
 
 /** The range the zoom slider and shortcuts cover, as a factor. */
 export const ZOOM_RANGE = { min: 0.5, max: 2, step: 0.1 } as const;

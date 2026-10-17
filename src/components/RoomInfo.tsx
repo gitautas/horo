@@ -11,14 +11,26 @@ import { ProfileHeader } from "./ProfileHeader";
 import { RoomSettingsDialog } from "./RoomSettings";
 import { Avatar, Icon, RaveLabel, Spinner } from "./ui";
 import { corner, headingSize, space, textSize } from "../lib/scale";
+import { DEFAULTS, INFO_PANEL_WIDTH_RANGE } from "../lib/settings";
 
-/** Matches the panel below, so a full-bleed cover is asked for at its width. */
-const PANEL_WIDTH = 296;
+/**
+ * What a full-bleed cover is asked for at: the widest the panel can be dragged,
+ * so it stays sharp at any width without refetching on every pixel of a drag.
+ */
+const COVER_WIDTH = INFO_PANEL_WIDTH_RANGE.max;
 
 /** `onBack` is passed only by the mobile shell, where this is a pushed view
     rather than a side panel. See `ChatPane` for why the prop doubles as the
     layout switch. */
-export function RoomInfo({ room, onBack }: { room: RoomSummary; onBack?: () => void }) {
+export function RoomInfo({
+  room,
+  onBack,
+  width = DEFAULTS.infoPanelWidth,
+}: {
+  room: RoomSummary;
+  onBack?: () => void;
+  width?: number;
+}) {
   const [members, setMembers] = useState<RoomMember[] | null>(null);
   const showBanner = useStore((s) => s.showBanner);
   const openLightbox = useStore((s) => s.openLightbox);
@@ -74,7 +86,7 @@ export function RoomInfo({ room, onBack }: { room: RoomSummary; onBack?: () => v
       style={{
         position: "relative",
         zIndex: 1,
-        width: onBack ? "100%" : PANEL_WIDTH,
+        width: onBack ? "100%" : width,
         flex: onBack ? 1 : "none",
         // The border separates this from the timeline beside it. As a pushed
         // view there is nothing to its left to separate it from.
@@ -287,7 +299,7 @@ function DmHeader({ partner }: { partner: RoomMember }) {
         userId={partner.userId}
         profile={profile}
         name={name}
-        width={PANEL_WIDTH}
+        width={COVER_WIDTH}
         avatarSize={72}
         ring="var(--ink-900)"
         // Out to the panel's edges, over the padding the rest of it sits in.

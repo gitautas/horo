@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -15,6 +15,8 @@ import {
   applyZoom,
   DEFAULTS,
   load as loadSettings,
+  INFO_PANEL_WIDTH_RANGE,
+  ROOM_LIST_WIDTH_RANGE,
   stepZoom,
 } from "./lib/settings";
 import type { RoomSummary } from "./lib/types";
@@ -28,6 +30,7 @@ import { LoginScreen } from "./components/LoginScreen";
 import { ProfileCard } from "./components/ProfileCard";
 import { RoomInfo } from "./components/RoomInfo";
 import { RoomList } from "./components/RoomList";
+import { useResizablePane } from "./components/ResizeHandle";
 import { SettingsView } from "./components/SettingsView";
 import { SpacesRail } from "./components/SpacesRail";
 import { IncomingCallModal } from "./components/IncomingCallModal";
@@ -152,14 +155,7 @@ function Shell() {
       {isMobile ? (
         <MobilePanes room={activeRoom} showInfo={showInfo} />
       ) : (
-        <>
-          <SpacesRail />
-          <RoomList />
-
-          {activeRoom ? <ChatPane room={activeRoom} /> : <EmptyPane />}
-
-          {showInfo && activeRoom && <RoomInfo room={activeRoom} />}
-        </>
+        <DesktopPanes room={activeRoom} showInfo={showInfo} />
       )}
 
       <SettingsView />
@@ -216,6 +212,60 @@ function Shell() {
         />
       )}
     </div>
+  );
+}
+
+/** Width of the spaces rail, which stays fixed like Discord's server column. */
+const RAIL_WIDTH = 76;
+
+/** The timeline's own `minWidth`; neither sidebar may be dragged into it. */
+const CHAT_MIN_WIDTH = 480;
+
+/**
+ * The desktop layout: rail, room list, chat, and room info when it's open.
+ *
+ * Both sidebars can be dragged wider or narrower within their range, and each
+ * is also held back by whatever the window and the other sidebar leave, so the
+ * timeline never drops below its minimum because of a drag.
+ */
+function DesktopPanes({ room, showInfo }: { room: RoomSummary | undefined; showInfo: boolean }) {
+  const infoOpen = showInfo && room !== undefined;
+  const widths = useRef({ list: 0, info: 0 });
+
+  const [listWidth, listHandle] = useResizablePane({
+    key: "roomListWidth",
+    range: ROOM_LIST_WIDTH_RANGE,
+    edge: "right",
+    maxRoom: () =>
+      window.innerWidth - RAIL_WIDTH - CHAT_MIN_WIDTH - (infoOpen ? widths.current.info : 0),
+  });
+  const [infoWidth, infoHandle] = useResizablePane({
+    key: "infoPanelWidth",
+    range: INFO_PANEL_WIDTH_RANGE,
+    edge: "left",
+    maxRoom: () => window.innerWidth - RAIL_WIDTH - CHAT_MIN_WIDTH - widths.current.list,
+  });
+  widths.current = { list: listWidth, info: infoWidth };
+
+  return (
+    <>
+      <SpacesRail />
+      <div style={{ position: "relative", display: "flex", flex: "none" }}>
+        <RoomList width={listWidth} />
+        {listHandle}
+      </div>
+
+      {room ? <ChatPane room={room} /> : <EmptyPane />}
+
+      {infoOpen && (
+        // A wrapper for the handle because the panel itself scrolls, and an
+        // edge pinned inside it would scroll away with the members.
+        <div style={{ position: "relative", display: "flex", flex: "none" }}>
+          <RoomInfo room={room} width={infoWidth} />
+          {infoHandle}
+        </div>
+      )}
+    </>
   );
 }
 

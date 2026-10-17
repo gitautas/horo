@@ -105,6 +105,30 @@ button {
   -webkit-app-region: no-drag;
 }
 
+/* A sidebar's resize edge: invisible until hovered, then a hairline of accent
+   down the border it sits on. */
+.uwu-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--accent-primary);
+  opacity: 0;
+  transition: opacity var(--dur-fast) ease;
+}
+.uwu-resize:hover::after,
+.uwu-resize:focus-visible::after,
+.uwu-resize.is-dragging::after {
+  opacity: 0.7;
+  transition-delay: 80ms;
+}
+.uwu-resize:focus-visible {
+  outline: none;
+}
+
 .uwu-scroll {
   overflow-y: auto;
   overscroll-behavior: contain;
