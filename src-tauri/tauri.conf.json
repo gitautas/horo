@@ -72,7 +72,8 @@
       }
     },
     "iOS": {
-      "developmentTeam": "Q54KD9V8NQ"
+      "developmentTeam": "Q54KD9V8NQ",
+      "minimumSystemVersion": "15.0"
     },
     "createUpdaterArtifacts": true
   },
