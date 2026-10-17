@@ -1,10 +1,4 @@
 # horo
-<p>
-    <a href="https://github.com/gitautas/horo/releases/latest">
-        <img alt="Latest release" src="https://img.shields.io/github/v/release/gitautas/horo?logo=github&style=social"></a>
-    <a href="https://github.com/gitautas/horo/releases">
-        <img alt="GitHub release downloads" src="https://img.shields.io/github/downloads/gitautas/horo/total?logo=github&style=social"></a>
-</p>
 
 A Matrix client for desktop and mobile, with end-to-end encryption and
 LiveKit voice built in. Built with Tauri 2 and Rust on the backend and React on
