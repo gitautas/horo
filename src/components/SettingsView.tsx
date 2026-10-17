@@ -13,6 +13,8 @@ import { invalidateProfile } from "../lib/profiles";
 import {
   ACCENT_LABELS,
   ACCENT_SWATCHES,
+  CONTRASTS,
+  SHADES,
   DEFAULTS,
   FONT_PRESETS,
   listMediaDevices,
@@ -1162,6 +1164,27 @@ function AppearanceSection() {
       </Card>
 
       <Card>
+        <Field label="shade" hint="how dark the background and panels are. dim is the theme as drawn.">
+          <Chips
+            options={SHADES}
+            value={settings.shade}
+            onPick={(shade) => updateSettings({ shade })}
+          />
+        </Field>
+
+        <Field
+          label="contrast"
+          hint="how much secondary text, timestamps and borders stand out."
+        >
+          <Chips
+            options={CONTRASTS}
+            value={settings.contrast}
+            onPick={(contrast) => updateSettings({ contrast })}
+          />
+        </Field>
+      </Card>
+
+      <Card>
         <Field
           label={`zoom — ${Math.round(settings.zoom * 100)}%`}
           hint={`the size of everything in the window. ${isMac ? "⌘" : "ctrl"} + and ${isMac ? "⌘" : "ctrl"} − do the same, ${isMac ? "⌘" : "ctrl"} 0 resets.`}
@@ -1233,6 +1256,44 @@ function AppearanceSection() {
         </div>
       </Card>
     </>
+  );
+}
+
+/** A row of pill buttons choosing one of a few named options. */
+function Chips<T extends string>({
+  options,
+  value,
+  onPick,
+}: {
+  options: { name: T; label: string }[];
+  value: T;
+  onPick: (name: T) => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: space(8) }}>
+      {options.map((o) => {
+        const active = o.name === value;
+        return (
+          <button
+            key={o.name}
+            onClick={() => onPick(o.name)}
+            aria-pressed={active}
+            style={{
+              padding: space("7px 14px"),
+              borderRadius: 999,
+              cursor: "pointer",
+              fontSize: textSize(13.5),
+              fontWeight: 700,
+              color: active ? "var(--text-on-accent)" : "var(--text-primary)",
+              background: active ? "var(--accent-primary)" : "var(--surface-inset)",
+              border: `1px solid ${active ? "var(--accent-primary)" : "var(--border-subtle)"}`,
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

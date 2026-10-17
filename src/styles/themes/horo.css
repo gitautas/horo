@@ -18,16 +18,14 @@
 --acid-500:#F2BA25;--acid-400:#F5C94F;--acid-600:#D9A114;--acid-glow:rgba(242,186,37,.3);
 --violet-500:#A98FC0;--violet-400:#BEA8D1;--violet-600:#8F72A8;--violet-glow:rgba(169,143,192,.3);
 --cyan-500:#7FBFA9;--cyan-400:#9DCFBD;--cyan-600:#5FA48C;--cyan-glow:rgba(127,191,169,.3);
---ink-950:#2B302E;--ink-900:#313734;--ink-800:#383F3B;--ink-700:#414945;--ink-600:#525A56;--ink-500:#6C7470;
+--ink-950-base:#2B302E;--ink-900-base:#313734;--ink-800-base:#383F3B;--ink-700-base:#414945;--ink-600-base:#525A56;--ink-500:#6C7470;
 --white:#FFF8EF;--fog-100:#FBECDC;--fog-200:#EAD9C4;
 --red-500:#E46A5A;--amber-500:#E8954A;--green-500:#8CC97A;
 /* semantic — restated where the value isn't just an alias */
 --surface-overlay:rgba(31,35,34,.78);
---border-subtle:rgba(251,236,220,.08);
---border-default:rgba(251,236,220,.14);
---border-strong:rgba(251,236,220,.22);
---text-secondary:rgba(251,236,220,.66);
---text-tertiary:rgba(251,236,220,.42);
+--border-tint:var(--fog-100);
+--border-strong-mix:22%;/* @kind other */
+--text-secondary-mix:66%;--text-tertiary-mix:42%;/* @kind other */
 
 /* type — Sora for everything you read and press, Crimson Pro for emphasis.
    Display and rave text that isn't a heading (buttons, monograms, badges)

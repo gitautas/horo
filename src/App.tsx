@@ -9,6 +9,7 @@ import { startUpdateChecks } from "./lib/update";
 import { resetPresence } from "./lib/presence";
 import {
   applyAccent,
+  applyTone,
   applyTheme,
   applyTypography,
   applyZoom,
@@ -52,6 +53,7 @@ export default function App() {
     const saved = loadSettings();
     applyTheme(saved.theme);
     applyAccent(saved.accent);
+    applyTone(saved);
     applyTypography(saved);
     applyZoom(saved.zoom);
   }, []);

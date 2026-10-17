@@ -1,0 +1,30 @@
+/* Shade and contrast — the two appearance sliders that work on any theme.
+
+   A theme writes its dark ramp as `--ink-*-base` and its quiet text and borders
+   as a tint plus a strength. This file turns those into the tokens everything
+   else uses, pushing the surfaces toward black by `--shade` and lifting the
+   quiet text and hairlines by `--contrast`. Both are set on `<html>` from the
+   settings; the values below are the defaults.
+
+   Matched on `[data-theme]` as well as `:root` so a preview tile recomputes from
+   its own theme's bases, while still inheriting the user's shade and contrast.
+   `--ink-500` is left alone: it's a foreground (offline dots, muted icons), and
+   darkening it would only lose contrast. */
+
+:root{
+--shade:18%;/* @kind other */
+--contrast:8%;/* @kind other */
+}
+
+:root,[data-theme]{
+--ink-950:color-mix(in oklab,var(--ink-950-base),#000 var(--shade));
+--ink-900:color-mix(in oklab,var(--ink-900-base),#000 var(--shade));
+--ink-800:color-mix(in oklab,var(--ink-800-base),#000 var(--shade));
+--ink-700:color-mix(in oklab,var(--ink-700-base),#000 var(--shade));
+--ink-600:color-mix(in oklab,var(--ink-600-base),#000 calc(var(--shade) / 2));
+--text-secondary:color-mix(in srgb,var(--text-tint) calc(var(--text-secondary-mix) + var(--contrast)),transparent);
+--text-tertiary:color-mix(in srgb,var(--text-tint) calc(var(--text-tertiary-mix) + var(--contrast)),transparent);
+--border-subtle:color-mix(in srgb,var(--border-tint) calc(var(--border-subtle-mix) + var(--contrast) / 2),transparent);
+--border-default:color-mix(in srgb,var(--border-tint) calc(var(--border-default-mix) + var(--contrast) / 2),transparent);
+--border-strong:color-mix(in srgb,var(--border-tint) calc(var(--border-strong-mix) + var(--contrast) / 2),transparent);
+}

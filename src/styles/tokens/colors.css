@@ -6,7 +6,7 @@
 --acid-500:#C8FF4D;--acid-400:#D9FF7A;--acid-600:#A6E020;--acid-glow:rgba(200,255,77,.5);
 --violet-500:#B14EFF;--violet-400:#C97DFF;--violet-600:#8F2FE0;--violet-glow:rgba(177,78,255,.45);
 --cyan-500:#4DE8FF;--cyan-400:#7EEFFF;--cyan-600:#22C4DE;--cyan-glow:rgba(77,232,255,.45);
---ink-950:#0B0B0F;--ink-900:#111117;--ink-800:#191922;--ink-700:#22222E;--ink-600:#33333F;--ink-500:#54545F;
+--ink-950-base:#0B0B0F;--ink-900-base:#111117;--ink-800-base:#191922;--ink-700-base:#22222E;--ink-600-base:#33333F;--ink-500:#54545F;
 --white:#FFFFFF;--fog-100:#F4F1F7;--fog-200:#E4DFEC;
 --red-500:#FF5470;--amber-500:#FFC24D;--green-500:#5CFFA0;
 /* semantic */
@@ -16,12 +16,12 @@
 --surface-card-raised:var(--ink-800);
 --surface-inset:var(--ink-700);
 --surface-overlay:rgba(11,11,15,.72);
---border-subtle:rgba(255,255,255,.08);
---border-default:rgba(255,255,255,.14);
---border-strong:rgba(255,255,255,.24);
+/* borders and quiet text are mixed in tokens/tone.css from these */
+--border-tint:var(--white);
+--border-subtle-mix:8%;--border-default-mix:14%;--border-strong-mix:24%;/* @kind other */
 --text-primary:var(--fog-100);
---text-secondary:rgba(244,241,247,.64);
---text-tertiary:rgba(244,241,247,.4);
+--text-tint:var(--fog-100);
+--text-secondary-mix:64%;--text-tertiary-mix:40%;/* @kind other */
 --text-on-accent:var(--ink-950);
 --accent-primary:var(--acid-500);
 --accent-primary-hover:var(--acid-400);

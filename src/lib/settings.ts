@@ -15,9 +15,17 @@ export type Accent = "acid" | "pink" | "violet" | "cyan";
  */
 export type Theme = "horo" | "classic";
 
+/** How far the theme's surfaces are pushed toward black. */
+export type Shade = "dim" | "dark" | "deep" | "black";
+
+/** How strongly quiet text and hairline borders stand out. */
+export type Contrast = "soft" | "normal" | "high";
+
 export interface Settings {
   theme: Theme;
   accent: Accent;
+  shade: Shade;
+  contrast: Contrast;
   /**
    * The CSS font family for body text, or "" for the design's own. Anything
    * installed on the machine works; a name that isn't falls back to the default.
@@ -81,6 +89,8 @@ export const MAX_RECENT_REACTIONS = 6;
 export const DEFAULTS: Settings = {
   theme: "horo",
   accent: "acid",
+  shade: "dark",
+  contrast: "normal",
   fontFamily: "",
   messageFontSize: 14.5,
   zoom: 1,
@@ -158,6 +168,25 @@ export const THEMES: { name: Theme; label: string; hint: string }[] = [
 ];
 
 /**
+ * The options for shade and contrast, with what each mixes in: `--shade` is how
+ * much black goes into the surfaces, `--contrast` how many points of opacity
+ * quiet text gains (borders get half). `dim` and `soft` are the themes exactly
+ * as drawn; the defaults sit a step past them.
+ */
+export const SHADES: { name: Shade; label: string; mix: string }[] = [
+  { name: "dim", label: "dim", mix: "0%" },
+  { name: "dark", label: "dark", mix: "18%" },
+  { name: "deep", label: "deep", mix: "38%" },
+  { name: "black", label: "near black", mix: "70%" },
+];
+
+export const CONTRASTS: { name: Contrast; label: string; lift: string }[] = [
+  { name: "soft", label: "soft", lift: "0%" },
+  { name: "normal", label: "normal", lift: "8%" },
+  { name: "high", label: "high", lift: "20%" },
+];
+
+/**
  * What each accent is called under each theme. The ramps keep their classic
  * names in code, but horo fills them with different colours.
  */
@@ -203,6 +232,15 @@ export function applyAccent(accent: Accent): void {
   root.style.setProperty("--accent-primary", `var(${base})`);
   root.style.setProperty("--accent-primary-hover", `var(${hover})`);
   root.style.setProperty("--accent-primary-press", `var(${press})`);
+}
+
+/** Paint the chosen shade and contrast onto the document, for `tokens/tone.css`. */
+export function applyTone({ shade, contrast }: Pick<Settings, "shade" | "contrast">): void {
+  const root = document.documentElement;
+  const mix = (SHADES.find((s) => s.name === shade) ?? SHADES[1]).mix;
+  const lift = (CONTRASTS.find((c) => c.name === contrast) ?? CONTRASTS[1]).lift;
+  root.style.setProperty("--shade", mix);
+  root.style.setProperty("--contrast", lift);
 }
 
 /**

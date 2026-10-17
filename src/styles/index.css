@@ -7,5 +7,6 @@
 @import "./tokens/effects.css";
 @import "./tokens/patterns.css";
 @import "./themes/horo.css";
+@import "./tokens/tone.css";
 @import "./base.css";
 @import "./app.css";
