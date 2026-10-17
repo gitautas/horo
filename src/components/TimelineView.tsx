@@ -79,10 +79,17 @@ export function TimelineView({
    * So this corrects all of them. The rule is simply: the row the reader is
    * looking at does not move. Whatever happened above it — content, spinner,
    * a picture growing — is cancelled out.
+   *
+   * It is a list, not one row: the rows on screen, top first. A pagination can
+   * remove the row the reader is on — the day divider at the very top is
+   * dropped and re-inserted above the older messages under a new id — and with
+   * a single anchor that left nothing to correct against, so the viewport
+   * stayed at the top and asked for another page, and another. The first
+   * candidate that survives the commit is the one held still.
    */
-  const anchorId = useRef<string | null>(null);
-  /** Where that row was *before* the commit now being applied. See below. */
-  const anchorWas = useRef<number | null>(null);
+  const anchorIds = useRef<string[]>([]);
+  /** Where those rows were *before* the commit now being applied. See below. */
+  const anchorWas = useRef<Map<string, number> | null>(null);
   const lastKey = useRef(key);
 
   /** A row's top edge, relative to the top of the scrolling viewport. */
@@ -95,16 +102,19 @@ export function TimelineView({
   }
 
   /**
-   * The topmost row still on screen.
+   * The rows on screen, topmost first.
    *
    * Partially visible counts — that row is what the eye is on, and taking the
    * first *fully* visible one lets the anchor drift by up to a row.
    */
-  function topmostRow(el: HTMLElement): HTMLElement | null {
+  function visibleRows(el: HTMLElement): HTMLElement[] {
+    const visible: HTMLElement[] = [];
     for (const row of el.querySelectorAll<HTMLElement>("[data-row-id]")) {
-      if (offsetOf(el, row) + row.offsetHeight > 0) return row;
+      const top = offsetOf(el, row);
+      if (top >= el.clientHeight) break;
+      if (top + row.offsetHeight > 0) visible.push(row);
     }
-    return null;
+    return visible;
   }
 
   // Read, during render, where the anchor sits *before* React commits.
@@ -114,9 +124,14 @@ export function TimelineView({
   // components have `getSnapshotBeforeUpdate` for exactly this; with hooks the
   // render pass is the only moment left. Reading layout here is safe — it is a
   // read, it writes nothing, and it happens before any mutation.
-  if (!stuckToBottom.current && scroller.current && anchorId.current) {
-    const row = rowById(scroller.current, anchorId.current);
-    anchorWas.current = row ? offsetOf(scroller.current, row) : null;
+  if (!stuckToBottom.current && scroller.current && anchorIds.current.length) {
+    const el = scroller.current;
+    const was = new Map<string, number>();
+    for (const id of anchorIds.current) {
+      const row = rowById(el, id);
+      if (row) was.set(id, offsetOf(el, row));
+    }
+    anchorWas.current = was;
   } else {
     anchorWas.current = null;
   }
@@ -126,7 +141,7 @@ export function TimelineView({
     if (lastKey.current !== key) {
       lastKey.current = key;
       stuckToBottom.current = true;
-      anchorId.current = null;
+      anchorIds.current = [];
       anchorWas.current = null;
     }
     const el = scroller.current;
@@ -148,20 +163,21 @@ export function TimelineView({
     // asked for by staying put.
     if (stuckToBottom.current) {
       el.scrollTop = el.scrollHeight;
-      anchorId.current = null;
+      anchorIds.current = [];
       return;
     }
 
     const before = anchorWas.current;
-    const id = anchorId.current;
     anchorWas.current = null;
-    if (before === null || id === null) return;
+    if (!before) return;
 
-    const row = rowById(el, id);
-    if (!row) return;
-
-    const drift = offsetOf(el, row) - before;
-    if (drift !== 0) el.scrollTop += drift;
+    for (const [id, was] of before) {
+      const row = rowById(el, id);
+      if (!row) continue;
+      const drift = offsetOf(el, row) - was;
+      if (drift !== 0) el.scrollTop += drift;
+      return;
+    }
   });
 
   // Keep loading until the timeline actually overflows.
@@ -218,8 +234,7 @@ export function TimelineView({
     // through the next commit. Re-picking on every scroll is what keeps the
     // correction from ever fighting the reader: if they moved, the anchor moved
     // with them, and the next delta is zero.
-    const top = topmostRow(el);
-    anchorId.current = top?.dataset.rowId ?? null;
+    anchorIds.current = visibleRows(el).map((row) => row.dataset.rowId!);
 
     if (
       el.scrollTop < PAGINATE_THRESHOLD_PX &&
