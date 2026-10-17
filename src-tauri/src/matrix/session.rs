@@ -258,9 +258,41 @@ pub fn wipe_store(data_dir: &Path, pointer: &SessionPointer) -> Result<()> {
     Ok(())
 }
 
-/// Where a brand-new login for `user_id` should keep its store.
+/// Where a brand-new login for `user_id` should keep its store — always empty.
+///
+/// Anything already in that directory is unreadable to this login: signing out
+/// deletes the store's passphrase, and a login that failed after the store was
+/// created never saved one. Opening it under a freshly generated passphrase
+/// fails with `aead::Error`, on every retry, so the user could never sign back
+/// in. Nor could it be reused if the passphrase survived: it holds the crypto
+/// identity of a device the server has already been told about, and a new
+/// login is a new device. Room keys that matter are in the server-side backup.
 pub fn new_store_path(data_dir: &Path, user_id: &OwnedUserId) -> Result<PathBuf> {
     let path = data_dir.join(store_dir_for(user_id));
+    if path.exists() {
+        tracing::info!("discarding the store left by an earlier sign-in to {user_id}");
+        std::fs::remove_dir_all(&path).map_err(Error::Io)?;
+    }
     std::fs::create_dir_all(&path).map_err(Error::Io)?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_store_path_starts_empty() {
+        let data_dir = std::env::temp_dir().join(format!("horo-store-test-{}", std::process::id()));
+        let user_id = OwnedUserId::try_from("@someone:example.org").unwrap();
+
+        let first = new_store_path(&data_dir, &user_id).unwrap();
+        std::fs::write(first.join("matrix-sdk-crypto.sqlite3"), b"old device").unwrap();
+
+        let second = new_store_path(&data_dir, &user_id).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(std::fs::read_dir(&second).unwrap().count(), 0);
+
+        std::fs::remove_dir_all(&data_dir).unwrap();
+    }
 }
