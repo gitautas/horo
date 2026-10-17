@@ -9,6 +9,10 @@
  * then the room's, then stickers if the caller can send them, then Unicode by
  * category. The rail across the top jumps between them and search runs over all
  * of them at once, so a shortcode and an emoji name are found the same way.
+ *
+ * On a phone it is a sheet up from the bottom edge instead: full width, behind
+ * a dimmed backdrop, and without grabbing the keyboard. A popover sized for a
+ * pointer ends up off-centre and half under the keyboard on a 390px screen.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -33,6 +37,7 @@ import {
 } from "../lib/packs";
 import type { ImagePack, PackImage } from "../lib/types";
 import { useStore } from "../store";
+import { dismissKeyboard, useIsMobile } from "../lib/viewport";
 import { Icon } from "./ui";
 import { corner, space, textSize } from "../lib/scale";
 
@@ -78,10 +83,15 @@ export function EmojiPicker({
   const root = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
+  const mobile = useIsMobile();
 
+  // On a phone, focusing the search raises the keyboard over the very grid you
+  // opened this to tap — so there it waits until you ask for it, and a keyboard
+  // already up for the composer is put away.
   useEffect(() => {
-    search.current?.focus();
-  }, []);
+    if (mobile) dismissKeyboard();
+    else search.current?.focus();
+  }, [mobile]);
 
   // Escape closes, and so does a press anywhere else. Pointerdown rather than
   // click so a press that starts outside can't also land on something inside.
@@ -148,6 +158,7 @@ export function EmojiPicker({
   }, [query, lookup]);
 
   const position = usePlacement(anchor);
+  const keyboard = useKeyboardInset(mobile);
 
   function pickEmoji(emoji: Emoji) {
     onPick({
@@ -181,27 +192,58 @@ export function EmojiPicker({
       ?.scrollIntoView({ block: "start" });
   }
 
-  return (
+  const frame: React.CSSProperties = mobile
+    ? {
+        position: "fixed",
+        left: 0,
+        right: 0,
+        bottom: keyboard,
+        // Room for the grid above the keyboard when searching, and about half
+        // the screen otherwise — enough to browse, while the conversation
+        // stays visible above it.
+        height: keyboard > 0 ? `min(60dvh, calc(100dvh - ${keyboard}px - 24px))` : "60dvh",
+        borderTopLeftRadius: 22,
+        borderTopRightRadius: 22,
+        borderTop: "1px solid var(--border-default)",
+      }
+    : {
+        position: "fixed",
+        ...position,
+        width: WIDTH,
+        height: HEIGHT,
+        borderRadius: corner(20),
+        border: "1px solid var(--border-default)",
+      };
+
+  const picker = (
     <div
       ref={root}
       role="dialog"
       aria-label="pick an emoji"
       style={{
-        position: "fixed",
-        ...position,
-        width: WIDTH,
-        height: HEIGHT,
+        ...frame,
         display: "flex",
         flexDirection: "column",
-        borderRadius: corner(20),
         background: "var(--surface-card-raised)",
-        border: "1px solid var(--border-default)",
         boxShadow: "var(--shadow-pop)",
         overflow: "hidden",
         zIndex: 60,
       }}
     >
-      <div style={{ padding: space("10px 12px 8px") }}>
+      {mobile && (
+        <div
+          aria-hidden
+          style={{
+            alignSelf: "center",
+            width: 36,
+            height: 4,
+            marginTop: 8,
+            borderRadius: 999,
+            background: "var(--border-default)",
+          }}
+        />
+      )}
+      <div style={{ padding: space(mobile ? "8px 12px 8px" : "10px 12px 8px") }}>
         <div
           style={{
             display: "flex",
@@ -252,7 +294,7 @@ export function EmojiPicker({
               style={{
                 flex: 1,
                 minWidth: 22,
-                height: 26,
+                height: mobile ? 36 : 26,
                 borderRadius: corner(8),
                 display: "flex",
                 alignItems: "center",
@@ -266,13 +308,22 @@ export function EmojiPicker({
                 e.currentTarget.style.background = "transparent";
               }}
             >
-              <Icon name={section.icon} size={14} color="var(--text-tertiary)" />
+              <Icon name={section.icon} size={mobile ? 17 : 14} color="var(--text-tertiary)" />
             </button>
           ))}
         </div>
       )}
 
-      <div ref={scroller} className="uwu-scroll" style={{ flex: 1, padding: space("4px 8px 8px") }}>
+      <div
+        ref={scroller}
+        className="uwu-scroll"
+        style={{
+          flex: 1,
+          padding: space("4px 8px 8px"),
+          // Finger-sized cells on a phone; see `Cell`.
+          ["--emoji-cell" as string]: mobile ? "44px" : undefined,
+        }}
+      >
         {results ? (
           <SearchResults
             results={results}
@@ -329,9 +380,55 @@ export function EmojiPicker({
         hovered={hovered}
         skinTone={skinTone}
         onTone={(tone) => updateSettings({ skinTone: tone })}
+        // Nothing hovers on touch, so the name preview would only ever say
+        // "pick something~". The tones are still worth their row.
+        touch={mobile}
       />
     </div>
   );
+
+  if (!mobile) return picker;
+
+  // The backdrop sits outside `root`, so a tap on it is a press "anywhere
+  // else" and closes the sheet through the same listener as on desktop — and
+  // it soaks up the click, so that tap doesn't also land on a message.
+  return (
+    <>
+      <div
+        role="presentation"
+        style={{ position: "fixed", inset: 0, zIndex: 59, background: "rgba(0,0,0,.5)" }}
+      />
+      {picker}
+    </>
+  );
+}
+
+/**
+ * How much of the bottom of the layout viewport the keyboard covers, in px.
+ *
+ * Zero when the web view shrinks for the keyboard itself, and zero off a phone,
+ * so a bottom-anchored sheet can simply sit this far up and stay above it.
+ */
+function useKeyboardInset(enabled: boolean): number {
+  const [inset, setInset] = useState(0);
+
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!enabled || !vv) return;
+
+    const update = () =>
+      setInset(Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)));
+
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+    };
+  }, [enabled]);
+
+  return inset;
 }
 
 // ---------------------------------------------------------------------------
@@ -571,7 +668,7 @@ function Cell({
       title={label}
       aria-label={label}
       style={{
-        height: 34,
+        height: "var(--emoji-cell, 34px)",
         borderRadius: corner(8),
         fontSize: textSize(20),
         lineHeight: 1,
@@ -593,10 +690,13 @@ function Footer({
   hovered,
   skinTone,
   onTone,
+  touch = false,
 }: {
   hovered: Picked | null;
   skinTone: SkinTone;
   onTone: (tone: SkinTone) => void;
+  /** Bigger tone targets, no hover preview, and clear of the home indicator. */
+  touch?: boolean;
 }) {
   const label =
     hovered === null
@@ -611,36 +711,44 @@ function Footer({
         display: "flex",
         alignItems: "center",
         gap: space(8),
-        padding: space("7px 12px"),
+        padding: touch ? space("6px 12px calc(var(--safe-bottom) + 6px)") : space("7px 12px"),
         borderTop: "1px solid var(--border-subtle)",
         background: "var(--surface-card)",
       }}
     >
-      <span
-        style={{
-          width: 20,
-          fontSize: textSize(17),
-          lineHeight: 1,
-          display: "flex",
-          justifyContent: "center",
-        }}
-      >
-        {hovered === null ? (
-          "🫧"
-        ) : hovered.kind === "unicode" ? (
-          hovered.emoji
-        ) : (
-          <PackImg image={hovered.image} size={19} />
-        )}
-      </span>
-      <span
-        className="uwu-ellipsis"
-        style={{ flex: 1, fontSize: textSize(11.5), color: "var(--text-secondary)" }}
-      >
-        {label}
-      </span>
+      {touch ? (
+        <span style={{ flex: 1, fontSize: textSize(11.5), color: "var(--text-tertiary)" }}>
+          skin tone
+        </span>
+      ) : (
+        <>
+          <span
+            style={{
+              width: 20,
+              fontSize: textSize(17),
+              lineHeight: 1,
+              display: "flex",
+              justifyContent: "center",
+            }}
+          >
+            {hovered === null ? (
+              "🫧"
+            ) : hovered.kind === "unicode" ? (
+              hovered.emoji
+            ) : (
+              <PackImg image={hovered.image} size={19} />
+            )}
+          </span>
+          <span
+            className="uwu-ellipsis"
+            style={{ flex: 1, fontSize: textSize(11.5), color: "var(--text-secondary)" }}
+          >
+            {label}
+          </span>
+        </>
+      )}
 
-      <div style={{ display: "flex", gap: space(1) }}>
+      <div style={{ display: "flex", gap: space(touch ? 4 : 1) }}>
         {TONE_SAMPLES.map((sample, tone) => (
           <button
             key={tone}
@@ -651,10 +759,10 @@ function Footer({
             aria-label={tone === 0 ? "default skin tone" : `skin tone ${tone}`}
             aria-pressed={skinTone === tone}
             style={{
-              width: 20,
-              height: 20,
-              borderRadius: corner(6),
-              fontSize: textSize(12),
+              width: touch ? 34 : 20,
+              height: touch ? 34 : 20,
+              borderRadius: corner(touch ? 10 : 6),
+              fontSize: textSize(touch ? 18 : 12),
               lineHeight: 1,
               cursor: "pointer",
               background:
