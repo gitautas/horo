@@ -214,6 +214,8 @@ export function LoginScreen() {
                 value={server}
                 onChange={setServer}
                 placeholder="matrix.org"
+                inputMode="url"
+                enterKeyHint="go"
                 autoFocus
               />
               <div
@@ -608,6 +610,8 @@ function Field({
   type = "text",
   autoFocus,
   autoComplete,
+  inputMode,
+  enterKeyHint,
 }: {
   icon: string;
   value: string;
@@ -616,6 +620,8 @@ function Field({
   type?: string;
   autoFocus?: boolean;
   autoComplete?: string;
+  inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"];
+  enterKeyHint?: React.HTMLAttributes<HTMLInputElement>["enterKeyHint"];
 }) {
   return (
     <label
@@ -636,6 +642,8 @@ function Field({
         value={value}
         autoFocus={autoFocus}
         autoComplete={autoComplete}
+        inputMode={inputMode}
+        enterKeyHint={enterKeyHint}
         spellCheck={false}
         autoCapitalize="none"
         autoCorrect="off"
