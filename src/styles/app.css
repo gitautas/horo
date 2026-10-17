@@ -52,6 +52,15 @@ a:hover {
   background: transparent;
 }
 
+/* Still scrolls with the wheel or a finger; just never draws the bar. For a
+   box that's a line or two tall, the bar is bigger than what it points at. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 input,
 textarea,
 button {

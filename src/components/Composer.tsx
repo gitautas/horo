@@ -439,7 +439,7 @@ export function Composer({
 
         <textarea
           ref={input}
-          className="selectable"
+          className="selectable no-scrollbar"
           value={draft.body}
           rows={1}
           onChange={(e) => {
@@ -525,6 +525,7 @@ export function Composer({
             lineHeight: 1.5,
             padding: space("9px 6px"),
             maxHeight: 160,
+            overflowX: "hidden",
           }}
         />
 
