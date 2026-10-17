@@ -7,7 +7,15 @@ import { startNotifications } from "./lib/notify";
 import { startRinger } from "./lib/ringer";
 import { startUpdateChecks } from "./lib/update";
 import { resetPresence } from "./lib/presence";
-import { applyAccent, applyTheme, applyTypography, load as loadSettings } from "./lib/settings";
+import {
+  applyAccent,
+  applyTheme,
+  applyTypography,
+  applyZoom,
+  DEFAULTS,
+  load as loadSettings,
+  stepZoom,
+} from "./lib/settings";
 import type { RoomSummary } from "./lib/types";
 import { useEdgeSwipeBack, useIsMobile, useKeyboardSafeArea } from "./lib/viewport";
 import { selectActiveRoom, useStore } from "./store";
@@ -45,6 +53,7 @@ export default function App() {
     applyTheme(saved.theme);
     applyAccent(saved.accent);
     applyTypography(saved);
+    applyZoom(saved.zoom);
   }, []);
 
   // Try to pick up where we left off before showing anything, so a returning
@@ -328,33 +337,68 @@ function SyncIndicator() {
   );
 }
 
+/** Zoom one step in or out, or back to 100%. */
+function zoom(direction: ipc.ZoomDirection) {
+  const { settings, updateSettings } = useStore.getState();
+  updateSettings({
+    zoom:
+      direction === "reset"
+        ? DEFAULTS.zoom
+        : stepZoom(settings.zoom, direction === "in" ? 1 : -1),
+  });
+}
+
+/**
+ * Which zoom step a keypress asks for, if any.
+ *
+ * `=` as well as `+` because zoom-in is the unshifted key everywhere else, and
+ * `_` because shift-minus is easy to hit while reaching for it. The numpad keys
+ * are matched by code, since their `key` depends on num lock.
+ */
+function zoomKey(e: KeyboardEvent): ipc.ZoomDirection | null {
+  if (e.key === "=" || e.key === "+" || e.code === "NumpadAdd") return "in";
+  if (e.key === "-" || e.key === "_" || e.code === "NumpadSubtract") return "out";
+  if (e.key === "0" || e.code === "Numpad0") return "reset";
+  return null;
+}
+
 /**
  * Shortcuts that belong to the app rather than to any one view.
  *
- * `cmd+,` on macOS arrives as a *menu event* rather than a keypress: the menu
- * bar is offered command-key combinations first, and anything no menu item
- * claims is swallowed before the web content ever sees it. So the mac half of
- * this lives in `install_settings_menu_item` on the Rust side and comes back as
- * an event. The listener below is for Windows and Linux, where `ctrl+,` reaches
- * the page normally.
+ * `cmd+,` and the `cmd+=`/`cmd+-`/`cmd+0` zoom keys on macOS arrive as *menu
+ * events* rather than keypresses: the menu bar is offered command-key
+ * combinations first, and anything no menu item claims is swallowed before the
+ * web content ever sees it. So the mac half of this lives in
+ * `install_settings_menu_item` on the Rust side and comes back as events. The
+ * listener below is for Windows and Linux, where `ctrl+` keys reach the page
+ * normally.
  *
  * Settings closes on Escape already, so this only has to open.
  */
 function useAppShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "," && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      if (e.key === "," && !e.shiftKey) {
         e.preventDefault();
         useStore.getState().openSettings();
+        return;
+      }
+      const direction = zoomKey(e);
+      if (direction) {
+        e.preventDefault();
+        zoom(direction);
       }
     };
 
     window.addEventListener("keydown", onKey);
     const menu = ipc.onOpenSettings(() => useStore.getState().openSettings());
+    const zoomMenu = ipc.onZoom(zoom);
 
     return () => {
       window.removeEventListener("keydown", onKey);
       void menu.then((unlisten) => unlisten()).catch(() => {});
+      void zoomMenu.then((unlisten) => unlisten()).catch(() => {});
     };
   }, []);
 }

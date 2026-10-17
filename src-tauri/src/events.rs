@@ -26,6 +26,9 @@ pub const EV_VERIFICATION_UPDATE: &str = "matrix://verification-update";
 /// from the window, so it gets its own namespace.
 pub const EV_OPEN_SETTINGS: &str = "horo://open-settings";
 
+/// The View menu's zoom items, with `"in"`, `"out"` or `"reset"`.
+pub const EV_ZOOM: &str = "horo://zoom";
+
 pub fn emit<T: serde::Serialize + Clone>(app: &AppHandle, event: &str, payload: T) {
     // A failed emit means the window is gone; there's nothing useful to do
     // about it and it must not take down the producing task.

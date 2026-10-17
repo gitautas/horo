@@ -18,6 +18,7 @@ import {
   listMediaDevices,
   MESSAGE_FONT_SIZE_RANGE,
   THEMES,
+  ZOOM_RANGE,
   type Accent,
   type AudioDevice,
   type MediaDevices,
@@ -1103,6 +1104,9 @@ function SoundPicker({
 // appearance
 // ---------------------------------------------------------------------------
 
+/** For naming the modifier in shortcut hints. */
+const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent);
+
 function AppearanceSection() {
   const { settings, updateSettings } = useStore(
     useShallow((s) => ({
@@ -1153,6 +1157,33 @@ function AppearanceSection() {
                 }}
               />
             ))}
+          </div>
+        </Field>
+      </Card>
+
+      <Card>
+        <Field
+          label={`zoom — ${Math.round(settings.zoom * 100)}%`}
+          hint={`the size of everything in the window. ${isMac ? "⌘" : "ctrl"} + and ${isMac ? "⌘" : "ctrl"} − do the same, ${isMac ? "⌘" : "ctrl"} 0 resets.`}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: space(12) }}>
+            <input
+              type="range"
+              min={ZOOM_RANGE.min}
+              max={ZOOM_RANGE.max}
+              step={ZOOM_RANGE.step}
+              value={settings.zoom}
+              onChange={(e) => updateSettings({ zoom: Number(e.target.value) })}
+              style={{ flex: 1, accentColor: "var(--accent-primary)" }}
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={settings.zoom === DEFAULTS.zoom}
+              onClick={() => updateSettings({ zoom: DEFAULTS.zoom })}
+            >
+              reset
+            </Button>
           </div>
         </Field>
       </Card>

@@ -222,7 +222,17 @@ fn install_settings_menu_item(app: &tauri::AppHandle) -> tauri::Result<()> {
         .select_all()
         .build()?;
 
-    let view_menu = SubmenuBuilder::new(app, "View").fullscreen().build()?;
+    // Zoom claims its shortcuts here on macOS for the same reason settings
+    // does. Elsewhere the page's own `ctrl+=`/`ctrl+-` handler does it, and a
+    // menu accelerator as well could step the zoom twice for one press.
+    let view_menu = SubmenuBuilder::new(app, "View");
+    #[cfg(target_os = "macos")]
+    let view_menu = view_menu
+        .item(&MenuItemBuilder::with_id("zoom-in", "Zoom In").accelerator("Cmd+=").build(app)?)
+        .item(&MenuItemBuilder::with_id("zoom-out", "Zoom Out").accelerator("Cmd+-").build(app)?)
+        .item(&MenuItemBuilder::with_id("zoom-reset", "Actual Size").accelerator("Cmd+0").build(app)?)
+        .separator();
+    let view_menu = view_menu.fullscreen().build()?;
 
     let window_menu = SubmenuBuilder::new(app, "Window")
         .minimize()
@@ -236,8 +246,12 @@ fn install_settings_menu_item(app: &tauri::AppHandle) -> tauri::Result<()> {
     app.set_menu(menu)?;
 
     app.on_menu_event(|app, event| {
-        if event.id() == "settings" {
-            events::emit(app, events::EV_OPEN_SETTINGS, ());
+        match event.id().as_ref() {
+            "settings" => events::emit(app, events::EV_OPEN_SETTINGS, ()),
+            "zoom-in" => events::emit(app, events::EV_ZOOM, "in"),
+            "zoom-out" => events::emit(app, events::EV_ZOOM, "out"),
+            "zoom-reset" => events::emit(app, events::EV_ZOOM, "reset"),
+            _ => {}
         }
     });
 

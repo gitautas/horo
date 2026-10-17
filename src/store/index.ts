@@ -378,6 +378,7 @@ export const useStore = create<State & Actions>((set, get) => ({
       if (patch.fontFamily !== undefined || patch.messageFontSize !== undefined) {
         prefs.applyTypography(settings);
       }
+      if (patch.zoom !== undefined) prefs.applyZoom(patch.zoom);
       return { settings };
     }),
 

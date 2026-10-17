@@ -479,6 +479,12 @@ export const getActiveCalls = () => invoke<string[]>("get_active_calls");
 export const onOpenSettings = (fn: () => void): Promise<UnlistenFn> =>
   listen("horo://open-settings", () => fn());
 
+export type ZoomDirection = "in" | "out" | "reset";
+
+/** The View menu's zoom items — on macOS that's where `cmd+=`/`cmd+-`/`cmd+0` arrive. */
+export const onZoom = (fn: (direction: ZoomDirection) => void): Promise<UnlistenFn> =>
+  listen<ZoomDirection>("horo://zoom", (e) => fn(e.payload));
+
 export const onRooms = (fn: (update: RoomsUpdate) => void): Promise<UnlistenFn> =>
   listen<RoomsUpdate>("matrix://rooms", (e) => fn(e.payload));
 

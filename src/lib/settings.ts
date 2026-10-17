@@ -3,6 +3,8 @@
  * account, so they live in `localStorage` and never touch the homeserver.
  */
 
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+
 import type { SkinTone } from "./emoji";
 
 export type Accent = "acid" | "pink" | "violet" | "cyan";
@@ -23,6 +25,8 @@ export interface Settings {
   fontFamily: string;
   /** Size of message text, in px. The rest of the UI keeps its own sizes. */
   messageFontSize: number;
+  /** Page zoom for the whole window, as a factor: 1 is the design's own size. */
+  zoom: number;
   /** `deviceId` of the microphone, or "" for the system default. */
   audioInput: string;
   /** `deviceId` of the speaker, or "" for the system default. */
@@ -79,6 +83,7 @@ export const DEFAULTS: Settings = {
   accent: "acid",
   fontFamily: "",
   messageFontSize: 14.5,
+  zoom: 1,
   audioInput: "",
   audioOutput: "",
   videoInput: "",
@@ -100,6 +105,21 @@ export const DEFAULTS: Settings = {
 
 /** The range the message text size slider covers, in px. */
 export const MESSAGE_FONT_SIZE_RANGE = { min: 12, max: 22, step: 0.5 } as const;
+
+/** The range the zoom slider and shortcuts cover, as a factor. */
+export const ZOOM_RANGE = { min: 0.5, max: 2, step: 0.1 } as const;
+
+/**
+ * The zoom one shortcut press away from `zoom`, clamped to `ZOOM_RANGE`.
+ *
+ * Rounded to the step so repeated presses don't accumulate float error and
+ * land on 1.0000000002 instead of back on 1.
+ */
+export function stepZoom(zoom: number, direction: 1 | -1): number {
+  const { min, max, step } = ZOOM_RANGE;
+  const next = Math.round((zoom + direction * step) / step) * step;
+  return Math.min(max, Math.max(min, Number(next.toFixed(2))));
+}
 
 /** One-click choices for the font picker; anything else is typed in by name. */
 export const FONT_PRESETS: { label: string; family: string }[] = [
@@ -203,6 +223,27 @@ export function applyTypography({
     family ? `${family}, var(--font-body-default)` : "var(--font-body-default)",
   );
   root.style.setProperty("--text-message", `${messageFontSize}px`);
+}
+
+/**
+ * Zoom the web view, as the browser's own cmd+/cmd- would.
+ *
+ * Real page zoom (WebKit's `pageZoom`, WebView2's `ZoomFactor`) rather than a
+ * CSS `zoom` on the root: it scales the layout viewport too, so the mobile
+ * breakpoint and the desktop shell's width floor see the zoomed size, and
+ * nothing measured in px from JS comes back scaled wrong.
+ *
+ * Outside Tauri (the browser harness, tests) there's no web view to zoom, and
+ * a platform that can't do it just stays at 1 — neither is worth an error.
+ */
+export function applyZoom(zoom: number): void {
+  try {
+    void getCurrentWebview()
+      .setZoom(zoom)
+      .catch(() => {});
+  } catch {
+    // Not running in a Tauri web view.
+  }
 }
 
 export interface AudioDevice {
