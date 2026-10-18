@@ -16,6 +16,7 @@ import { saveAttachment } from "../lib/download";
 import { imageLookup, reactionImage, reactionKeyFor } from "../lib/packs";
 import { linkify, renderFormattedBody } from "../lib/richText";
 import type { Content, EventItem, MediaInfo, PackImage } from "../lib/types";
+import { haptic } from "../lib/haptics";
 import { useIsMobile, useLongPress } from "../lib/viewport";
 import { useStore } from "../store";
 import { EmojiPicker } from "./EmojiPicker";
@@ -59,7 +60,13 @@ export function MessageRow({
   /** The touch action sheet, which stands in for the hover bar. */
   const [sheetOpen, setSheetOpen] = useState(false);
   const longPress = useLongPress(
-    isMobile && item.eventId ? () => setSheetOpen(true) : undefined,
+    isMobile && item.eventId
+      ? () => {
+          // The bump iOS gives a context menu, so the hold is felt landing.
+          haptic("medium");
+          setSheetOpen(true);
+        }
+      : undefined,
   );
 
   const author = displayNameFor(item.sender, item.senderName);
@@ -123,6 +130,9 @@ export function MessageRow({
   async function react(key: string) {
     if (!item.eventId) return;
     setPickerAnchor(null);
+    // Every way of reacting ends here — a chip, the sheet, the picker — so
+    // this is the one place that makes it felt on a phone.
+    if (isMobile) haptic();
     // Remembered even if the send fails: picking it is the signal about what
     // this person reaches for, and a failure is usually the network, not the
     // choice.

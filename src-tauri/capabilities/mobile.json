@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "What only a phone build can ask for.",
+  "comment": "Separate from `default` because of `platforms`: the haptics plugin is compiled on Android and iOS only (see Cargo.toml), and a capability naming permissions from a plugin that isn't registered fails at startup rather than being ignored.",
+  "platforms": ["iOS", "android"],
+  "windows": ["main"],
+  "permissions": ["haptics:default"]
+}

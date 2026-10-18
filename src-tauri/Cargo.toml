@@ -85,6 +85,12 @@ tauri-plugin-updater = "2"
 # Only for `restart`, which is how an installed update actually takes effect.
 tauri-plugin-process = "2"
 
+# Haptics are a phone thing: the plugin has no desktop implementation, and the
+# web view on iOS has no `navigator.vibrate` to fall back on. Its capability is
+# gated the same way — see `capabilities/mobile.json`.
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-haptics = "2"
+
 
 # Reaching into the WebView to switch WebRTC on (see `enable_webrtc` in lib.rs).
 # The version is pinned to the exact one wry depends on — `with_webview` hands
