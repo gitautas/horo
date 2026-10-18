@@ -96,99 +96,113 @@ export function ChatPane({ room, onBack }: { room: RoomSummary; onBack?: () => v
           </button>
         )}
 
-        <div style={{ position: "relative", flex: "none" }}>
-          <Avatar
-            id={room.id}
-            name={room.name}
-            mxc={room.avatarUrl}
-            size={onBack ? 32 : 42}
-            radius={onBack ? 11 : 15}
-          />
-          {!room.isDirect && (
-            <ChannelBadge
-              kind={room.isVideoRoom ? "video" : "text"}
-              size={18}
-              ring="var(--ink-950)"
+        {/* On a phone there's no room for an info button beside the call
+            button, and the name is where a thumb goes anyway — so the whole
+            identity block is the way into room info, as in Messages. */}
+        <Identity
+          onOpen={onBack ? toggleInfo : undefined}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space(onBack ? 10 : 14),
+            minWidth: 0,
+            flex: onBack ? 1 : undefined,
+          }}
+        >
+          <div style={{ position: "relative", flex: "none" }}>
+            <Avatar
+              id={room.id}
+              name={room.name}
+              mxc={room.avatarUrl}
+              size={onBack ? 32 : 42}
+              radius={onBack ? 11 : 15}
             />
-          )}
-          {room.dmUserId && (
-            <PresenceDot userId={room.dmUserId} size={13} ring="var(--ink-950)" />
-          )}
-        </div>
-
-        <div style={{ minWidth: 0, flex: onBack ? 1 : undefined }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: space(8),
-              minWidth: 0,
-            }}
-          >
-            <span
-              className="uwu-ellipsis"
-              style={{
-                fontFamily: "var(--font-heading)",
-                fontWeight: 800,
-                fontSize: headingSize(19),
-                letterSpacing: "-0.01em",
-              }}
-            >
-              {room.name}
-            </span>
-            {/* A lock is the whole message. Spelling out "e2e" beside it said
-                the same thing twice, and did it in the row that has the least
-                space to spare. The title carries the detail for anyone who
-                wants it. */}
-            {room.isEncrypted && (
-              <span
-                title="encrypted end-to-end — only people in this room can read it"
-                aria-label="end-to-end encrypted"
-                style={{ display: "flex", flex: "none" }}
-              >
-                <Icon name="lock-key" size={14} color="var(--accent-primary)" />
-              </span>
+            {!room.isDirect && (
+              <ChannelBadge
+                kind={room.isVideoRoom ? "video" : "text"}
+                size={18}
+                ring="var(--ink-950)"
+              />
+            )}
+            {room.dmUserId && (
+              <PresenceDot userId={room.dmUserId} size={13} ring="var(--ink-950)" />
             )}
           </div>
-          {/* A DM's subtitle is the person, not the room: a topic and an
-              alias are things group rooms have. */}
-          {room.dmUserId ? (
-            <PresenceLine
-              userId={room.dmUserId}
-              style={{
-                marginTop: 3,
-                fontSize: textSize(11.5),
-                // "last seen 3h ago" wraps to three lines in a narrow header
-                // and doubles its height. `PresenceLine` is a flex row, so
-                // `text-overflow` would do nothing here — keeping it on one
-                // line and clipping the overflow is the part that works.
-                ...(onBack
-                  ? { whiteSpace: "nowrap" as const, overflow: "hidden", minWidth: 0 }
-                  : {}),
-              }}
-            />
-          ) : (
+
+          <div style={{ minWidth: 0, flex: onBack ? 1 : undefined }}>
             <div
-              className="uwu-ellipsis"
               style={{
-                fontSize: textSize(12.5),
-                color: "var(--text-secondary)",
-                maxWidth: 520,
+                display: "flex",
+                alignItems: "center",
+                gap: space(8),
+                minWidth: 0,
               }}
             >
-              {room.topic}{" "}
               <span
+                className="uwu-ellipsis"
                 style={{
-                  fontFamily: "var(--font-mono)",
-                  color: "var(--text-tertiary)",
-                  fontSize: textSize(11.5),
+                  fontFamily: "var(--font-heading)",
+                  fontWeight: 800,
+                  fontSize: headingSize(19),
+                  letterSpacing: "-0.01em",
                 }}
               >
-                {room.canonicalAlias ?? ""}
+                {room.name}
               </span>
+              {/* A lock is the whole message. Spelling out "e2e" beside it said
+                  the same thing twice, and did it in the row that has the least
+                  space to spare. The title carries the detail for anyone who
+                  wants it. */}
+              {room.isEncrypted && (
+                <span
+                  title="encrypted end-to-end — only people in this room can read it"
+                  aria-label="end-to-end encrypted"
+                  style={{ display: "flex", flex: "none" }}
+                >
+                  <Icon name="lock-key" size={14} color="var(--accent-primary)" />
+                </span>
+              )}
             </div>
-          )}
-        </div>
+            {/* A DM's subtitle is the person, not the room: a topic and an
+                alias are things group rooms have. */}
+            {room.dmUserId ? (
+              <PresenceLine
+                userId={room.dmUserId}
+                style={{
+                  marginTop: 3,
+                  fontSize: textSize(11.5),
+                  // "last seen 3h ago" wraps to three lines in a narrow header
+                  // and doubles its height. `PresenceLine` is a flex row, so
+                  // `text-overflow` would do nothing here — keeping it on one
+                  // line and clipping the overflow is the part that works.
+                  ...(onBack
+                    ? { whiteSpace: "nowrap" as const, overflow: "hidden", minWidth: 0 }
+                    : {}),
+                }}
+              />
+            ) : (
+              <div
+                className="uwu-ellipsis"
+                style={{
+                  fontSize: textSize(12.5),
+                  color: "var(--text-secondary)",
+                  maxWidth: 520,
+                }}
+              >
+                {room.topic}{" "}
+                <span
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    color: "var(--text-tertiary)",
+                    fontSize: textSize(11.5),
+                  }}
+                >
+                  {room.canonicalAlias ?? ""}
+                </span>
+              </div>
+            )}
+          </div>
+        </Identity>
 
         <div
           {...dragOff}
@@ -213,12 +227,14 @@ export function ChatPane({ room, onBack }: { room: RoomSummary; onBack?: () => v
             danger={inThisCall}
             onClick={() => void toggleCall()}
           />
-          <HeaderButton
-            icon="info"
-            title="room info"
-            highlight={showInfo}
-            onClick={toggleInfo}
-          />
+          {!onBack && (
+            <HeaderButton
+              icon="info"
+              title="room info"
+              highlight={showInfo}
+              onClick={toggleInfo}
+            />
+          )}
         </div>
       </div>
 
@@ -388,5 +404,31 @@ export function EmptyPane() {
           : `${rooms.filter((r) => !r.isSpace).length} rooms waiting for you`}
       </div>
     </div>
+  );
+}
+
+/**
+ * The avatar and name in the header: a button into room info on a phone, plain
+ * layout on desktop, where the info button does that job.
+ */
+function Identity({
+  onOpen,
+  style,
+  children,
+}: {
+  onOpen?: () => void;
+  style: React.CSSProperties;
+  children: React.ReactNode;
+}) {
+  if (!onOpen) return <div style={style}>{children}</div>;
+
+  return (
+    <button
+      onClick={onOpen}
+      aria-label="room info"
+      style={{ ...style, padding: 0, font: "inherit", textAlign: "left", cursor: "pointer" }}
+    >
+      {children}
+    </button>
   );
 }

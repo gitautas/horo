@@ -39,6 +39,10 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
 
+    // The mirror image: haptics only exist on a phone (see Cargo.toml).
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_haptics::init());
+
     builder
         .manage(AppState::default())
         .register_asynchronous_uri_scheme_protocol("horo", handle_media_request)

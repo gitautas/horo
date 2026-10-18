@@ -1,0 +1,13 @@
+#!/bin/sh
+# Stand-in for `swift`, first on PATH for the iOS scripts in package.json.
+#
+# swift-rs 1.0.7 builds Tauri's Swift package with `swift build`, and SwiftPM
+# 6.4's default swift-build backend appends its own macOS `-sdk`/`-target`
+# after swift-rs's iOS ones, so the package compiles against AppKit and fails
+# on 'OpenGLES/EAGL.h'. The old backend honours the overrides. Drop this once
+# swift-rs is fixed upstream.
+if [ "$1" = "build" ]; then
+  shift
+  exec /usr/bin/swift build --build-system native "$@"
+fi
+exec /usr/bin/swift "$@"

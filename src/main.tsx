@@ -18,7 +18,10 @@ import "@phosphor-icons/web/fill";
 
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { installSelectionClamp } from "./lib/selection";
 import "./styles/index.css";
+
+installSelectionClamp();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
