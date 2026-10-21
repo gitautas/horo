@@ -129,6 +129,23 @@ button {
   outline: none;
 }
 
+/* A call tile says it can be clicked only when the pointer is over it, so a
+   grid of faces doesn't carry a grid of icons. */
+.uwu-call-tile {
+  cursor: pointer;
+}
+.uwu-call-tile .uwu-call-tile-hint {
+  opacity: 0;
+  transition: opacity var(--dur-fast) ease;
+}
+.uwu-call-tile:hover .uwu-call-tile-hint,
+.uwu-call-tile:focus-visible .uwu-call-tile-hint {
+  opacity: 1;
+}
+.uwu-call-tile:focus-visible {
+  outline: 2px solid var(--accent-primary) !important;
+}
+
 .uwu-scroll {
   overflow-y: auto;
   overscroll-behavior: contain;
