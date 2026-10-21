@@ -17,7 +17,7 @@ use ts_rs::TS;
 
 use crate::{
     dto::{
-        Diff, LatestEvent, RoomMemberDto, RoomMembership, RoomSummary, RoomsUpdate, SpaceSummary,
+        Diff, LatestEvent, NotifyMode, RoomMemberDto, RoomMembership, RoomSummary, RoomsUpdate, SpaceSummary,
         Verification,
     },
     error::{Error, Result},
@@ -163,10 +163,8 @@ pub async fn summarise(room: &Room) -> Result<RoomSummary> {
     // summary — a room that's wrongly grouped is better than a missing room.
     let is_direct = room.is_direct().await.unwrap_or(false);
 
-    let muted = matches!(
-        room.cached_user_defined_notification_mode(),
-        Some(matrix_sdk::notification_settings::RoomNotificationMode::Mute)
-    );
+    let notify_mode = room.cached_user_defined_notification_mode().map(NotifyMode::from);
+    let muted = notify_mode == Some(NotifyMode::Mute);
 
     let parent_spaces = collect_parent_spaces(room).await;
     let room_type = room_type_str(room);
@@ -187,6 +185,7 @@ pub async fn summarise(room: &Room) -> Result<RoomSummary> {
         is_space: room.is_space(),
         is_utility: is_utility_room_type(room_type),
         is_muted: muted,
+        notify_mode,
         membership: membership(room.state()),
         notification_count,
         highlight_count,
@@ -345,6 +344,7 @@ async fn summarise_or_placeholder(room: &Room) -> RoomSummary {
                 is_space: false,
                 is_utility: false,
                 is_muted: false,
+                notify_mode: None,
                 membership: membership(room.state()),
                 notification_count: 0,
                 highlight_count: 0,
@@ -718,9 +718,42 @@ pub async fn permissions(core: &MatrixCore, room_id: &RoomId) -> Result<RoomPerm
     })
 }
 
-pub async fn join(core: &MatrixCore, alias_or_id: &str) -> Result<String> {
-    let room_id = super::auth::resolve_room(&core.client, alias_or_id).await?;
-    let room = core.client.join_room_by_id(&room_id).await?;
+/// How long a join may take before we give up on hearing back.
+///
+/// Joining a room on another homeserver is the slowest call in the API: ours
+/// has to fetch the room's whole state over federation before it answers, and
+/// for a big room on matrix.org that's routinely minutes. The SDK's default of
+/// 30 seconds turned those joins into an "error sending request" while the
+/// server carried on and joined anyway.
+const JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Join by alias or ID.
+///
+/// `via` matters for a room ID on another homeserver: ours has never heard of
+/// it and needs to be told whom to ask. An alias carries its own answer, which
+/// the server resolves during the join.
+pub async fn join(core: &MatrixCore, alias_or_id: &str, via: &[String]) -> Result<String> {
+    use matrix_sdk::{config::RequestConfig, ruma::api::client::membership::join_room_by_id_or_alias};
+
+    let target = matrix_sdk::ruma::RoomOrAliasId::parse(alias_or_id.trim())?;
+    let servers = super::directory::parse_via(via);
+
+    // The slow part, sent by hand so it can have a long timeout of its own
+    // rather than raising it for every request. No retries: the server keeps
+    // working on a join we stopped waiting for, and a retry just queues up
+    // behind it.
+    let mut request = join_room_by_id_or_alias::v3::Request::new(target);
+    request.via = servers;
+    let response = core
+        .client
+        .send(request)
+        .with_request_config(RequestConfig::new().timeout(JOIN_TIMEOUT).disable_retry())
+        .await?;
+
+    // Then the SDK's own join, which is instant now that we're in, and does the
+    // local bookkeeping the raw request skips — marking the room joined so it
+    // can be opened before the next sync says so.
+    let room = core.client.join_room_by_id_or_alias((&*response.room_id).into(), &[]).await?;
     Ok(room.room_id().to_string())
 }
 
@@ -798,7 +831,34 @@ pub async fn set_muted(core: &MatrixCore, room_id: &RoomId, muted: bool) -> Resu
         settings.unmute_room(room_id, encrypted, one_to_one).await
     };
     result.map_err(|e| Error::Other(e.to_string()))?;
+    refresh_cached_mode(&settings, &room).await;
+    Ok(())
+}
 
+/// Set how much a room notifies: everything, mentions only, or nothing.
+///
+/// "Nothing" is `set_muted`, so that turning it back off takes the careful
+/// unmute path rather than a bare rule write.
+pub async fn set_notify_mode(core: &MatrixCore, room_id: &RoomId, mode: NotifyMode) -> Result<()> {
+    if mode == NotifyMode::Mute {
+        return set_muted(core, room_id, true).await;
+    }
+
+    let settings = core.client.notification_settings().await;
+    let room = core.room(&room_id.to_owned())?;
+    settings
+        .set_room_notification_mode(room_id, mode.into())
+        .await
+        .map_err(|e| Error::Other(e.to_string()))?;
+    refresh_cached_mode(&settings, &room).await;
+    Ok(())
+}
+
+async fn refresh_cached_mode(
+    settings: &matrix_sdk::notification_settings::NotificationSettings,
+    room: &Room,
+) {
+    let room_id = room.room_id();
     // `summarise` reads the mode from a per-room cache that the SDK only
     // refills when a sync brings the new `m.push_rules` back, so a summary
     // taken now would still report the old state. The rules read here are the
@@ -812,7 +872,37 @@ pub async fn set_muted(core: &MatrixCore, room_id: &RoomId, muted: bool) -> Resu
         Some(mode) => room.update_cached_user_defined_notification_mode(mode),
         None => room.clear_user_defined_notification_mode(),
     }
+}
 
+/// Mark a room read without opening it.
+///
+/// The timeline's own `mark_as_read` needs the room open, which "mark the
+/// whole space read" can't ask for. A receipt on the latest event the room
+/// list already knows about says the same thing, and clearing the manual
+/// unread flag covers rooms marked unread by hand.
+pub async fn mark_read(core: &MatrixCore, room_id: &RoomId) -> Result<()> {
+    use matrix_sdk::ruma::{
+        OwnedEventId,
+        api::client::receipt::create_receipt::v3::ReceiptType,
+        events::receipt::ReceiptThread,
+    };
+    use matrix_sdk_base::latest_event::LatestEventValue;
+
+    let room = core.room(&room_id.to_owned())?;
+
+    if let LatestEventValue::Remote(event) = room.latest_event() {
+        let json: serde_json::Value = event.raw().deserialize_as_unchecked()?;
+        if let Some(event_id) = json
+            .get("event_id")
+            .and_then(|id| id.as_str())
+            .and_then(|id| OwnedEventId::try_from(id).ok())
+        {
+            room.send_single_receipt(ReceiptType::Read, ReceiptThread::Unthreaded, event_id)
+                .await?;
+        }
+    }
+
+    room.set_unread_flag(false).await?;
     Ok(())
 }
 

@@ -10,7 +10,7 @@ use matrix_sdk::{
     authentication::matrix::MatrixSession,
     encryption::{BackupDownloadStrategy, EncryptionSettings},
     ruma::{
-        ClientSecret, OwnedClientSecret, OwnedSessionId, RoomId, UInt,
+        ClientSecret, OwnedClientSecret, OwnedSessionId, UInt,
         api::client::{
             account::{register, request_registration_token_via_email},
             session::get_login_types::v3::LoginType,
@@ -668,18 +668,6 @@ fn friendly_login_error(error: &matrix_sdk::Error) -> String {
         Some(ErrorKind::LimitExceeded { .. }) => "too many attempts — wait a moment".to_owned(),
         _ => error.to_string(),
     }
-}
-
-/// Resolve a room alias or ID to a room ID.
-pub async fn resolve_room(
-    client: &Client,
-    alias_or_id: &str,
-) -> Result<matrix_sdk::ruma::OwnedRoomId> {
-    if let Ok(room_id) = RoomId::parse(alias_or_id) {
-        return Ok(room_id);
-    }
-    let alias = matrix_sdk::ruma::RoomAliasId::parse(alias_or_id)?;
-    Ok(client.resolve_room_alias(&alias).await?.room_id)
 }
 
 #[cfg(test)]

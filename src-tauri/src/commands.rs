@@ -8,11 +8,11 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::{
     dto::{
-        HomeserverInfo, RegisterAuth, RegisterEmailToken, RegisterStep, RoomMemberDto, RoomsSnapshot,
+        HomeserverInfo, NotifyMode, RegisterAuth, RegisterEmailToken, RegisterStep, RoomMemberDto, RoomsSnapshot,
         SendOptions, SessionInfo, SpaceSummary, StickerOptions, TimelineItemDto,
     },
     error::{Error, Result},
-    matrix::{auth, core::AppState, media, packs, presence, profile, rooms, timeline},
+    matrix::{auth, core::AppState, directory, media, packs, presence, profile, rooms, timeline},
     rtc, verification,
 };
 
@@ -157,9 +157,36 @@ pub async fn create_room(
     rooms::create(&*state.core().await?, room).await
 }
 
+/// Join by alias or ID. `via` names servers to try, for a room ID ours
+/// doesn't know yet — one found in another server's directory, say.
 #[tauri::command]
-pub async fn join_room(state: State<'_, AppState>, alias_or_id: String) -> Result<String> {
-    rooms::join(&*state.core().await?, &alias_or_id).await
+pub async fn join_room(
+    state: State<'_, AppState>,
+    alias_or_id: String,
+    via: Option<Vec<String>>,
+) -> Result<String> {
+    rooms::join(&*state.core().await?, &alias_or_id, &via.unwrap_or_default()).await
+}
+
+/// One page of public spaces from a server's directory — ours when `server` is
+/// omitted.
+#[tauri::command]
+pub async fn get_public_spaces(
+    state: State<'_, AppState>,
+    server: Option<String>,
+    search: Option<String>,
+    since: Option<String>,
+) -> Result<directory::DirectoryPage> {
+    directory::public_spaces(&*state.core().await?, server, search, since).await
+}
+
+/// The rooms inside a space, readable before joining it.
+#[tauri::command]
+pub async fn get_space_rooms(
+    state: State<'_, AppState>,
+    space_id: String,
+) -> Result<Vec<directory::PublicRoom>> {
+    directory::space_rooms(&*state.core().await?, &parse_room_id(&space_id)?).await
 }
 
 /// Leave a room. Doesn't forget it — see `rooms::leave`.
@@ -222,6 +249,67 @@ pub async fn set_room_muted(
     // the room changes.
     rooms::emit_room_refresh(&app, &core, &room_id).await;
     Ok(())
+}
+
+/// Set the notification level on several rooms at once — every room in a
+/// space, say. `None` returns them to the default.
+#[tauri::command]
+pub async fn set_rooms_notify_mode(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    room_ids: Vec<String>,
+    mode: Option<NotifyMode>,
+) -> Result<()> {
+    let core = state.core().await?;
+    each_room(&app, &core, &room_ids, |core, room_id| async move {
+        match mode {
+            Some(mode) => rooms::set_notify_mode(core, &room_id, mode).await,
+            // No mode: back to the default, which is what unmuting means.
+            None => rooms::set_muted(core, &room_id, false).await,
+        }
+    })
+    .await
+}
+
+/// Mark several rooms read at once — a whole space, say — without opening any.
+#[tauri::command]
+pub async fn mark_rooms_read(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    room_ids: Vec<String>,
+) -> Result<()> {
+    let core = state.core().await?;
+    each_room(&app, &core, &room_ids, |core, room_id| async move {
+        rooms::mark_read(core, &room_id).await
+    })
+    .await
+}
+
+/// Run `action` on each room in turn, then refresh it in the sidebar.
+///
+/// One at a time: push rules are a single account-wide ruleset the SDK caches,
+/// and concurrent writes to it race. A room that fails doesn't stop the rest;
+/// the first error is reported once they've all had their turn.
+async fn each_room<'a, F, Fut>(
+    app: &AppHandle,
+    core: &'a crate::matrix::MatrixCore,
+    room_ids: &[String],
+    action: F,
+) -> Result<()>
+where
+    F: Fn(&'a crate::matrix::MatrixCore, OwnedRoomId) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    let mut first_error = None;
+    for raw in room_ids {
+        let room_id = parse_room_id(raw)?;
+        if let Err(e) = action(core, room_id.clone()).await {
+            tracing::warn!("{room_id}: {e}");
+            first_error.get_or_insert(e);
+        }
+        rooms::emit_room_refresh(app, core, &room_id).await;
+    }
+    first_error.map_or(Ok(()), Err)
 }
 
 #[tauri::command]

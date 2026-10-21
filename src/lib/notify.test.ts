@@ -59,6 +59,7 @@ function room(patch: Partial<RoomSummary> & { id: string }): RoomSummary {
     isSpace: false,
     isUtility: false,
     isMuted: false,
+    notifyMode: null,
     membership: "joined",
     notificationCount: 0,
     highlightCount: 0,

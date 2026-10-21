@@ -206,7 +206,7 @@ function Dialog() {
  * the room exists, and `open_timeline` on a room the room list doesn't know
  * yet raises. Giving up quietly is fine — the room list will still fill in.
  */
-async function waitForRoom(roomId: string, timeoutMs = 5000): Promise<void> {
+export async function waitForRoom(roomId: string, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (useStore.getState().rooms.some((r) => r.id === roomId)) return;

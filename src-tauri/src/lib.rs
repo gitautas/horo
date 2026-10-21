@@ -62,6 +62,8 @@ pub fn run() {
             commands::get_members,
             commands::create_room,
             commands::join_room,
+            commands::get_public_spaces,
+            commands::get_space_rooms,
             commands::leave_room,
             commands::update_room,
             commands::get_room_permissions,
@@ -69,6 +71,8 @@ pub fn run() {
             commands::set_typing,
             commands::set_room_muted,
             commands::set_room_marked_unread,
+            commands::set_rooms_notify_mode,
+            commands::mark_rooms_read,
             // image packs
             commands::get_image_packs,
             commands::get_all_image_packs,

@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod core;
+pub mod directory;
 pub mod media;
 pub mod packs;
 pub mod presence;

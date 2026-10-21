@@ -113,8 +113,28 @@ impl From<url::ParseError> for Error {
 
 impl Serialize for Error {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        UwuError { kind: self.kind(), message: self.to_string() }.serialize(s)
+        UwuError { kind: self.kind(), message: message(self) }.serialize(s)
     }
+}
+
+/// The error's own message, plus whatever caused it that it doesn't already say.
+///
+/// Transport errors keep the useful part in their sources: reqwest's top line
+/// is "error sending request for url (…)", and only further down does it say
+/// "operation timed out" or "connection refused".
+fn message(error: &Error) -> String {
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        // `#[error("{0}")]` wrappers repeat their inner error word for word.
+        if !text.is_empty() && !message.contains(&text) {
+            message.push_str(": ");
+            message.push_str(&text);
+        }
+        source = cause.source();
+    }
+    message
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
