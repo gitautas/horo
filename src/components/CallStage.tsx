@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Track } from "livekit-client";
 
@@ -9,10 +9,14 @@ import { useStore } from "../store";
 import { useCallState } from "./CallBar";
 import { Avatar, Icon, Spinner } from "./ui";
 import { corner, space, textSize } from "../lib/scale";
+import { useIsMobile } from "../lib/viewport";
 
 /**
  * The video stage: a grid of participant tiles above the timeline, in the shape
  * people already know from Discord and Meet.
+ *
+ * Clicking a tile focuses it — it takes the stage and everything else becomes a
+ * filmstrip — and clicking the focused tile goes back to the grid.
  *
  * It deliberately doesn't take the whole window by default — chat stays
  * readable underneath, which is the point of having calls inside a chat client.
@@ -22,6 +26,10 @@ export function CallStage({ roomId }: { roomId: string }) {
   const state = useCallState();
   const showBanner = useStore((s) => s.showBanner);
   const [fullscreen, setFullscreen] = useState(false);
+  const mobile = useIsMobile();
+  // `undefined` is "not chosen yet", which lets a screen share take the stage
+  // on its own; `null` is an explicit choice of the grid.
+  const [picked, setPicked] = useState<string | null | undefined>(undefined);
 
   // Escape is what everyone reaches for to get out of a fullscreen video.
   useEffect(() => {
@@ -40,9 +48,16 @@ export function CallStage({ roomId }: { roomId: string }) {
   const connecting = state.status === "connecting";
   const reconnecting = state.status === "reconnecting";
 
-  // A shared screen is the thing everyone is looking at, so it gets the stage
-  // and the people become a filmstrip.
-  const shared = state.participants.find((p) => p.screenTrack);
+  const tiles = tilesOf(state.participants);
+  // A shared screen is the thing everyone is looking at, so until someone
+  // picks otherwise it gets the stage. A pick that has left the call (they
+  // hung up, or stopped sharing) falls back the same way.
+  const firstScreen = tiles.find((t) => t.screen)?.key ?? null;
+  const focusKey =
+    picked === undefined || (picked !== null && !tiles.some((t) => t.key === picked))
+      ? firstScreen
+      : picked;
+  const focused = tiles.find((t) => t.key === focusKey);
 
   async function run(action: () => Promise<void>) {
     try {
@@ -87,53 +102,18 @@ export function CallStage({ roomId }: { roomId: string }) {
           <Spinner size={22} />
           connecting to the call…
         </div>
-      ) : shared ? (
-        <div style={{ flex: 1, display: "flex", gap: space(10), minHeight: 0 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <Tile participant={shared} track={shared.screenTrack} label="screen" contain />
-          </div>
-          <div
-            className="uwu-scroll"
-            style={{
-              width: 172,
-              flex: "none",
-              display: "flex",
-              flexDirection: "column",
-              gap: space(8),
-            }}
-          >
-            {state.participants.map((p) => (
-              <div key={p.identity} style={{ aspectRatio: "16 / 10", flex: "none" }}>
-                <Tile participant={p} track={p.cameraTrack} />
-              </div>
-            ))}
-          </div>
-        </div>
+      ) : focused ? (
+        <Focus
+          focused={focused}
+          others={tiles.filter((t) => t !== focused)}
+          // Inline on a desktop the stage is wide and short, so the strip goes
+          // down the side; fullscreen or on a phone there's height to spare.
+          strip={fullscreen || mobile ? "bottom" : "side"}
+          large={fullscreen}
+          onPick={setPicked}
+        />
       ) : (
-        <div
-          style={{
-            flex: 1,
-            minHeight: 0,
-            display: "grid",
-            gap: space(10),
-            // Tiles get bigger as the call gets smaller, without a breakpoint
-            // for every headcount.
-            gridTemplateColumns: `repeat(auto-fit, minmax(${
-              state.participants.length <= 2 ? 260 : 168
-            }px, 1fr))`,
-            // Rows divide the stage rather than being sized by the tiles. An
-            // aspect-ratio here would let a tile grow taller than its row and
-            // push its own name badge out of sight.
-            gridAutoRows: "minmax(0, 1fr)",
-            overflow: "hidden",
-          }}
-        >
-          {state.participants.map((p) => (
-            <div key={p.identity} style={{ minHeight: 0, minWidth: 0 }}>
-              <Tile participant={p} track={p.cameraTrack} />
-            </div>
-          ))}
-        </div>
+        <Grid tiles={tiles} onPick={setPicked} />
       )}
 
       <div style={{ display: "flex", alignItems: "center", gap: space(8) }}>
@@ -197,25 +177,199 @@ export function CallStage({ roomId }: { roomId: string }) {
   return fullscreen ? createPortal(stage, document.body) : stage;
 }
 
+/** One thing on the stage: someone's camera, or a screen they're sharing. */
+interface TileView {
+  key: string;
+  participant: CallParticipantView;
+  track: Track | null;
+  screen: boolean;
+}
+
 /**
- * One participant.
+ * A screen share is its own tile, the way Discord shows a stream next to the
+ * person streaming it, rather than replacing their face. Shares come first —
+ * they're what people joined to look at.
+ */
+function tilesOf(participants: CallParticipantView[]): TileView[] {
+  const screens = participants
+    .filter((p) => p.screenTrack)
+    .map((p) => ({ key: `${p.identity}:screen`, participant: p, track: p.screenTrack, screen: true }));
+  const cameras = participants.map((p) => ({
+    key: `${p.identity}:camera`,
+    participant: p,
+    track: p.cameraTrack,
+    screen: false,
+  }));
+  return [...screens, ...cameras];
+}
+
+const ASPECT = 16 / 9;
+const GAP = 10;
+
+/**
+ * The column count that makes the biggest 16:9 tiles fit the box.
+ *
+ * Stretching tiles to fill rows instead crops faces into slivers in a wide,
+ * short stage; keeping the shape and letterboxing the grid is what Discord
+ * and Meet do.
+ */
+function fit(count: number, width: number, height: number) {
+  let best = { columns: 1, width: 0, height: 0 };
+  for (let columns = 1; columns <= count; columns++) {
+    const rows = Math.ceil(count / columns);
+    const w = Math.min(
+      (width - GAP * (columns - 1)) / columns,
+      ((height - GAP * (rows - 1)) / rows) * ASPECT,
+    );
+    if (w > best.width) best = { columns, width: Math.floor(w), height: Math.floor(w / ASPECT) };
+  }
+  return best;
+}
+
+function useSize(element: HTMLElement | null) {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useLayoutEffect(() => {
+    if (!element) return;
+    // Measure now: the observer's first report waits for a frame, which would
+    // paint one empty grid first.
+    const rect = element.getBoundingClientRect();
+    setSize({ width: rect.width, height: rect.height });
+    const observer = new ResizeObserver(([entry]) => {
+      setSize({ width: entry.contentRect.width, height: entry.contentRect.height });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return size;
+}
+
+function Grid({ tiles, onPick }: { tiles: TileView[]; onPick: (key: string) => void }) {
+  const [box, setBox] = useState<HTMLDivElement | null>(null);
+  const size = useSize(box);
+  const { columns, width, height } = fit(tiles.length, size.width, size.height);
+
+  return (
+    <div
+      ref={setBox}
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+      }}
+    >
+      {width > 0 && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            // A short last row sits in the middle, not hard left.
+            justifyContent: "center",
+            gap: GAP,
+            maxWidth: columns * width + (columns - 1) * GAP,
+          }}
+        >
+          {tiles.map((t) => (
+            <div key={t.key} style={{ width, height, flex: "none" }}>
+              <Tile tile={t} onClick={() => onPick(t.key)} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Focus({
+  focused,
+  others,
+  strip,
+  large,
+  onPick,
+}: {
+  focused: TileView;
+  others: TileView[];
+  strip: "side" | "bottom";
+  large: boolean;
+  onPick: (key: string | null) => void;
+}) {
+  const side = strip === "side";
+  const thumbHeight = large ? 110 : 64;
+
+  return (
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: side ? "row" : "column",
+        gap: space(GAP),
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
+        <Tile tile={focused} focused onClick={() => onPick(null)} />
+      </div>
+      {others.length > 0 && (
+        <div
+          className={side ? "uwu-scroll" : undefined}
+          style={{
+            flex: "none",
+            display: "flex",
+            flexDirection: side ? "column" : "row",
+            gap: space(8),
+            ...(side
+              ? { width: 172 }
+              : {
+                  height: thumbHeight,
+                  overflowX: "auto",
+                  overflowY: "hidden",
+                  // `safe` keeps the first thumbnail reachable once the strip
+                  // overflows; plain centring would push it off the left edge.
+                  justifyContent: "safe center",
+                }),
+          }}
+        >
+          {others.map((t) => (
+            <div
+              key={t.key}
+              style={
+                side
+                  ? { aspectRatio: "16 / 10", flex: "none" }
+                  : { height: "100%", aspectRatio: "16 / 9", flex: "none" }
+              }
+            >
+              <Tile tile={t} small={!large} onClick={() => onPick(t.key)} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One participant's camera, or their shared screen.
  *
  * The video element is fed by attaching the LiveKit track directly — frames
  * can't travel through React state, so the track object comes down and the
  * element is wired to it here.
  */
 function Tile({
-  participant,
-  track,
-  label,
-  contain,
+  tile,
+  focused,
+  small,
+  onClick,
 }: {
-  participant: CallParticipantView;
-  track: Track | null;
-  label?: string;
-  /** Screen shares are letterboxed; faces are cropped to fill. */
-  contain?: boolean;
+  tile: TileView;
+  /** On the stage: shown whole rather than cropped, and a click unfocuses. */
+  focused?: boolean;
+  /** A filmstrip thumbnail, too small for a full-size avatar. */
+  small?: boolean;
+  onClick: () => void;
 }) {
+  const { participant, track, screen } = tile;
   const video = useRef<HTMLVideoElement>(null);
   const name = localpart(participant.userId);
 
@@ -230,15 +384,26 @@ function Tile({
 
   return (
     <div
+      className="uwu-call-tile"
+      role="button"
+      tabIndex={0}
+      title={focused ? "back to the grid" : "focus"}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       style={{
         position: "relative",
         width: "100%",
         height: "100%",
-        borderRadius: corner(16),
+        borderRadius: corner(small ? 12 : 16),
         overflow: "hidden",
         background: "var(--ink-900)",
         border: "1px solid var(--border-subtle)",
-        outline: participant.isSpeaking
+        outline: participant.isSpeaking && !screen
           ? "2px solid var(--accent-primary)"
           : "2px solid transparent",
         outlineOffset: -1,
@@ -259,20 +424,49 @@ function Tile({
           style={{
             width: "100%",
             height: "100%",
-            objectFit: contain ? "contain" : "cover",
-            transform: participant.isLocal && !label ? "scaleX(-1)" : undefined,
+            // Screens are letterboxed, and so is a focused face — it's on the
+            // stage to be seen, not cropped. Grid faces are cropped to fill.
+            objectFit: screen || focused ? "contain" : "cover",
+            transform: participant.isLocal && !screen ? "scaleX(-1)" : undefined,
           }}
         />
       ) : (
-        <Avatar id={participant.userId} name={name} size={56} radius={20} />
+        <Avatar
+          id={participant.userId}
+          name={name}
+          size={small ? 30 : 56}
+          radius={small ? 11 : 20}
+        />
       )}
+
+      <span
+        className="uwu-call-tile-hint"
+        style={{
+          position: "absolute",
+          top: 8,
+          right: 8,
+          width: 26,
+          height: 26,
+          borderRadius: corner(9),
+          background: "color-mix(in srgb, var(--ink-950) 72%, transparent)",
+          display: small ? "none" : "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Icon
+          name={focused ? "arrows-in" : "arrows-out"}
+          size={13}
+          color="var(--text-primary)"
+        />
+      </span>
 
       <div
         style={{
           position: "absolute",
-          left: 8,
-          bottom: 8,
-          right: 8,
+          left: small ? 5 : 8,
+          bottom: small ? 5 : 8,
+          right: small ? 5 : 8,
           display: "flex",
           alignItems: "center",
           gap: space(6),
@@ -281,19 +475,19 @@ function Tile({
         <span
           className="uwu-ellipsis"
           style={{
-            padding: space("3px 9px"),
+            padding: space(small ? "2px 7px" : "3px 9px"),
             borderRadius: 999,
             background: "color-mix(in srgb, var(--ink-950) 72%, transparent)",
             fontFamily: "var(--font-display)",
             fontWeight: 700,
-            fontSize: textSize(12),
+            fontSize: textSize(small ? 10.5 : 12),
             color: "var(--text-primary)",
           }}
         >
           {participant.isLocal ? "you" : name}
-          {label ? ` · ${label}` : ""}
+          {screen ? " · screen" : ""}
         </span>
-        {participant.isMuted && !label && (
+        {participant.isMuted && !screen && (
           <span
             style={{
               width: 20,

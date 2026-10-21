@@ -176,6 +176,9 @@ pub struct RoomSummary {
     /// room type we don't draw. Spaces have their own flag and their own rail.
     pub is_utility: bool,
     pub is_muted: bool,
+    /// The level set for this room, if one has been. `None` is the account's
+    /// default for this kind of room.
+    pub notify_mode: Option<NotifyMode>,
     pub membership: RoomMembership,
     pub notification_count: u64,
     pub highlight_count: u64,
@@ -213,6 +216,37 @@ pub struct LatestEvent {
     pub sender_name: Option<String>,
     pub body: String,
     pub timestamp: u64,
+}
+
+/// How much a room notifies — Matrix's per-room push rule, by its effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub enum NotifyMode {
+    All,
+    Mentions,
+    Mute,
+}
+
+impl From<matrix_sdk::notification_settings::RoomNotificationMode> for NotifyMode {
+    fn from(mode: matrix_sdk::notification_settings::RoomNotificationMode) -> Self {
+        use matrix_sdk::notification_settings::RoomNotificationMode as M;
+        match mode {
+            M::AllMessages => Self::All,
+            M::MentionsAndKeywordsOnly => Self::Mentions,
+            M::Mute => Self::Mute,
+        }
+    }
+}
+
+impl From<NotifyMode> for matrix_sdk::notification_settings::RoomNotificationMode {
+    fn from(mode: NotifyMode) -> Self {
+        match mode {
+            NotifyMode::All => Self::AllMessages,
+            NotifyMode::Mentions => Self::MentionsAndKeywordsOnly,
+            NotifyMode::Mute => Self::Mute,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

@@ -12,18 +12,21 @@ import type {
   CallCredentials,
   CallParticipants,
   DeviceInfo,
+  DirectoryPage,
   Profile,
   ProfileUpdate,
   HomeserverInfo,
   ImagePack,
   NewRoom,
   NewRoomResult,
+  NotifyMode,
   OwnPresence,
   PackEdit,
   PackRoom,
   PackTarget,
   Presence,
   PresenceUpdate,
+  PublicRoom,
   RecentPhotos,
   RecoveryStatus,
   RegisterAuth,
@@ -136,8 +139,24 @@ export const getMembers = (roomId: string) =>
 export const createRoom = (room: NewRoom) =>
   invoke<NewRoomResult>("create_room", { room });
 
-export const joinRoom = (aliasOrId: string) =>
-  invoke<string>("join_room", { aliasOrId });
+/**
+ * Join by alias or ID. `via` names servers to ask — needed for a room ID found
+ * on another server, which ours has no other way to locate.
+ */
+export const joinRoom = (aliasOrId: string, via: string[] = []) =>
+  invoke<string>("join_room", { aliasOrId, via });
+
+/** One page of public spaces from `server`'s directory, ours when omitted. */
+export const getPublicSpaces = (opts: { server?: string; search?: string; since?: string }) =>
+  invoke<DirectoryPage>("get_public_spaces", {
+    server: opts.server ?? null,
+    search: opts.search ?? null,
+    since: opts.since ?? null,
+  });
+
+/** The rooms directly inside a space, readable without joining it. */
+export const getSpaceRooms = (spaceId: string) =>
+  invoke<PublicRoom[]>("get_space_rooms", { spaceId });
 
 /**
  * Leave a room. It stops being listed, but nothing local is deleted — this
@@ -165,6 +184,16 @@ export const setTyping = (roomId: string, typing: boolean) =>
 
 export const setRoomMuted = (roomId: string, muted: boolean) =>
   invoke<void>("set_room_muted", { roomId, muted });
+
+/**
+ * Set the notification level on several rooms — a whole space's worth. `null`
+ * returns them to the default, which is how a mute is undone.
+ */
+export const setRoomsNotifyMode = (roomIds: string[], mode: NotifyMode | null) =>
+  invoke<void>("set_rooms_notify_mode", { roomIds, mode });
+
+/** Mark several rooms read without opening them. */
+export const markRoomsRead = (roomIds: string[]) => invoke<void>("mark_rooms_read", { roomIds });
 
 export const setRoomMarkedUnread = (roomId: string, unread: boolean) =>
   invoke<void>("set_room_marked_unread", { roomId, unread });

@@ -50,6 +50,9 @@ export function RoomList({
   );
 
   const unreadTotal = useStore(selectUnreadTotal);
+  const hideMuted = useStore(
+    (s) => !!activeSpaceId && s.settings.hideMutedInSpaces.includes(activeSpaceId),
+  );
 
   // The chips are hidden until asked for — they're a rarely-used control and
   // they crowd the top of the list.
@@ -61,9 +64,9 @@ export function RoomList({
   const groups = useMemo(
     () =>
       groupRooms(
-        filterRooms(allRooms, { activeSpaceId, filter, search, spaces }),
+        filterRooms(allRooms, { activeSpaceId, filter, search, spaces, hideMuted }),
       ),
-    [allRooms, activeSpaceId, filter, search, spaces],
+    [allRooms, activeSpaceId, filter, search, spaces, hideMuted],
   );
 
   const heading =

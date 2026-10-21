@@ -78,6 +78,8 @@ export interface Settings {
    * traffic for something nobody else can see.
    */
   recentReactions: string[];
+  /** Spaces whose room list leaves muted rooms out — Discord's "hide muted channels". */
+  hideMutedInSpaces: string[];
 }
 
 /**
@@ -117,6 +119,7 @@ export const DEFAULTS: Settings = {
   // A first-run row that isn't empty, in the house voice. These are replaced by
   // real usage as soon as the user reacts to anything.
   recentReactions: ["💜", "😹", "🥺", "✨", "👀", "🔥"],
+  hideMutedInSpaces: [],
 };
 
 /** The range the message text size slider covers, in px. */

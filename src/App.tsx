@@ -24,6 +24,8 @@ import { useEdgeSwipeBack, useIsMobile, useKeyboardSafeArea } from "./lib/viewpo
 import { selectActiveRoom, useStore } from "./store";
 import { ChatPane, EmptyPane } from "./components/ChatPane";
 import { CreateRoom } from "./components/CreateRoom";
+import { ExploreSpaces } from "./components/ExploreSpaces";
+import { SpaceDialogs } from "./components/SpaceDialogs";
 import { DropZone } from "./components/DropZone";
 import { Lightbox } from "./components/Lightbox";
 import { LoginScreen } from "./components/LoginScreen";
@@ -163,6 +165,8 @@ function Shell() {
       <DropZone />
       <Lightbox />
       <CreateRoom />
+      <ExploreSpaces />
+      <SpaceDialogs />
       <IncomingCallModal />
       <VerificationModal />
       <SyncIndicator />

@@ -50,6 +50,8 @@ interface Draft {
 
 const EMPTY_DRAFT: Draft = { body: "", replyTo: null, editing: null };
 
+export type SpaceDialogKind = "leave" | "invite" | "browse";
+
 interface State {
   // session
   session: SessionInfo | null;
@@ -112,6 +114,9 @@ interface State {
   /** The picture being looked at full-size, if any. */
   lightbox: { mxc: string; name: string } | null;
   showCreateRoom: boolean;
+  showExplore: boolean;
+  /** The dialog open for a space from its context menu, if any. */
+  spaceDialog: { kind: SpaceDialogKind; spaceId: string } | null;
 
   /**
    * Custom emote and sticker packs usable in the room that's open.
@@ -167,6 +172,10 @@ interface Actions {
   closeLightbox(): void;
   openCreateRoom(): void;
   closeCreateRoom(): void;
+  openExplore(): void;
+  closeExplore(): void;
+  openSpaceDialog(kind: SpaceDialogKind, spaceId: string): void;
+  closeSpaceDialog(): void;
   updateSettings(patch: Partial<prefs.Settings>): void;
   /** Move a reaction to the front of the recents row. */
   noteReactionUsed(key: string): void;
@@ -220,6 +229,8 @@ const initial: State = {
   profileCard: null,
   lightbox: null,
   showCreateRoom: false,
+  showExplore: false,
+  spaceDialog: null,
   packs: [],
   settings: prefs.load(),
   verificationRequest: null,
@@ -368,6 +379,10 @@ export const useStore = create<State & Actions>((set, get) => ({
 
   openCreateRoom: () => set({ showCreateRoom: true }),
   closeCreateRoom: () => set({ showCreateRoom: false }),
+  openExplore: () => set({ showExplore: true }),
+  closeExplore: () => set({ showExplore: false }),
+  openSpaceDialog: (kind, spaceId) => set({ spaceDialog: { kind, spaceId } }),
+  closeSpaceDialog: () => set({ spaceDialog: null }),
 
   updateSettings: (patch) =>
     set((s) => {
@@ -564,17 +579,16 @@ export function filterRooms(
     filter,
     search,
     spaces,
-  }: Pick<State, "activeSpaceId" | "filter" | "search" | "spaces">,
+    hideMuted = false,
+  }: Pick<State, "activeSpaceId" | "filter" | "search" | "spaces"> & {
+    /** Leave muted rooms out — only applies inside a space, as in Discord. */
+    hideMuted?: boolean;
+  },
 ): RoomSummary[] {
   const needle = search.trim().toLowerCase();
 
-  // Space membership is recorded twice in Matrix and neither half is reliable
-  // alone: the space lists children via `m.space.child`, and a room *may* point
-  // back with `m.space.parent` — but most rooms never set the parent event. So
-  // the children list is the primary source and `parentSpaces` is a fallback.
-  const children = activeSpaceId
-    ? new Set(spaces.find((s) => s.id === activeSpaceId)?.children ?? [])
-    : null;
+  // See `isInSpace` for why membership is read both ways round.
+  const space = activeSpaceId ? spaces.find((s) => s.id === activeSpaceId) : undefined;
 
   const visible = rooms.filter((room) => {
     if (room.isSpace) return false;
@@ -584,9 +598,8 @@ export function filterRooms(
     if (room.membership === "left" || room.membership === "banned") return false;
 
     if (activeSpaceId) {
-      const inSpace =
-        children?.has(room.id) || room.parentSpaces.includes(activeSpaceId);
-      if (!inSpace) return false;
+      if (!isInSpace(room, space ?? { id: activeSpaceId, children: [] })) return false;
+      if (hideMuted && room.isMuted) return false;
     }
 
     switch (filter) {
@@ -616,6 +629,50 @@ export function filterRooms(
     const bt = b.latest?.timestamp ?? b.recency;
     return bt - at || a.name.localeCompare(b.name);
   });
+}
+
+/**
+ * Whether a room belongs to a space.
+ *
+ * Space membership is recorded twice in Matrix and neither half is reliable
+ * alone: the space lists children via `m.space.child`, and a room *may* point
+ * back with `m.space.parent` — but most rooms never set the parent event. So
+ * the children list is the primary source and `parentSpaces` is a fallback.
+ */
+export function isInSpace(
+  room: RoomSummary,
+  space: Pick<SpaceSummary, "id" | "children">,
+): boolean {
+  return space.children.includes(room.id) || room.parentSpaces.includes(space.id);
+}
+
+/** The rooms you've joined in a space — what a space-wide action applies to. */
+export function roomsInSpace(
+  rooms: RoomSummary[],
+  spaces: SpaceSummary[],
+  spaceId: string,
+): RoomSummary[] {
+  const space = spaces.find((s) => s.id === spaceId);
+  if (!space) return [];
+  return rooms.filter((r) => !r.isSpace && r.membership === "joined" && isInSpace(r, space));
+}
+
+/**
+ * The joined rooms that are in `spaceId` and in no other space you're in —
+ * the ones it's safe to offer to leave along with it.
+ *
+ * A room shared with another space stays: leaving one space shouldn't empty a
+ * different one. Membership is read both ways round, as in `filterRooms`.
+ */
+export function roomsOnlyInSpace(
+  rooms: RoomSummary[],
+  spaces: SpaceSummary[],
+  spaceId: string,
+): RoomSummary[] {
+  const others = spaces.filter((s) => s.id !== spaceId);
+  return roomsInSpace(rooms, spaces, spaceId).filter(
+    (room) => !others.some((other) => isInSpace(room, other)),
+  );
 }
 
 export interface RoomGroup {

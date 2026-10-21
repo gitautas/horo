@@ -77,6 +77,8 @@ export interface RoomSummary {
   /** A room that holds data rather than a conversation — an image pack, say. */
   isUtility: boolean;
   isMuted: boolean;
+  /** The level set for this room, if one has been; null is the account default. */
+  notifyMode: "all" | "mentions" | "mute" | null;
   membership: "joined" | "invited" | "left" | "knocked" | "banned";
   notificationCount: number;
   highlightCount: number;
