@@ -3,7 +3,7 @@
 //! Names are namespaced with `matrix://` so they can't collide with Tauri's own
 //! event traffic.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use tauri::{AppHandle, Emitter};
 use tokio::task::JoinHandle;
@@ -37,10 +37,22 @@ pub fn emit<T: serde::Serialize + Clone>(app: &AppHandle, event: &str, payload: 
     }
 }
 
-/// Mirror the sync service's state so the UI can show a connection indicator.
+/// First wait before restarting a sync that stopped on an error, doubled on
+/// each failure in a row up to [`SYNC_RETRY_MAX`].
+const SYNC_RETRY_MIN: Duration = Duration::from_secs(2);
+const SYNC_RETRY_MAX: Duration = Duration::from_secs(60);
+
+/// Mirror the sync service's state so the UI can show a connection indicator,
+/// and restart it when it stops on an error.
+///
+/// Offline mode only covers the network going away. Anything else (a 5xx from
+/// the proxy, a sliding sync session the server dropped) leaves the service
+/// stopped until someone calls `start()` again, and until then nothing new
+/// arrives: no messages, no notifications, no incoming calls.
 pub fn spawn_sync_status_task(app: AppHandle, core: Arc<MatrixCore>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut states = core.sync_service.state();
+        let mut retry = SYNC_RETRY_MIN;
 
         loop {
             let state = states.next().await;
@@ -60,6 +72,21 @@ pub fn spawn_sync_status_task(app: AppHandle, core: Arc<MatrixCore>) -> JoinHand
                 EV_SYNC_STATUS,
                 SyncStatus { state: sync_state, message },
             );
+
+            match state {
+                State::Running => retry = SYNC_RETRY_MIN,
+                State::Error(error) => {
+                    tracing::warn!("sync stopped: {error}; restarting in {retry:?}");
+                    tokio::time::sleep(retry).await;
+                    retry = (retry * 2).min(SYNC_RETRY_MAX);
+                    // Signing out stops the service on purpose; don't fight it.
+                    if core.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
+                    core.sync_service.start().await;
+                }
+                _ => {}
+            }
         }
     })
 }
