@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties, ReactNode } from "react";
 
+import { avatarFailed, cachedAvatar, loadAvatar } from "../lib/avatarCache";
 import { accentFor, initialsFor } from "../lib/display";
 import { mediaUrl } from "../lib/ipc";
 import logoUrl from "../../src-tauri/icons/horo_logo.svg";
@@ -103,13 +104,26 @@ export function Avatar({
   // fail outright (see ARCHITECTURE.md on thumbnails), and the alternative is
   // the WebView's broken-image glyph, which looks like a bug in us.
   //
-  // These track *which* src succeeded rather than a plain loaded/failed flag:
-  // a cached image can fire `load` before an effect could reset the flag, and a
-  // state reset racing that event leaves a loaded image sitting at opacity 0
-  // behind its own monogram.
-  const [loadedSrc, setLoadedSrc] = useState<string>();
-  const [failedSrc, setFailedSrc] = useState<string>();
-  const loaded = !!src && loadedSrc === src;
+  // A picture already in the avatar cache is drawn on the first frame, with no
+  // monogram and no fade — that's every avatar after the first time it's seen.
+  // `fetched` remembers which src a load finished for, so a src that changes
+  // underneath an in-flight load never shows the old picture.
+  const [fetched, setFetched] = useState<{ src: string; url: string }>();
+  const url = src
+    ? (cachedAvatar(src) ?? (fetched?.src === src ? fetched.url : undefined))
+    : undefined;
+  const fadeIn = !!url && fetched?.src === src;
+
+  useEffect(() => {
+    if (!src || cachedAvatar(src) || avatarFailed(src)) return;
+    let cancelled = false;
+    loadAvatar(src)
+      .then((loaded) => !cancelled && setFetched({ src, url: loaded }))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [src]);
 
   return (
     <div
@@ -121,7 +135,7 @@ export function Avatar({
         flex: "none",
         borderRadius: corner(radius ?? Math.round(size * 0.36)),
         border: "2px solid var(--ink-950)",
-        background: loaded ? "var(--ink-900)" : accentFor(id),
+        background: url ? "var(--ink-900)" : accentFor(id),
         color: "var(--text-on-accent)",
         display: "flex",
         alignItems: "center",
@@ -133,33 +147,22 @@ export function Avatar({
         ...style,
       }}
     >
-      {!loaded && initialsFor(name)}
-      {src && failedSrc !== src && (
+      {url ? (
         <img
-          src={src}
+          src={url}
           alt=""
-          loading="lazy"
           draggable={false}
-          // A cached image can finish before React attaches `onLoad`, so the
-          // element is asked directly on mount as well.
-          ref={(node) => {
-            if (node?.complete && node.naturalWidth > 0 && loadedSrc !== src) {
-              setLoadedSrc(src);
-            }
-          }}
-          onLoad={() => setLoadedSrc(src)}
-          onError={() => setFailedSrc(src)}
           style={{
             position: "absolute",
             inset: 0,
             width: "100%",
             height: "100%",
             objectFit: "cover",
-            // Fades in over the monogram rather than popping.
-            opacity: loaded ? 1 : 0,
-            transition: "opacity var(--dur-fast) var(--ease-out)",
+            animation: fadeIn ? "uwuFadeIn var(--dur-fast) var(--ease-out)" : undefined,
           }}
         />
+      ) : (
+        initialsFor(name)
       )}
     </div>
   );

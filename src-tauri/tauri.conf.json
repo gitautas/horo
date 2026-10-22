@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' horo: http://horo.localhost data: blob:; media-src 'self' horo: http://horo.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost https: wss: blob:; worker-src 'self' blob:; frame-src 'none'; object-src 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' horo: http://horo.localhost data: blob:; media-src 'self' horo: http://horo.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost horo: http://horo.localhost https: wss: blob:; worker-src 'self' blob:; frame-src 'none'; object-src 'none'"
     }
   },
   "bundle": {

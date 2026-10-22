@@ -331,6 +331,10 @@ fn handle_media_request(
                     // Matrix media is immutable per URI, so it can be cached
                     // aggressively; this is what keeps scrolling smooth.
                     .header("cache-control", "private, max-age=31536000, immutable")
+                    // The avatar cache reads this with `fetch`, and to the
+                    // WebView the app's own origin and `horo:` are two different
+                    // sites. Only our own pages can reach this scheme at all.
+                    .header("access-control-allow-origin", "*")
                     .header(
                         "content-security-policy",
                         "default-src 'none'; style-src 'unsafe-inline'; sandbox",

@@ -83,6 +83,14 @@ button {
   }
 }
 
+/* An avatar that had to be fetched fades in over its monogram; one that was
+   already cached just appears. */
+@keyframes uwuFadeIn {
+  from {
+    opacity: 0;
+  }
+}
+
 @keyframes uwuSpin {
   to {
     transform: rotate(360deg);

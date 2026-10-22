@@ -13,6 +13,14 @@ vi.mock("../lib/ipc", () => ({
   asUwuError: (e: unknown) => ({ kind: "other", message: String(e) }),
 }));
 
+// Nothing to fetch the picture from either, so the cache hands the src back as
+// its own URL — which picture was chosen is what these tests are about.
+vi.mock("../lib/avatarCache", () => ({
+  cachedAvatar: () => undefined,
+  avatarFailed: () => false,
+  loadAvatar: async (src: string) => src,
+}));
+
 const { ReadReceipts } = await import("./TimelineView");
 const { invalidateProfile } = await import("../lib/profiles");
 
