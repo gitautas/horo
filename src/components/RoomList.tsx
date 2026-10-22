@@ -390,7 +390,7 @@ export function RoomList({
               />
             ))}
             {group.unjoined?.map((room) => (
-              <UnjoinedRow key={room.id} room={room} via={activeSpace?.id ?? null} />
+              <UnjoinedRow key={room.id} room={room} />
             ))}
           </div>
         ))}
@@ -738,12 +738,21 @@ function useUnjoinedRooms(spaceId: string | null, children: string[]): PublicRoo
     () =>
       found && found.spaceId === spaceId
         ? found.rooms.filter(
-            // Invite-only rooms can't be walked into, and Discord doesn't show
-            // you channels you can't open either.
-            (r) => !r.isSpace && (r.joinRule === "public" || r.joinRule === "restricted"),
+            (r) =>
+              !r.isSpace &&
+              // Invite-only rooms can't be walked into, and Discord doesn't
+              // show you channels you can't open either.
+              (r.joinRule === "public" || r.joinRule === "restricted") &&
+              // The server's hierarchy can lag behind a room being taken out
+              // of the space; the space's own state is the authority.
+              children.includes(r.id) &&
+              // Nobody left in it — a deleted room, most likely. With nobody
+              // to join through, a join can only fail.
+              r.members > 0,
           )
         : [],
-    [found, spaceId],
+    // `childrenKey` stands in for `children`, which is a new array each render.
+    [found, spaceId, childrenKey],
   );
 }
 
@@ -751,7 +760,7 @@ function useUnjoinedRooms(spaceId: string | null, children: string[]): PublicRoo
  * A room in the space we haven't joined. Clicking it joins, then opens it —
  * and for a voice room, connects, as clicking any voice room does.
  */
-function UnjoinedRow({ room, via }: { room: PublicRoom; via: string | null }) {
+function UnjoinedRow({ room }: { room: PublicRoom }) {
   const [busy, setBusy] = useState(false);
   const name = room.name ?? room.alias ?? "a room";
 
@@ -760,8 +769,7 @@ function UnjoinedRow({ room, via }: { room: PublicRoom; via: string | null }) {
     setBusy(true);
     const { selectRoom, showBanner } = useStore.getState();
     try {
-      // A child that names no servers is on the space's own, which ours knows.
-      await ipc.joinRoom(room.id, room.via.length ? room.via : via ? [serverOf(via)] : []);
+      await ipc.joinRoom(room.id, room.via);
       await waitForRoom(room.id);
       await selectRoom(room.id);
       if (room.isVoice) void joinVoice(room.id);
@@ -814,11 +822,6 @@ function UnjoinedRow({ room, via }: { room: PublicRoom; via: string | null }) {
       )}
     </HoverRow>
   );
-}
-
-/** `!abc:veil.gg` → `veil.gg`. */
-function serverOf(roomId: string): string {
-  return roomId.slice(roomId.indexOf(":") + 1);
 }
 
 /** A video room we're in, which the sidebar treats as a Discord voice channel. */

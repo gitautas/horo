@@ -137,6 +137,15 @@ fn preview_from_content(json: &serde_json::Value) -> Option<String> {
     }
     match json.get("type").and_then(|t| t.as_str()) {
         Some("m.room.encrypted") => Some("encrypted message".to_owned()),
+        // The SDK counts a call's ring as the room's latest event, and its
+        // type is no sentence; nor is the timeline showing it any more.
+        Some(
+            "m.rtc.notification"
+            | "org.matrix.msc4075.rtc.notification"
+            | "m.call.notify"
+            | "org.matrix.msc4075.call.notify"
+            | "m.call.invite",
+        ) => Some("started a call".to_owned()),
         Some("m.sticker") => Some("sticker".to_owned()),
         Some("m.room.member") => Some("membership change".to_owned()),
         Some(other) => Some(other.to_owned()),
@@ -1315,6 +1324,15 @@ mod room_type_tests {
         children.sort_by(ChildOrder::cmp);
         let ids: Vec<_> = children.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(ids, ["!a", "!b", "!early-unordered", "!late-unordered"]);
+    }
+
+    #[test]
+    fn a_call_ring_previews_as_words() {
+        let ring = serde_json::json!({
+            "type": "org.matrix.msc4075.rtc.notification",
+            "content": { "notification_type": "ring" },
+        });
+        assert_eq!(preview_from_content(&ring).as_deref(), Some("started a call"));
     }
 
     #[test]

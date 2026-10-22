@@ -128,13 +128,22 @@ pub async fn space_rooms(core: &MatrixCore, space_id: &RoomId) -> Result<Vec<Pub
         }
     }
 
+    // A child that names no servers is joined through ours: it's where the
+    // space is, and since room version 12 there's no server in the room ID to
+    // fall back on.
+    let own_server = core.own_user_id()?.server_name().to_string();
+
     Ok(response
         .rooms
         .into_iter()
         // The first entry is the space itself.
         .filter(|chunk| chunk.summary.room_id != space_id)
         .map(|chunk| {
-            let via = via_for.get(&chunk.summary.room_id).cloned().unwrap_or_default();
+            let via = via_for
+                .get(&chunk.summary.room_id)
+                .filter(|via| !via.is_empty())
+                .cloned()
+                .unwrap_or_else(|| vec![own_server.clone()]);
             from_hierarchy(chunk.summary, via)
         })
         .collect())
