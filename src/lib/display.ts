@@ -33,11 +33,21 @@ export function initialsFor(name: string): string {
   const cleaned = name.replace(/^[@#!+]/, "").split(":")[0].trim();
   if (!cleaned) return "??";
 
-  const words = cleaned.split(/[\s_\-.]+/).filter(Boolean);
+  // Only letters and digits make it into a monogram: emoji and symbols
+  // ("skitchy 🍁") would otherwise count as a word, and indexing by UTF-16 unit
+  // splits them into a lone surrogate the font draws as a missing glyph.
+  const words = cleaned
+    .split(/[\s_\-.]+/)
+    .map((word) => Array.from(word.replace(/[^\p{L}\p{N}]/gu, "")))
+    .filter((chars) => chars.length > 0);
   if (words.length >= 2) {
     return (words[0][0] + words[1][0]).toLowerCase();
   }
-  return cleaned.slice(0, 2).toLowerCase();
+  if (words.length === 1) {
+    return words[0].slice(0, 2).join("").toLowerCase();
+  }
+  // Nothing but emoji/symbols: show the first whole character rather than "??".
+  return Array.from(cleaned)[0];
 }
 
 /** The part of a Matrix ID people actually read: `@kii:uwu.gg` → `kii`. */
