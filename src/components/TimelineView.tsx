@@ -534,9 +534,18 @@ const CALL_STATE_EVENTS = new Set([
   "m.call.member",
 ]);
 
+/**
+ * "Started a call" notices: the ring sent when a call begins, and the legacy
+ * one-to-one invite. The room already shows a live call in the sidebar and the
+ * call bar, and a notice left behind after it has ended is just noise.
+ */
+const CALL_NOTICES = new Set(["rtcNotification", "callInvite"]);
+
 function isWorthShowing(item: TimelineItem): boolean {
   const content = item.event?.content;
-  if (content?.kind !== "state") return true;
+  if (!content) return true;
+  if (CALL_NOTICES.has(content.kind)) return false;
+  if (content.kind !== "state") return true;
   return !CALL_STATE_EVENTS.has(content.eventType);
 }
 
