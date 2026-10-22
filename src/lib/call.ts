@@ -205,7 +205,11 @@ class CallController {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          ...(settings.audioInput ? { deviceId: settings.audioInput } : {}),
+          // Exact, not a preference: a mic the browser is free to swap for the
+          // system default ends up on a pair of AirPods the moment they
+          // connect, and opening their mic drops their playback to the
+          // low-quality headset profile.
+          ...(settings.audioInput ? { deviceId: { exact: settings.audioInput } } : {}),
         },
       });
 
@@ -213,7 +217,14 @@ class CallController {
       this.wire(room);
 
       await room.connect(credentials.livekitUrl, credentials.jwt);
-      await room.localParticipant.setMicrophoneEnabled(true);
+      await room.localParticipant.setMicrophoneEnabled(true).catch((error) => {
+        // The chosen mic has been unplugged since it was picked. Joining on
+        // the system default beats not joining at all.
+        if (!settings.audioInput || !isMissingDevice(error)) throw error;
+        return room.localParticipant.setMicrophoneEnabled(true, {
+          deviceId: { ideal: "default" },
+        });
+      });
       this.outputDeviceId = settings.audioOutput;
       // Always in the path, even wide open, so dragging the slider mid-call
       // takes effect without swapping the track being sent.
@@ -259,7 +270,7 @@ class CallController {
    */
   async setAudioInput(deviceId: string): Promise<void> {
     if (!this.room) return;
-    await this.room.switchActiveDevice("audioinput", deviceId || "default");
+    await switchDevice(this.room, "audioinput", deviceId);
   }
 
   /**
@@ -356,7 +367,7 @@ class CallController {
 
   async setVideoInput(deviceId: string): Promise<void> {
     if (!this.room) return;
-    await this.room.switchActiveDevice("videoinput", deviceId || "default");
+    await switchDevice(this.room, "videoinput", deviceId);
   }
 
   async setMicEnabled(enabled: boolean): Promise<void> {
@@ -504,6 +515,18 @@ class CallController {
 }
 
 /**
+ * Switch a capture device mid-call; "" means the system default.
+ *
+ * LiveKit asks for the device as `exact`, and WebKit has no device called
+ * "default", so the default has to be asked for as a preference instead.
+ */
+async function switchDevice(room: Room, kind: MediaDeviceKind, deviceId: string) {
+  await (deviceId
+    ? room.switchActiveDevice(kind, deviceId)
+    : room.switchActiveDevice(kind, "default", false));
+}
+
+/**
  * Point one audio element at a specific output device.
  *
  * `setSinkId` is still not universally available, and fails outright on some
@@ -511,11 +534,14 @@ class CallController {
  * thrown error mid-call, so failures are swallowed deliberately.
  */
 async function applySink(element: HTMLAudioElement, deviceId: string): Promise<void> {
-  if (!deviceId) return;
   const withSink = element as HTMLAudioElement & {
     setSinkId?: (id: string) => Promise<void>;
+    sinkId?: string;
   };
   if (typeof withSink.setSinkId !== "function") return;
+  // "" is the spec's name for the system default, so going back to it is a
+  // call to make too, just not one to make when the element is already there.
+  if (withSink.sinkId === deviceId) return;
   try {
     await withSink.setSinkId(deviceId);
   } catch {
@@ -563,6 +589,15 @@ function liveVideo(publication: TrackPublication | undefined): Track | null {
   if (!publication || publication.isMuted) return null;
   const track = publication.track;
   return track && track.kind === Track.Kind.Video ? track : null;
+}
+
+/**
+ * getUserMedia's answer when an `exact` device isn't there any more. Checked by
+ * name: older WebKit's OverconstrainedError isn't an Error subclass.
+ */
+function isMissingDevice(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null)?.name;
+  return name === "OverconstrainedError" || name === "NotFoundError";
 }
 
 /** Cancelling the screen picker rejects; that's a choice, not a failure. */

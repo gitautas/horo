@@ -339,8 +339,16 @@ export async function listMediaDevices(): Promise<MediaDevices> {
   // The track we get back from an unconstrained request is whatever the system
   // default is, which is the only portable way to find out: WebKit has no
   // "default" entry in `enumerateDevices`, and cameras have one nowhere.
+  //
+  // Except for the mic once its labels are already showing. Opening the default
+  // mic just to name it is enough to knock a pair of AirPods into the
+  // low-quality headset profile, even when they're only being used to listen —
+  // and that default is them as soon as they connect.
+  const before = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+  const micsLabelled = before.some((d) => d.kind === "audioinput" && d.label);
   const granted: { audio?: string; video?: string } = {};
   for (const kind of ["audio", "video"] as const) {
+    if (kind === "audio" && micsLabelled) continue;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ [kind]: true });
       granted[kind] = stream.getTracks()[0]?.getSettings().deviceId || undefined;

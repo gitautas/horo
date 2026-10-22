@@ -780,12 +780,38 @@ function SecuritySection() {
 
 /**
  * What a device picker shows: the saved device if it's still plugged in,
- * otherwise whichever one the system default is right now. There's no
- * "system default" entry; leaving the picker alone is how you get that.
+ * otherwise "system default", which is what the call falls back to.
  */
-function shownDevice(saved: string, available: AudioDevice[], systemDefault: string | null) {
-  if (saved && available.some((d) => d.deviceId === saved)) return saved;
-  return systemDefault ?? available[0]?.deviceId ?? "";
+function shownDevice(saved: string, available: AudioDevice[]) {
+  return saved && available.some((d) => d.deviceId === saved) ? saved : "";
+}
+
+/**
+ * A picker's options, led by an explicit "system default".
+ *
+ * Without one, the picker showed the current default as if it were chosen,
+ * and choosing it again changed nothing, so nothing was saved. The app went on
+ * following the system, which on a Mac switches the mic to a pair of AirPods
+ * the moment they connect, dropping them into the low-quality headset profile.
+ */
+function DeviceOptions({
+  devices,
+  systemDefault,
+}: {
+  devices: AudioDevice[];
+  systemDefault: string | null;
+}) {
+  const current = devices.find((d) => d.deviceId === systemDefault)?.label;
+  return (
+    <>
+      <option value="">{current ? `system default (${current})` : "system default"}</option>
+      {devices.map((device) => (
+        <option key={device.deviceId} value={device.deviceId}>
+          {device.label}
+        </option>
+      ))}
+    </>
+  );
 }
 
 function VoiceSection() {
@@ -835,18 +861,14 @@ function VoiceSection() {
           <>
             <Field label="output device" hint="where you hear everyone else.">
               <select
-                value={shownDevice(settings.audioOutput, devices.outputs, devices.defaults.output)}
+                value={shownDevice(settings.audioOutput, devices.outputs)}
                 onChange={(e) => {
                   updateSettings({ audioOutput: e.target.value });
                   void call.setAudioOutput(e.target.value);
                 }}
                 style={inputStyle}
               >
-                {devices.outputs.map((device) => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label}
-                  </option>
-                ))}
+                <DeviceOptions devices={devices.outputs} systemDefault={devices.defaults.output} />
               </select>
             </Field>
 
@@ -855,18 +877,14 @@ function VoiceSection() {
               hint="the microphone other people hear. changing this mid-call switches it live."
             >
               <select
-                value={shownDevice(settings.audioInput, devices.inputs, devices.defaults.input)}
+                value={shownDevice(settings.audioInput, devices.inputs)}
                 onChange={(e) => {
                   updateSettings({ audioInput: e.target.value });
                   void call.setAudioInput(e.target.value);
                 }}
                 style={inputStyle}
               >
-                {devices.inputs.map((device) => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label}
-                  </option>
-                ))}
+                <DeviceOptions devices={devices.inputs} systemDefault={devices.defaults.input} />
               </select>
             </Field>
 
@@ -905,18 +923,14 @@ function VoiceSection() {
               hint="used when you turn video on in a call. changing this mid-call switches it live."
             >
               <select
-                value={shownDevice(settings.videoInput, devices.cameras, devices.defaults.camera)}
+                value={shownDevice(settings.videoInput, devices.cameras)}
                 onChange={(e) => {
                   updateSettings({ videoInput: e.target.value });
                   void call.setVideoInput(e.target.value);
                 }}
                 style={inputStyle}
               >
-                {devices.cameras.map((device) => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label}
-                  </option>
-                ))}
+                <DeviceOptions devices={devices.cameras} systemDefault={devices.defaults.camera} />
               </select>
             </Field>
 
