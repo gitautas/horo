@@ -785,8 +785,9 @@ pub async fn recover_with_key(state: State<'_, AppState>, recovery_key: String) 
 pub async fn join_call(
     state: State<'_, AppState>,
     room_id: String,
+    video: Option<bool>,
 ) -> Result<rtc::CallCredentials> {
-    rtc::join(&*state.core().await?, &parse_room_id(&room_id)?).await
+    rtc::join(&*state.core().await?, &parse_room_id(&room_id)?, video.unwrap_or(false)).await
 }
 
 #[tauri::command]

@@ -35,6 +35,7 @@ import {
   type GateReading,
 } from "./noiseGate";
 import { load as loadSettings } from "./settings";
+import { startRingback } from "./sounds";
 
 export interface CallParticipantView {
   identity: string;
@@ -75,6 +76,18 @@ export interface CallState {
  * one preset so the frame rate asked of the screen is the one that's sent.
  */
 const SCREEN_SHARE = ScreenSharePresets.h1080fps30;
+
+/**
+ * How long a call rings before giving up, at either end: the callee's ringer
+ * stops, and so does the caller's ringback. Rust sends the same lifetime on
+ * the ring notification, so Element gives up at the same moment.
+ *
+ * A caller who has wandered off leaves their `m.call.member` state behind, and
+ * nothing in MatrixRTC says "stop ringing" — the membership simply sits there
+ * until it expires hours later. Without a limit of our own, a missed call rings
+ * until the app is closed.
+ */
+export const RING_TIMEOUT_MS = 45_000;
 
 export const IDLE_CALL: CallState = {
   roomId: null,
@@ -147,6 +160,7 @@ class CallController {
   private gate: NoiseGateProcessor | null = null;
   private gateThreshold: number | null = null;
   private gateOpen = false;
+  private ringback: { stop: () => void; timer: number } | null = null;
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -182,7 +196,7 @@ class CallController {
       }
 
       const settings = loadSettings();
-      const credentials = await ipc.joinCall(roomId);
+      const credentials = await ipc.joinCall(roomId, options.video);
 
       const room = new Room({
         // Size subscriptions by device pixels, not CSS pixels: on a Retina
@@ -232,6 +246,11 @@ class CallController {
       await this.attachGate(this.gateThreshold);
 
       this.update({ status: "connected", micEnabled: true });
+
+      // We rang them; let us hear it ringing until they pick up.
+      if (credentials.ringing && room.remoteParticipants.size === 0) {
+        this.startRingback(settings.notificationVolume);
+      }
 
       // Camera comes up after connecting, not as part of it: a refused camera
       // permission shouldn't take the whole call down with it.
@@ -433,9 +452,27 @@ class CallController {
       });
   }
 
+  private startRingback(volume: number) {
+    this.stopRingback();
+    this.ringback = {
+      stop: startRingback(volume),
+      timer: window.setTimeout(() => this.stopRingback(), RING_TIMEOUT_MS),
+    };
+  }
+
+  private stopRingback() {
+    if (!this.ringback) return;
+    this.ringback.stop();
+    window.clearTimeout(this.ringback.timer);
+    this.ringback = null;
+  }
+
   private syncParticipants() {
     const room = this.room;
     if (!room) return;
+
+    // Someone picked up.
+    if (room.remoteParticipants.size > 0) this.stopRingback();
 
     const view = (
       participant: RemoteParticipant | Room["localParticipant"],
@@ -496,6 +533,7 @@ class CallController {
 
   private async cleanup() {
     this.stopMembershipRefresh();
+    this.stopRingback();
 
     for (const el of this.audioElements.values()) el.remove();
     this.audioElements.clear();

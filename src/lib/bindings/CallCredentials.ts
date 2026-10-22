@@ -12,4 +12,9 @@ jwt: string,
 /**
  * The LiveKit room name — the Matrix room ID, so every client agrees.
  */
-alias: string, roomId: string, };
+alias: string, roomId: string, 
+/**
+ * We started this call and rang the other end, so the caller should hear
+ * ringback until someone picks up.
+ */
+ringing: boolean, };

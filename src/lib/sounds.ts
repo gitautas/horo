@@ -22,6 +22,8 @@ interface Note {
   wave?: Wave;
   /** Relative loudness, before the user's volume is applied. */
   level?: number;
+  /** Hold at full level and only fade at the very end, instead of decaying. */
+  sustain?: boolean;
 }
 
 export interface Sound {
@@ -194,6 +196,7 @@ function playNotes(notes: Note[], volume: number): OscillatorNode[] {
     const peak = Math.max(0.0001, 0.22 * volume * (note.level ?? 1));
     gain.gain.setValueAtTime(0.0001, at);
     gain.gain.exponentialRampToValueAtTime(peak, at + 0.008);
+    if (note.sustain) gain.gain.setValueAtTime(peak, end - 0.04);
     gain.gain.exponentialRampToValueAtTime(0.0001, end);
 
     osc.connect(gain).connect(ctx.destination);
@@ -225,12 +228,29 @@ export const playCallSound = (id: string, volume: number) =>
   play(CALL_SOUNDS, id, volume);
 
 /** When the last note ends, so a repeat can be timed off the sound itself. */
-function length(sound: Sound): number {
-  return sound.notes.reduce((end, note) => Math.max(end, note.at + note.dur), 0);
+function length(notes: Note[]): number {
+  return notes.reduce((end, note) => Math.max(end, note.at + note.dur), 0);
 }
 
 /** Silence between one ring and the next. A phone breathes between rings. */
 const RING_GAP = 1.6;
+
+/**
+ * What a caller hears while the other end rings: 440 and 480 Hz together for
+ * two seconds, then four of silence, which is the ringback North American
+ * phones use. It's held steady rather than decaying like the rings above, and
+ * quieter: this is "it's ringing over there", not a phone ringing here.
+ */
+const RINGBACK: Note[] = [440, 480].map((freq) => ({
+  at: 0,
+  freq,
+  dur: 2,
+  wave: "sine" as Wave,
+  level: 0.35,
+  sustain: true,
+}));
+
+const RINGBACK_GAP = 4;
 
 /**
  * Ring until the returned function is called.
@@ -245,16 +265,31 @@ const RING_GAP = 1.6;
  */
 export function startRinging(id: string, volume: number): () => void {
   const sound = id === NONE ? null : find(CALL_SOUNDS, id);
-  if (!sound || volume <= 0) return () => {};
+  if (!sound) return () => {};
+  return repeat(sound.notes, volume, RING_GAP);
+}
+
+/**
+ * Ringback until the returned function is called.
+ *
+ * Not one of the user's call sounds, and played even when those are set to
+ * none: it isn't a notification, it's how a caller knows the call went out.
+ */
+export function startRingback(volume: number): () => void {
+  return repeat(RINGBACK, volume, RINGBACK_GAP);
+}
+
+function repeat(notes: Note[], volume: number, gap: number): () => void {
+  if (volume <= 0) return () => {};
 
   let ringing: OscillatorNode[] = [];
 
   const once = () => {
-    ringing = playNotes(sound.notes, volume);
+    ringing = playNotes(notes, volume);
   };
 
   once();
-  const timer = window.setInterval(once, (length(sound) + RING_GAP) * 1000);
+  const timer = window.setInterval(once, (length(notes) + gap) * 1000);
 
   return () => {
     window.clearInterval(timer);

@@ -7,19 +7,9 @@
  * the sound is a consequence of it rather than a second thing to keep in step.
  */
 
-import { call } from "./call";
+import { call, RING_TIMEOUT_MS } from "./call";
 import { startRinging } from "./sounds";
 import { useStore } from "../store";
-
-/**
- * How long we ring before giving up.
- *
- * A caller who has wandered off leaves their `m.call.member` state behind, and
- * nothing in MatrixRTC says "stop ringing" — the membership simply sits there
- * until it expires hours later. Without a limit of our own, a missed call rings
- * until the app is closed.
- */
-export const RING_TIMEOUT_MS = 45_000;
 
 export function startRinger(): () => void {
   let stop: (() => void) | null = null;

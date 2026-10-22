@@ -503,8 +503,8 @@ export const recoverWithKey = (recoveryKey: string) =>
 // calls
 // ---------------------------------------------------------------------------
 
-export const joinCall = (roomId: string) =>
-  invoke<CallCredentials>("join_call", { roomId });
+export const joinCall = (roomId: string, video = false) =>
+  invoke<CallCredentials>("join_call", { roomId, video });
 
 export const leaveCall = (roomId: string) => invoke<void>("leave_call", { roomId });
 
