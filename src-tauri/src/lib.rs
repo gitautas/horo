@@ -65,6 +65,7 @@ pub fn run() {
             commands::get_public_spaces,
             commands::get_space_rooms,
             commands::leave_room,
+            commands::delete_room,
             commands::update_room,
             commands::get_room_permissions,
             commands::invite_user,

@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { call, type CallParticipantView } from "../lib/call";
+import type { NotifyMode } from "../lib/bindings";
 import { accentFor, displayNameFor, formatStamp, localpart } from "../lib/display";
+import { haptic } from "../lib/haptics";
 import * as ipc from "../lib/ipc";
 import { cachedProfile, loadProfile } from "../lib/profiles";
 import type { Profile, RoomSummary } from "../lib/types";
+import { useIsMobile, useLongPress } from "../lib/viewport";
 import {
   filterRooms,
   groupRooms,
@@ -14,6 +17,7 @@ import {
   type RoomFilter,
 } from "../store";
 import { useCallState } from "./CallBar";
+import { ContextMenu, type MenuEntry } from "./ContextMenu";
 import { PresenceDot } from "./Presence";
 import { VoicePanel } from "./VoicePanel";
 import { Avatar, Button, ChannelBadge, dragOff, dragRegion, HoverRow, Icon } from "./ui";
@@ -352,17 +356,15 @@ export function RoomList({
             </div>
 
             {group.rooms.map((room) => (
-              <div key={room.id}>
-                <RoomRow
-                  room={room}
-                  active={room.id === activeRoomId}
-                  onSelect={() => {
-                    void selectRoom(room.id);
-                    if (isVoiceChannel(room)) void joinVoice(room.id);
-                  }}
-                />
-                {isVoiceChannel(room) && <VoiceRoster room={room} />}
-              </div>
+              <RoomEntry
+                key={room.id}
+                room={room}
+                active={room.id === activeRoomId}
+                onSelect={() => {
+                  void selectRoom(room.id);
+                  if (isVoiceChannel(room)) void joinVoice(room.id);
+                }}
+              />
             ))}
           </div>
         ))}
@@ -371,6 +373,169 @@ export function RoomList({
       <VoicePanel />
     </div>
   );
+}
+
+/**
+ * A room in the list, with its context menu — right-click, or press and hold
+ * on a phone, the same as a space in the rail.
+ */
+function RoomEntry({
+  room,
+  active,
+  onSelect,
+}: {
+  room: RoomSummary;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const isMobile = useIsMobile();
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const row = useRef<HTMLDivElement>(null);
+  // A long press ends in a touchend, which the browser follows with a click
+  // that would open the room behind the menu. Swallow that one click.
+  const pressed = useRef(false);
+
+  const longPress = useLongPress(
+    isMobile
+      ? () => {
+          haptic("medium");
+          pressed.current = true;
+          const r = row.current?.getBoundingClientRect();
+          if (r) setMenuAt({ x: r.left + 24, y: r.bottom });
+        }
+      : undefined,
+  );
+
+  return (
+    <div
+      ref={row}
+      {...longPress}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        // On a phone the long press already opened it; Android fires
+        // contextmenu for the same hold.
+        if (!pressed.current) setMenuAt({ x: e.clientX, y: e.clientY });
+      }}
+      onClickCapture={(e) => {
+        if (pressed.current) {
+          pressed.current = false;
+          e.stopPropagation();
+        }
+      }}
+    >
+      <RoomRow room={room} active={active} onSelect={onSelect} />
+      {isVoiceChannel(room) && <VoiceRoster room={room} />}
+      {menuAt && <RoomMenu room={room} at={menuAt} onClose={() => setMenuAt(null)} />}
+    </div>
+  );
+}
+
+const NOTIFY_LABELS: Record<NotifyMode, string> = {
+  all: "all messages",
+  mentions: "only @mentions",
+  mute: "nothing",
+};
+
+function RoomMenu({
+  room,
+  at,
+  onClose,
+}: {
+  room: RoomSummary;
+  at: { x: number; y: number };
+  onClose: () => void;
+}) {
+  const { openRoomDialog, showBanner } = useStore(
+    useShallow((s) => ({ openRoomDialog: s.openRoomDialog, showBanner: s.showBanner })),
+  );
+  // Asked for when the menu opens: "delete" only belongs on it for someone
+  // who can actually do it, and that takes the room's power levels.
+  const [canDelete, setCanDelete] = useState(false);
+  const invited = room.membership === "invited";
+
+  useEffect(() => {
+    if (room.isDirect || invited) return;
+    let cancelled = false;
+    ipc
+      .getRoomPermissions(room.id)
+      .then((p) => !cancelled && setCanDelete(p.canDelete))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [room.id, room.isDirect, invited]);
+
+  function run(work: Promise<void>) {
+    work.catch((e) => showBanner("error", ipc.asUwuError(e).message));
+  }
+
+  const mode = room.notifyMode ?? "all";
+
+  const items: MenuEntry[] = invited
+    ? [{ label: "decline invite", danger: true, onSelect: () => openRoomDialog("leave", room.id) }]
+    : [
+        {
+          label: "mark as read",
+          disabled: !room.hasUnread,
+          onSelect: () => run(ipc.markRoomsRead([room.id])),
+        },
+        { kind: "separator" },
+        {
+          kind: "check",
+          label: room.isDirect ? "mute chat" : "mute room",
+          checked: room.isMuted,
+          onToggle: (next) => run(ipc.setRoomsNotifyMode([room.id], next ? "mute" : null)),
+        },
+        {
+          kind: "submenu",
+          label: "notification settings",
+          hint: NOTIFY_LABELS[mode],
+          items: (["all", "mentions", "mute"] as const).map((m) => ({
+            kind: "radio" as const,
+            label: NOTIFY_LABELS[m],
+            checked: mode === m,
+            onSelect: () => run(ipc.setRoomsNotifyMode([room.id], m)),
+          })),
+        },
+        { kind: "separator" },
+        {
+          label: room.isDirect ? "chat settings" : "edit room",
+          icon: "pencil-simple",
+          onSelect: () => openRoomDialog("settings", room.id),
+        },
+        {
+          label: room.isDirect ? "leave chat" : "leave room",
+          icon: "sign-out",
+          danger: true,
+          onSelect: () => openRoomDialog("leave", room.id),
+        },
+        ...(canDelete
+          ? [
+              {
+                label: "delete room",
+                icon: "trash",
+                danger: true,
+                onSelect: () => openRoomDialog("delete", room.id),
+              } satisfies MenuEntry,
+            ]
+          : []),
+      ];
+
+  items.push(
+    { kind: "separator" },
+    {
+      label: "copy room id",
+      icon: "identification-card",
+      onSelect: () =>
+        run(
+          navigator.clipboard
+            .writeText(room.id)
+            .then(() => showBanner("info", "room id copied")),
+        ),
+    },
+  );
+
+  return <ContextMenu at={at} items={items} onClose={onClose} />;
 }
 
 function RoomRow({

@@ -25,6 +25,7 @@ import { selectActiveRoom, useStore } from "./store";
 import { ChatPane, EmptyPane } from "./components/ChatPane";
 import { CreateRoom } from "./components/CreateRoom";
 import { ExploreSpaces } from "./components/ExploreSpaces";
+import { RoomDialogs } from "./components/RoomDialogs";
 import { SpaceDialogs } from "./components/SpaceDialogs";
 import { DropZone } from "./components/DropZone";
 import { Lightbox } from "./components/Lightbox";
@@ -167,6 +168,7 @@ function Shell() {
       <CreateRoom />
       <ExploreSpaces />
       <SpaceDialogs />
+      <RoomDialogs />
       <IncomingCallModal />
       <VerificationModal />
       <SyncIndicator />

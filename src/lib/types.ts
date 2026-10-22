@@ -122,6 +122,8 @@ export interface RoomPermissions {
   canRename: boolean;
   canSetTopic: boolean;
   canInvite: boolean;
+  /** Outranks everyone else, so "delete" can lock the room and empty it. */
+  canDelete: boolean;
 }
 
 export interface SpaceSummary {

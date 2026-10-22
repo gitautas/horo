@@ -195,6 +195,12 @@ pub async fn leave_room(state: State<'_, AppState>, room_id: String) -> Result<(
     rooms::leave(&*state.core().await?, &parse_room_id(&room_id)?).await
 }
 
+/// Delete a room as far as Matrix allows — see `rooms::delete`.
+#[tauri::command]
+pub async fn delete_room(state: State<'_, AppState>, room_id: String) -> Result<()> {
+    rooms::delete(&*state.core().await?, &parse_room_id(&room_id)?).await
+}
+
 /// Rename a room or change its topic. Omitted fields are left alone.
 #[tauri::command]
 pub async fn update_room(

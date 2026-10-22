@@ -51,6 +51,7 @@ interface Draft {
 const EMPTY_DRAFT: Draft = { body: "", replyTo: null, editing: null };
 
 export type SpaceDialogKind = "leave" | "invite" | "browse";
+export type RoomDialogKind = "settings" | "leave" | "delete";
 
 interface State {
   // session
@@ -117,6 +118,8 @@ interface State {
   showExplore: boolean;
   /** The dialog open for a space from its context menu, if any. */
   spaceDialog: { kind: SpaceDialogKind; spaceId: string } | null;
+  /** A dialog a room's context menu opened. */
+  roomDialog: { kind: RoomDialogKind; roomId: string } | null;
 
   /**
    * Custom emote and sticker packs usable in the room that's open.
@@ -176,6 +179,8 @@ interface Actions {
   closeExplore(): void;
   openSpaceDialog(kind: SpaceDialogKind, spaceId: string): void;
   closeSpaceDialog(): void;
+  openRoomDialog(kind: RoomDialogKind, roomId: string): void;
+  closeRoomDialog(): void;
   updateSettings(patch: Partial<prefs.Settings>): void;
   /** Move a reaction to the front of the recents row. */
   noteReactionUsed(key: string): void;
@@ -231,6 +236,7 @@ const initial: State = {
   showCreateRoom: false,
   showExplore: false,
   spaceDialog: null,
+  roomDialog: null,
   packs: [],
   settings: prefs.load(),
   verificationRequest: null,
@@ -383,6 +389,8 @@ export const useStore = create<State & Actions>((set, get) => ({
   closeExplore: () => set({ showExplore: false }),
   openSpaceDialog: (kind, spaceId) => set({ spaceDialog: { kind, spaceId } }),
   closeSpaceDialog: () => set({ spaceDialog: null }),
+  openRoomDialog: (kind, roomId) => set({ roomDialog: { kind, roomId } }),
+  closeRoomDialog: () => set({ roomDialog: null }),
 
   updateSettings: (patch) =>
     set((s) => {

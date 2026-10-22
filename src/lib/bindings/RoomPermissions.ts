@@ -7,4 +7,9 @@
  * it needs the power-level state event, and the answer only matters for the
  * room you're looking at.
  */
-export type RoomPermissions = { canRename: boolean, canSetTopic: boolean, canInvite: boolean, };
+export type RoomPermissions = { canRename: boolean, canSetTopic: boolean, canInvite: boolean, 
+/**
+ * Whether "delete" can work: it needs the power to lock the room and to
+ * remove every other member, which means outranking all of them.
+ */
+canDelete: boolean, };

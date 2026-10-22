@@ -792,6 +792,9 @@ pub struct RoomPermissions {
     pub can_rename: bool,
     pub can_set_topic: bool,
     pub can_invite: bool,
+    /// Whether "delete" can work: it needs the power to lock the room and to
+    /// remove every other member, which means outranking all of them.
+    pub can_delete: bool,
 }
 
 pub async fn permissions(core: &MatrixCore, room_id: &RoomId) -> Result<RoomPermissions> {
@@ -805,11 +808,94 @@ pub async fn permissions(core: &MatrixCore, room_id: &RoomId) -> Result<RoomPerm
     // authority, not refuse on a guess.
     let levels = room.power_levels_or_default().await;
 
+    let others = others_in(&room, &user_id).await;
+    let can_delete = levels.user_can_send_state(&user_id, StateEventType::RoomJoinRules)
+        && others.iter().all(|other| levels.user_can_kick_user(&user_id, other));
+
     Ok(RoomPermissions {
         can_rename: levels.user_can_send_state(&user_id, StateEventType::RoomName),
         can_set_topic: levels.user_can_send_state(&user_id, StateEventType::RoomTopic),
         can_invite: levels.user_can_invite(&user_id),
+        can_delete,
     })
+}
+
+/// Everyone in the room or on their way in, but us.
+async fn others_in(room: &Room, us: &matrix_sdk::ruma::UserId) -> Vec<matrix_sdk::ruma::OwnedUserId> {
+    use matrix_sdk::RoomMemberships;
+
+    room.members(RoomMemberships::JOIN | RoomMemberships::INVITE | RoomMemberships::KNOCK)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| m.user_id().to_owned())
+        .filter(|id| id != us)
+        .collect()
+}
+
+/// Delete a room, as far as Matrix allows.
+///
+/// There is no delete in Matrix: a room exists as long as any server holds
+/// it. What Discord's "delete channel" means to the people in it is that the
+/// room is gone from their list and nobody can get back in, and that we can
+/// do: take it out of its spaces, lock it to invite only, remove everyone,
+/// then leave and forget it. Its history stays on the servers that have it.
+///
+/// The lock comes before the removals so nobody can walk back in while we're
+/// still working through the list, and the removals before our leave because
+/// once we're out we have no power left to use.
+pub async fn delete(core: &MatrixCore, room_id: &RoomId) -> Result<()> {
+    use matrix_sdk::ruma::events::room::join_rules::{JoinRule, RoomJoinRulesEventContent};
+
+    let room = core.room(&room_id.to_owned())?;
+    let us = core.own_user_id()?;
+
+    let allowed = permissions(core, room_id).await?.can_delete;
+    if !allowed {
+        return Err(Error::Other(
+            "you can't delete this one — someone here has as much power as you".into(),
+        ));
+    }
+
+    // Best-effort: a space we can't edit still lists the room, but the room
+    // is just as unreachable once it's locked and empty.
+    for space_id in collect_parent_spaces(&room).await {
+        if let Err(e) = unlist_from_space(core, &space_id, room_id).await {
+            tracing::warn!("couldn't take {room_id} out of {space_id}: {e}");
+        }
+    }
+
+    room.send_state_event(RoomJoinRulesEventContent::new(JoinRule::Invite)).await?;
+
+    for user in others_in(&room, &us).await {
+        if let Err(e) = room.kick_user(&user, Some("the room was deleted")).await {
+            tracing::warn!("couldn't remove {user} from {room_id}: {e}");
+        }
+    }
+
+    super::timeline::close_all(core, room_id).await;
+    room.leave().await?;
+    // Forgetting is tidying up: the room has already gone from the sidebar.
+    if let Some(room) = core.client.get_room(room_id) {
+        if let Err(e) = room.forget().await {
+            tracing::warn!("left {room_id} but couldn't forget it: {e}");
+        }
+    }
+    Ok(())
+}
+
+/// Take a room out of a space. Content `{}` is how the spec says "removed";
+/// an empty `via` alone reads as a child to clients that don't check it.
+async fn unlist_from_space(core: &MatrixCore, space_id: &str, child: &RoomId) -> Result<()> {
+    let space_id = RoomId::parse(space_id)?;
+    let space = core
+        .client
+        .get_room(&space_id)
+        .ok_or_else(|| Error::UnknownRoom(space_id.to_string()))?;
+    space
+        .send_state_event_raw("m.space.child", child.as_str(), serde_json::json!({}))
+        .await?;
+    Ok(())
 }
 
 /// How long a join may take before we give up on hearing back.
