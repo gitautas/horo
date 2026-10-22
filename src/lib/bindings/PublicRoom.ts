@@ -6,6 +6,10 @@
  */
 export type PublicRoom = { id: string, name: string | null, topic: string | null, alias: string | null, avatarUrl: string | null, members: number, isSpace: boolean, 
 /**
+ * A voice room — see `rooms::is_call_room_type`.
+ */
+isVoice: boolean, 
+/**
  * `public` | `knock` | `invite` | `restricted` | … — the spec's spelling.
  * Only `public` can be walked into; the rest are shown so a preview
  * doesn't silently hide half a space.

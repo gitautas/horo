@@ -132,7 +132,9 @@ function Dialog() {
             hint={
               isPublic
                 ? "listed in your server's directory, and anyone can walk in"
-                : "invite only"
+                : activeSpace && addToSpace
+                  ? `anyone in ${activeSpace.name} can join; nobody else without an invite`
+                  : "invite only"
             }
             on={isPublic}
             onToggle={setIsPublic}

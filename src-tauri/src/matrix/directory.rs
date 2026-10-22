@@ -31,6 +31,8 @@ pub struct PublicRoom {
     pub avatar_url: Option<String>,
     pub members: u64,
     pub is_space: bool,
+    /// A voice room — see `rooms::is_call_room_type`.
+    pub is_voice: bool,
     /// `public` | `knock` | `invite` | `restricted` | … — the spec's spelling.
     /// Only `public` can be walked into; the rest are shown so a preview
     /// doesn't silently hide half a space.
@@ -147,6 +149,7 @@ fn from_directory(chunk: PublicRoomsChunk, via: &[String]) -> PublicRoom {
         avatar_url: chunk.avatar_url.map(|u| u.to_string()),
         members: u64::from(chunk.num_joined_members),
         is_space: chunk.room_type == Some(RoomType::Space),
+        is_voice: is_voice(chunk.room_type.as_ref()),
         join_rule: join_rule_str(&chunk.join_rule),
         via: via.to_vec(),
     }
@@ -161,9 +164,14 @@ fn from_hierarchy(summary: HierarchySummary, via: Vec<String>) -> PublicRoom {
         avatar_url: summary.avatar_url.map(|u| u.to_string()),
         members: u64::from(summary.num_joined_members),
         is_space: summary.room_type == Some(RoomType::Space),
+        is_voice: is_voice(summary.room_type.as_ref()),
         join_rule: join_rule_str(&summary.join_rule.kind()),
         via,
     }
+}
+
+fn is_voice(room_type: Option<&RoomType>) -> bool {
+    crate::matrix::rooms::is_call_room_type(room_type.map(|t| t.as_str()))
 }
 
 fn join_rule_str(kind: &JoinRuleKind) -> String {
@@ -174,4 +182,39 @@ fn join_rule_str(kind: &JoinRuleKind) -> String {
 /// join: they're hints, and the rest may well be enough.
 pub fn parse_via(via: &[String]) -> Vec<OwnedServerName> {
     via.iter().filter_map(|s| ServerName::parse(s).ok()).collect()
+}
+
+/// Someone the user directory knows, for suggesting as an invite is typed.
+#[derive(Debug, Clone, serde::Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct UserSuggestion {
+    pub user_id: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+/// How many people to suggest: enough to find someone, few enough to scan.
+const USER_SEARCH_LIMIT: u64 = 8;
+
+/// Search the homeserver's user directory by name or ID.
+///
+/// Synapse answers with people who share a room with us, plus anyone in a
+/// public room — not everyone on the server, so someone new can still be
+/// invited by typing their full ID.
+pub async fn search_users(core: &MatrixCore, term: &str) -> Result<Vec<UserSuggestion>> {
+    let term = term.trim();
+    if term.is_empty() {
+        return Ok(Vec::new());
+    }
+    let response = core.client.search_users(term, USER_SEARCH_LIMIT).await?;
+    Ok(response
+        .results
+        .into_iter()
+        .map(|user| UserSuggestion {
+            user_id: user.user_id.to_string(),
+            display_name: user.display_name.filter(|n| !n.trim().is_empty()),
+            avatar_url: user.avatar_url.map(|u| u.to_string()),
+        })
+        .collect())
 }

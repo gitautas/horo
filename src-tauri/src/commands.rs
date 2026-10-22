@@ -189,6 +189,35 @@ pub async fn get_space_rooms(
     directory::space_rooms(&*state.core().await?, &parse_room_id(&space_id)?).await
 }
 
+/// People the user directory matches, for suggesting while an ID is typed.
+#[tauri::command]
+pub async fn search_users(
+    state: State<'_, AppState>,
+    term: String,
+) -> Result<Vec<directory::UserSuggestion>> {
+    directory::search_users(&*state.core().await?, &term).await
+}
+
+/// Join a space and the rooms in it — see `rooms::join_space`.
+#[tauri::command]
+pub async fn join_space(
+    state: State<'_, AppState>,
+    space_id: String,
+    via: Option<Vec<String>>,
+) -> Result<rooms::JoinSpaceResult> {
+    rooms::join_space(&*state.core().await?, &parse_room_id(&space_id)?, &via.unwrap_or_default())
+        .await
+}
+
+/// Let a space's members into its invite-only rooms.
+#[tauri::command]
+pub async fn open_space_rooms(
+    state: State<'_, AppState>,
+    space_id: String,
+) -> Result<rooms::OpenedRooms> {
+    rooms::open_space_rooms(&*state.core().await?, &parse_room_id(&space_id)?).await
+}
+
 /// Leave a room. Doesn't forget it — see `rooms::leave`.
 #[tauri::command]
 pub async fn leave_room(state: State<'_, AppState>, room_id: String) -> Result<()> {

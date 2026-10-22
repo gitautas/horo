@@ -84,3 +84,23 @@ describe("filterRooms with hideMuted", () => {
     expect(ids).toEqual(["!elsewhere", "!loud", "!quiet"]);
   });
 });
+
+describe("filterRooms with spaces", () => {
+  const spaces = [space("!a", ["!child"])];
+  const rooms = [
+    room("!joined-space", { isSpace: true }),
+    room("!invited-space", { isSpace: true, membership: "invited" }),
+    room("!child"),
+  ];
+  const base = { filter: "all" as const, search: "", spaces };
+
+  it("shows an invite to a space with the other invites", () => {
+    const ids = filterRooms(rooms, { ...base, activeSpaceId: null }).map((r) => r.id).sort();
+    expect(ids).toEqual(["!child", "!invited-space"]);
+  });
+
+  it("keeps it out of a space's own list", () => {
+    const ids = filterRooms(rooms, { ...base, activeSpaceId: "!a" }).map((r) => r.id);
+    expect(ids).toEqual(["!child"]);
+  });
+});

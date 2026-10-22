@@ -25,6 +25,7 @@ import { selectActiveRoom, useStore } from "./store";
 import { ChatPane, EmptyPane } from "./components/ChatPane";
 import { CreateRoom } from "./components/CreateRoom";
 import { ExploreSpaces } from "./components/ExploreSpaces";
+import { InvitePane } from "./components/InvitePane";
 import { RoomDialogs } from "./components/RoomDialogs";
 import { SpaceDialogs } from "./components/SpaceDialogs";
 import { DropZone } from "./components/DropZone";
@@ -261,7 +262,15 @@ function DesktopPanes({ room, showInfo }: { room: RoomSummary | undefined; showI
         {listHandle}
       </div>
 
-      {room ? <ChatPane room={room} /> : <EmptyPane />}
+      {room ? (
+        room.membership === "invited" ? (
+          <InvitePane room={room} />
+        ) : (
+          <ChatPane room={room} />
+        )
+      ) : (
+        <EmptyPane />
+      )}
 
       {infoOpen && (
         // A wrapper for the handle because the panel itself scrolls, and an
@@ -312,7 +321,11 @@ function MobilePanes({ room, showInfo }: { room: RoomSummary | undefined; showIn
   if (room) {
     return (
       <SwipeBack onBack={leaveRoom}>
-        <ChatPane room={room} onBack={leaveRoom} />
+        {room.membership === "invited" ? (
+          <InvitePane room={room} onBack={leaveRoom} />
+        ) : (
+          <ChatPane room={room} onBack={leaveRoom} />
+        )}
       </SwipeBack>
     );
   }

@@ -1,9 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { displayNameFor } from "../lib/display";
 import * as ipc from "../lib/ipc";
+import type { UserSuggestion } from "../lib/types";
 import { roomsOnlyInSpace, useStore } from "../store";
 import { SpaceRooms } from "./ExploreSpaces";
-import { Button, Modal, RaveLabel, Spinner, Toggle } from "./ui";
+import { Avatar, Button, Modal, RaveLabel, Spinner, Toggle } from "./ui";
 import { corner, headingSize, space, textSize } from "../lib/scale";
 
 /**
@@ -151,8 +153,12 @@ function listNames(names: string[], shown = 3): string {
 /**
  * Invite someone to a space by their Matrix ID.
  *
- * Only the space: the rooms inside it are theirs to pick once they're in, the
- * same as anyone who finds the space in the directory.
+ * Only the space: accepting it joins them to every room the space lets its
+ * members into, the way joining a Discord server does.
+ *
+ * Typing a name suggests people from the homeserver's user directory, so
+ * nobody has to remember an exact `@name:server`. A full ID still works for
+ * someone the directory doesn't know.
  */
 function InviteToSpace({ spaceId, name }: { spaceId: string; name: string }) {
   const close = useStore((s) => s.closeSpaceDialog);
@@ -160,13 +166,48 @@ function InviteToSpace({ spaceId, name }: { spaceId: string; name: string }) {
   const [userId, setUserId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Asked once on open, so someone without the power finds out before typing
+  // a name rather than after. Unknown counts as allowed: the server decides.
+  const [canInvite, setCanInvite] = useState(true);
+  // Who's already in or invited, so a suggestion can say so instead of
+  // offering an invite the server will turn down.
+  const [members, setMembers] = useState<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    let live = true;
+    ipc
+      .getRoomPermissions(spaceId)
+      .then((p) => live && setCanInvite(p.canInvite))
+      .catch(() => {});
+    ipc
+      .getMembers(spaceId)
+      .then((list) => live && setMembers(new Map(list.map((m) => [m.userId, m.membership]))))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [spaceId]);
 
   const trimmed = userId.trim();
   // `@name:server` — loose on purpose; the server has the final say.
   const plausible = /^@[^:\s]+:\S+$/.test(trimmed);
 
+  const { suggestions, clear } = useUserSuggestions(trimmed);
+  const [highlight, setHighlight] = useState(0);
+  // Start on the first person who can actually be invited, so Enter picks them.
+  useEffect(() => {
+    setHighlight(Math.max(0, suggestions.findIndex((s) => !members.has(s.userId))));
+  }, [suggestions, members]);
+
+  function pick(suggestion: UserSuggestion) {
+    if (members.has(suggestion.userId)) return;
+    setUserId(suggestion.userId);
+    setError(null);
+    clear(suggestion.userId);
+  }
+
   async function invite() {
-    if (!plausible || busy) return;
+    if (!plausible || busy || !canInvite) return;
     setBusy(true);
     setError(null);
     try {
@@ -186,10 +227,25 @@ function InviteToSpace({ spaceId, name }: { spaceId: string; name: string }) {
         className="selectable"
         value={userId}
         autoFocus
-        placeholder="@someone:server.tld"
-        onChange={(e) => setUserId(e.target.value)}
+        placeholder="a name, or @someone:server.tld"
+        role="combobox"
+        aria-expanded={suggestions.length > 0}
+        aria-controls="invite-suggestions"
+        onChange={(e) => {
+          setUserId(e.target.value);
+          setError(null);
+        }}
         onKeyDown={(e) => {
-          if (e.key === "Enter") void invite();
+          if (suggestions.length > 0 && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+            e.preventDefault();
+            const step = e.key === "ArrowDown" ? 1 : -1;
+            setHighlight((h) => (h + step + suggestions.length) % suggestions.length);
+          } else if (e.key === "Enter") {
+            const chosen = suggestions[highlight];
+            // A suggestion is picked first; Enter again sends the invite.
+            if (chosen && chosen.userId !== trimmed && !members.has(chosen.userId)) pick(chosen);
+            else void invite();
+          }
         }}
         style={{
           width: "100%",
@@ -202,22 +258,159 @@ function InviteToSpace({ spaceId, name }: { spaceId: string; name: string }) {
           fontSize: textSize(14),
         }}
       />
+
+      {suggestions.length > 0 && (
+        <div
+          id="invite-suggestions"
+          role="listbox"
+          style={{
+            marginTop: 6,
+            padding: space(4),
+            borderRadius: corner(14),
+            background: "var(--surface-inset)",
+            border: "1px solid var(--border-subtle)",
+            display: "flex",
+            flexDirection: "column",
+            gap: space(2),
+          }}
+        >
+          {suggestions.map((suggestion, i) => (
+            <SuggestionRow
+              key={suggestion.userId}
+              suggestion={suggestion}
+              membership={members.get(suggestion.userId)}
+              highlighted={i === highlight}
+              onHover={() => setHighlight(i)}
+              onPick={() => pick(suggestion)}
+            />
+          ))}
+        </div>
+      )}
+
       <div
         style={{
           fontSize: textSize(12),
-          color: error ? "var(--status-danger)" : "var(--text-tertiary)",
+          color: error || !canInvite ? "var(--status-danger)" : "var(--text-tertiary)",
           lineHeight: 1.45,
           marginTop: 8,
         }}
       >
-        {error ?? "they get an invite to the space, and pick which rooms to join once they're in."}
+        {error ??
+          (canInvite
+            ? "they get an invite to the space. joining it puts them in every room its members can get into."
+            : `you can't invite people to ${name} — that takes more power than you have there. ask one of its admins.`)}
       </div>
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 20 }}>
-        <Button onClick={() => void invite()} disabled={!plausible || busy}>
+        <Button onClick={() => void invite()} disabled={!plausible || busy || !canInvite}>
           {busy ? <Spinner size={14} color="var(--text-on-accent)" /> : "invite"}
         </Button>
       </div>
     </Modal>
+  );
+}
+
+/** How long typing has to pause before the directory is asked. */
+const SEARCH_DELAY_MS = 200;
+
+/**
+ * Directory matches for what's been typed, after a short pause so every
+ * keystroke isn't a request. Stays quiet for a term that's just been picked
+ * from the list — the suggestion has done its job.
+ */
+function useUserSuggestions(term: string) {
+  const [suggestions, setSuggestions] = useState<UserSuggestion[]>([]);
+  const [picked, setPicked] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (term.length < 2 || term === picked) {
+      setSuggestions([]);
+      return;
+    }
+    let live = true;
+    const timer = window.setTimeout(() => {
+      ipc
+        .searchUsers(term)
+        .then((found) => live && setSuggestions(found))
+        // A directory that won't answer just means no suggestions; a full ID
+        // can still be typed and invited.
+        .catch(() => live && setSuggestions([]));
+    }, SEARCH_DELAY_MS);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [term, picked]);
+
+  return {
+    suggestions,
+    clear: (chosen: string) => {
+      setPicked(chosen);
+      setSuggestions([]);
+    },
+  };
+}
+
+function SuggestionRow({
+  suggestion,
+  membership,
+  highlighted,
+  onHover,
+  onPick,
+}: {
+  suggestion: UserSuggestion;
+  /** `join` or `invite` when they're already in the space or on their way. */
+  membership?: string;
+  highlighted: boolean;
+  onHover: () => void;
+  onPick: () => void;
+}) {
+  const label = displayNameFor(suggestion.userId, suggestion.displayName);
+  const taken = membership === "join" ? "already in" : membership === "invite" ? "invited" : null;
+
+  return (
+    <div
+      role="option"
+      aria-selected={highlighted}
+      aria-disabled={!!taken}
+      onMouseEnter={onHover}
+      // `mousedown` rather than `click`, so the input keeps focus.
+      onMouseDown={(e) => {
+        e.preventDefault();
+        onPick();
+      }}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: space(10),
+        padding: space("6px 8px"),
+        borderRadius: corner(10),
+        cursor: taken ? "default" : "pointer",
+        opacity: taken ? 0.5 : 1,
+        background: highlighted && !taken ? "rgba(255,255,255,.06)" : "transparent",
+      }}
+    >
+      <Avatar id={suggestion.userId} name={label} mxc={suggestion.avatarUrl} size={28} radius={10} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="uwu-ellipsis" style={{ fontSize: textSize(13.5), fontWeight: 600 }}>
+          {label}
+        </div>
+        <div
+          className="uwu-ellipsis"
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: textSize(11),
+            color: "var(--text-tertiary)",
+          }}
+        >
+          {suggestion.userId}
+        </div>
+      </div>
+      {taken && (
+        <span style={{ fontSize: textSize(11), color: "var(--text-tertiary)", flex: "none" }}>
+          {taken}
+        </span>
+      )}
+    </div>
   );
 }
 

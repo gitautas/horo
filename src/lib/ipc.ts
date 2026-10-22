@@ -17,9 +17,11 @@ import type {
   ProfileUpdate,
   HomeserverInfo,
   ImagePack,
+  JoinSpaceResult,
   NewRoom,
   NewRoomResult,
   NotifyMode,
+  OpenedRooms,
   OwnPresence,
   PackEdit,
   PackRoom,
@@ -45,6 +47,7 @@ import type {
   TimelineItem,
   TimelineUpdate,
   TypingUpdate,
+  UserSuggestion,
   LatestRelease,
   UpdateMode,
   UserContext,
@@ -157,6 +160,18 @@ export const getPublicSpaces = (opts: { server?: string; search?: string; since?
 /** The rooms directly inside a space, readable without joining it. */
 export const getSpaceRooms = (spaceId: string) =>
   invoke<PublicRoom[]>("get_space_rooms", { spaceId });
+
+/** People the homeserver's user directory matches, for invite suggestions. */
+export const searchUsers = (term: string) =>
+  invoke<UserSuggestion[]>("search_users", { term });
+
+/** Join a space and every room in it we're allowed into. */
+export const joinSpace = (spaceId: string, via: string[] = []) =>
+  invoke<JoinSpaceResult>("join_space", { spaceId, via });
+
+/** Let a space's members into its invite-only rooms. */
+export const openSpaceRooms = (spaceId: string) =>
+  invoke<OpenedRooms>("open_space_rooms", { spaceId });
 
 /**
  * Leave a room. It stops being listed, but nothing local is deleted — this

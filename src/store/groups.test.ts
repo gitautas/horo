@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { RoomSummary } from "../lib/bindings";
-import { groupRooms } from "./index";
+import type { PublicRoom, RoomSummary } from "../lib/bindings";
+import { groupRooms, withUnjoined } from "./index";
 
 function room(id: string, over: Partial<RoomSummary> = {}): RoomSummary {
   return {
@@ -39,5 +39,36 @@ describe("groupRooms", () => {
   it("leaves direct messages most recent first", () => {
     const rooms = [room("kai", { isDirect: true }), room("ann", { isDirect: true })];
     expect(titles(rooms)).toEqual([["direct messages", ["kai", "ann"]]]);
+  });
+});
+
+describe("withUnjoined", () => {
+  const preview = (id: string, over: Partial<PublicRoom> = {}) =>
+    ({ id, name: id, isSpace: false, isVoice: false, via: [], ...over }) as PublicRoom;
+  const sections = (groups: ReturnType<typeof withUnjoined>) =>
+    groups.map((g) => [g.title, g.rooms.map((r) => r.id), (g.unjoined ?? []).map((r) => r.id)]);
+
+  it("lists them after the rooms already joined, in the space's order", () => {
+    const groups = groupRooms([room("general")]);
+    expect(sections(withUnjoined(groups, [preview("b"), preview("a")], ["b", "a"]))).toEqual([
+      ["rooms", ["general"], ["b", "a"]],
+    ]);
+  });
+
+  it("puts voice rooms with the voice rooms", () => {
+    const groups = groupRooms([room("general"), room("hangout", { isVideoRoom: true })]);
+    expect(sections(withUnjoined(groups, [preview("gaming", { isVoice: true })]))).toEqual([
+      ["rooms", ["general"], []],
+      ["voice", ["hangout"], ["gaming"]],
+    ]);
+  });
+
+  it("brings a section along when nothing in it is joined yet", () => {
+    const groups = groupRooms([room("kai", { isDirect: true }), room("hangout", { isVideoRoom: true })]);
+    expect(sections(withUnjoined(groups, [preview("general")]))).toEqual([
+      ["direct messages", ["kai"], []],
+      ["rooms", [], ["general"]],
+      ["voice", ["hangout"], []],
+    ]);
   });
 });

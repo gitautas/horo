@@ -675,12 +675,27 @@ pub async fn create(core: &MatrixCore, new: NewRoom) -> Result<NewRoomResult> {
     // Encryption can only ever be turned on here. There is no supported way to
     // encrypt a room after the fact, and no way at all to undo it.
     if new.encrypted {
-        request.initial_state = vec![
+        request.initial_state.push(
             InitialStateEvent::with_empty_state_key(
                 RoomEncryptionEventContent::with_recommended_defaults(),
             )
             .to_raw_any(),
-        ];
+        );
+    }
+
+    // A private room made inside a space is the space's, the way a Discord
+    // channel belongs to its server: anyone in the space can walk in, and
+    // nobody else can. Invite-only would leave everyone the space lets in
+    // looking at a list of rooms they can't open.
+    if !new.is_public {
+        if let Some(space_id) = &new.parent_space {
+            request.initial_state.push(
+                InitialStateEvent::with_empty_state_key(space_members_only(RoomId::parse(
+                    space_id,
+                )?))
+                .to_raw_any(),
+            );
+        }
     }
 
     // Every room, not just voice rooms: a text room has a call button too.
@@ -709,6 +724,126 @@ pub async fn create(core: &MatrixCore, new: NewRoom) -> Result<NewRoomResult> {
     };
 
     Ok(NewRoomResult { room_id: room_id.to_string(), space_warning })
+}
+
+/// Join rules that let in whoever is in `space`, and nobody else uninvited.
+fn space_members_only(
+    space: matrix_sdk::ruma::OwnedRoomId,
+) -> matrix_sdk::ruma::events::room::join_rules::RoomJoinRulesEventContent {
+    use matrix_sdk::ruma::events::room::join_rules::{AllowRule, RoomJoinRulesEventContent};
+    RoomJoinRulesEventContent::restricted(vec![AllowRule::room_membership(space)])
+}
+
+/// How joining a space and its rooms went.
+#[derive(Debug, Clone, serde::Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct JoinSpaceResult {
+    /// Rooms joined along with the space.
+    pub joined: u32,
+    /// Rooms in it we couldn't get into: invite-only ones, and failures.
+    pub left_out: u32,
+}
+
+/// Join a space and every room in it we're allowed into — joining a Discord
+/// server, rather than joining a folder and then each room by hand.
+///
+/// Rooms are best-effort: the space is the thing asked for, and a room that
+/// won't have us is counted rather than undoing the rest. Rooms joined
+/// later can still be joined from the sidebar, which lists the ones we're
+/// not in.
+pub async fn join_space(
+    core: &MatrixCore,
+    space_id: &RoomId,
+    via: &[String],
+) -> Result<JoinSpaceResult> {
+    join(core, space_id.as_str(), via).await?;
+
+    let children = super::directory::space_rooms(core, space_id).await?;
+    let mut result = JoinSpaceResult { joined: 0, left_out: 0 };
+
+    for child in children {
+        if child.is_space {
+            continue;
+        }
+        let already = RoomId::parse(&child.id)
+            .ok()
+            .and_then(|id| core.client.get_room(&id))
+            .is_some_and(|room| room.state() == RoomState::Joined);
+        if already {
+            continue;
+        }
+        // Only these can be walked into; asking for the rest just fails.
+        if child.join_rule != "public" && child.join_rule != "restricted" {
+            result.left_out += 1;
+            continue;
+        }
+        // Their `via` first, then the space's: a child with none is usually on
+        // the same server as the space.
+        let child_via = if child.via.is_empty() { via } else { &child.via };
+        match join(core, &child.id, child_via).await {
+            Ok(_) => result.joined += 1,
+            Err(e) => {
+                tracing::warn!("joined {space_id} but not its room {}: {e}", child.id);
+                result.left_out += 1;
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+/// How opening a space's rooms to its members went.
+#[derive(Debug, Clone, serde::Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedRooms {
+    /// Invite-only rooms that space members can now join.
+    pub opened: u32,
+    /// Invite-only rooms we don't have the power to change.
+    pub not_allowed: u32,
+}
+
+/// Let everyone in a space into its invite-only rooms.
+///
+/// For spaces whose rooms were made before rooms followed their space: those
+/// are invite-only, so someone new to the space sees nothing they can open.
+/// Public rooms are already open, and rooms with other rules were set that
+/// way on purpose, so only invite-only ones change.
+pub async fn open_space_rooms(core: &MatrixCore, space_id: &RoomId) -> Result<OpenedRooms> {
+    use matrix_sdk::ruma::{events::StateEventType, room::JoinRule};
+
+    let space = core.room(&space_id.to_owned())?;
+    let us = core.own_user_id()?;
+    let mut result = OpenedRooms { opened: 0, not_allowed: 0 };
+
+    for child in space_children(&space).await {
+        let Some(room) = RoomId::parse(&child).ok().and_then(|id| core.client.get_room(&id))
+        else {
+            continue;
+        };
+        if room.state() != RoomState::Joined || room.is_space() {
+            continue;
+        }
+        if !matches!(room.join_rule(), Some(JoinRule::Invite)) {
+            continue;
+        }
+
+        let levels = room.power_levels_or_default().await;
+        if !levels.user_can_send_state(&us, StateEventType::RoomJoinRules) {
+            result.not_allowed += 1;
+            continue;
+        }
+        match room.send_state_event(space_members_only(space_id.to_owned())).await {
+            Ok(_) => result.opened += 1,
+            Err(e) => {
+                tracing::warn!("couldn't open {child} to {space_id}: {e}");
+                result.not_allowed += 1;
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 /// Record a room as a child of a space, from both ends.
@@ -1088,8 +1223,52 @@ pub async fn mark_read(core: &MatrixCore, room_id: &RoomId) -> Result<()> {
 
 pub async fn invite(core: &MatrixCore, room_id: &RoomId, user_id: &str) -> Result<()> {
     let user_id = matrix_sdk::ruma::UserId::parse(user_id)?;
-    core.room(&room_id.to_owned())?.invite_user_by_id(&user_id).await?;
+    let room = core.room(&room_id.to_owned())?;
+
+    // The server's answer to every one of these is the same 403, "Event is not
+    // authorized", which tells nobody what to do about it. We have the state
+    // to say which it is, so say it before asking.
+    let us = core.own_user_id()?;
+    let levels = room.power_levels_or_default().await;
+    let name = room
+        .cached_display_name()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| "this room".to_owned());
+    if let Some(problem) = invite_problem(
+        levels.user_can_invite(&us),
+        room.get_member(&user_id).await.ok().flatten().map(|m| m.membership().clone()),
+        user_id.as_str(),
+        &name,
+    ) {
+        return Err(Error::Other(problem));
+    }
+
+    room.invite_user_by_id(&user_id).await?;
     Ok(())
+}
+
+/// Why an invite can't work, from what we know before sending it.
+fn invite_problem(
+    can_invite: bool,
+    their_membership: Option<MembershipState>,
+    user_id: &str,
+    room_name: &str,
+) -> Option<String> {
+    if !can_invite {
+        return Some(format!(
+            "you can't invite people to {room_name} — that takes more power than you have \
+             there. ask one of its admins to invite them, or to raise yours"
+        ));
+    }
+    match their_membership {
+        Some(MembershipState::Ban) => Some(format!(
+            "{user_id} is banned from {room_name}, so they can't be invited until someone \
+             unbans them"
+        )),
+        Some(MembershipState::Join) => Some(format!("{user_id} is already in {room_name}")),
+        Some(MembershipState::Invite) => Some(format!("{user_id} already has an invite")),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1136,6 +1315,30 @@ mod room_type_tests {
         children.sort_by(ChildOrder::cmp);
         let ids: Vec<_> = children.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(ids, ["!a", "!b", "!early-unordered", "!late-unordered"]);
+    }
+
+    #[test]
+    fn an_invite_says_why_it_cant_work() {
+        let problem = |can, m| invite_problem(can, m, "@faux:m.uwu.lt", "UwU");
+
+        assert!(problem(false, None).unwrap().contains("more power"));
+        assert!(problem(true, Some(MembershipState::Ban)).unwrap().contains("banned"));
+        assert!(problem(true, Some(MembershipState::Join)).unwrap().contains("already in"));
+        // Someone who left, or was never here, is exactly who invites are for.
+        assert_eq!(problem(true, Some(MembershipState::Leave)), None);
+        assert_eq!(problem(true, None), None);
+    }
+
+    #[test]
+    fn a_private_room_in_a_space_lets_its_members_in() {
+        let space = matrix_sdk::ruma::owned_room_id!("!space:veil.gg");
+        assert_eq!(
+            serde_json::to_value(space_members_only(space)).unwrap(),
+            serde_json::json!({
+                "join_rule": "restricted",
+                "allow": [{ "type": "m.room_membership", "room_id": "!space:veil.gg" }],
+            }),
+        );
     }
 
     #[test]

@@ -191,7 +191,8 @@ function SpaceRow({
     if (busy) return;
     setBusy(true);
     try {
-      await ipc.joinRoom(sp.id, sp.via);
+      // Its rooms come too, the way joining a Discord server does.
+      await ipc.joinSpace(sp.id, sp.via);
       await waitForSpace(sp.id, refreshSpaces);
       setActiveSpace(sp.id);
       close();
@@ -553,7 +554,7 @@ function memberCount(n: number): string {
  * Spaces aren't pushed like rooms are — the list is re-read on a slow poll —
  * so this asks for it directly until the space is there.
  */
-async function waitForSpace(
+export async function waitForSpace(
   spaceId: string,
   refreshSpaces: () => Promise<void>,
   timeoutMs = 5000,

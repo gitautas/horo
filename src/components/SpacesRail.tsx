@@ -404,6 +404,25 @@ function SpaceMenu({
     },
     { kind: "separator" },
     { label: "invite to space", onSelect: () => openSpaceDialog("invite", spaceId) },
+    {
+      label: "let members into its rooms",
+      hint: "opens invite-only rooms to everyone in the space",
+      onSelect: () =>
+        run(
+          ipc.openSpaceRooms(spaceId).then(({ opened, notAllowed }) => {
+            const rooms = (n: number) => (n === 1 ? "1 room" : `${n} rooms`);
+            const message =
+              opened === 0 && notAllowed === 0
+                ? "everyone in the space can already get into its rooms"
+                : opened === 0
+                  ? `you can't change who gets into ${notAllowed === 1 ? "its invite-only room" : `its ${notAllowed} invite-only rooms`}`
+                  : notAllowed === 0
+                    ? `opened ${rooms(opened)} to the space`
+                    : `opened ${rooms(opened)} to the space; ${rooms(notAllowed)} need someone with more power`;
+            showBanner("info", message);
+          }),
+        ),
+    },
     { kind: "separator" },
     {
       kind: "check",

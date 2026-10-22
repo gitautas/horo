@@ -15,6 +15,7 @@ import type {
   ImagePack,
   Presence,
   PresenceUpdate,
+  PublicRoom,
   RoomsSnapshot,
   RoomsUpdate,
   RoomSummary,
@@ -320,6 +321,9 @@ export const useStore = create<State & Actions>((set, get) => ({
     set({ activeRoomId: roomId, activeThreadRoot: null, packs: [] });
     if (!roomId) return;
 
+    // An invite has no timeline we can read yet; the pane asks to accept it.
+    if (get().rooms.find((r) => r.id === roomId)?.membership === "invited") return;
+
     // Packs are wanted before the picker opens, not when it does — opening it
     // should never be the thing that waits on a round trip.
     void get().loadPacks(roomId);
@@ -599,7 +603,9 @@ export function filterRooms(
   const space = activeSpaceId ? spaces.find((s) => s.id === activeSpaceId) : undefined;
 
   const visible = rooms.filter((room) => {
-    if (room.isSpace) return false;
+    // A space you're in is the rail's, but one you've been invited to has
+    // nowhere else to show up — it waits with the other invites.
+    if (room.isSpace && (room.membership !== "invited" || activeSpaceId)) return false;
     // Rooms that exist to hold something — an image pack, say — are not places
     // anyone talks, so they don't belong in a list of conversations.
     if (room.isUtility) return false;
@@ -686,6 +692,8 @@ export function roomsOnlyInSpace(
 export interface RoomGroup {
   title: string;
   rooms: RoomSummary[];
+  /** Rooms in the open space we haven't joined, listed after the ones we have. */
+  unjoined?: PublicRoom[];
 }
 
 /**
@@ -724,14 +732,53 @@ export function groupRooms(rooms: RoomSummary[], order: string[] = []): RoomGrou
   return groups;
 }
 
+/**
+ * Add the open space's rooms we aren't in to the sections they belong in,
+ * the way Discord lists every channel in a server whether you've opened it
+ * or not. They go after the joined ones, in the space's order, and bring
+ * their section with them if it had nothing joined in it.
+ */
+export function withUnjoined(
+  groups: RoomGroup[],
+  unjoined: PublicRoom[],
+  order: string[] = [],
+): RoomGroup[] {
+  if (unjoined.length === 0) return groups;
+
+  const sorted = placeOrder(unjoined, order);
+  const extra: [string, PublicRoom[]][] = [
+    ["rooms", sorted.filter((r) => !r.isVoice)],
+    ["voice", sorted.filter((r) => r.isVoice)],
+  ];
+
+  const out = groups.map((g) => ({ ...g }));
+  for (const [title, rooms] of extra) {
+    if (rooms.length === 0) continue;
+    const group = out.find((g) => g.title === title);
+    if (group) {
+      group.unjoined = rooms;
+    } else {
+      // Rooms sit above voice, and both below DMs and invites.
+      const at = title === "rooms" ? out.findIndex((g) => g.title === "voice") : -1;
+      const section = { title, rooms: [], unjoined: rooms };
+      if (at === -1) out.push(section);
+      else out.splice(at, 0, section);
+    }
+  }
+  return out;
+}
+
 /** Rooms in `order` first, in that order; the rest after, by name. */
-function placeOrder(rooms: RoomSummary[], order: string[]): RoomSummary[] {
+function placeOrder<T extends { id: string; name: string | null }>(
+  rooms: T[],
+  order: string[],
+): T[] {
   const position = new Map(order.map((id, i) => [id, i]));
-  const at = (r: RoomSummary) => position.get(r.id) ?? Number.POSITIVE_INFINITY;
+  const at = (r: T) => position.get(r.id) ?? Number.POSITIVE_INFINITY;
   return [...rooms].sort(
     (a, b) =>
       at(a) - at(b) ||
-      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) ||
+      (a.name ?? "").localeCompare(b.name ?? "", undefined, { sensitivity: "base" }) ||
       a.id.localeCompare(b.id),
   );
 }

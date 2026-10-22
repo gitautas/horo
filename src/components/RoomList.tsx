@@ -7,20 +7,31 @@ import { accentFor, displayNameFor, formatStamp, localpart } from "../lib/displa
 import { haptic } from "../lib/haptics";
 import * as ipc from "../lib/ipc";
 import { cachedProfile, loadProfile } from "../lib/profiles";
-import type { Profile, RoomSummary } from "../lib/types";
+import type { Profile, PublicRoom, RoomSummary } from "../lib/types";
 import { useIsMobile, useLongPress } from "../lib/viewport";
 import {
   filterRooms,
   groupRooms,
+  withUnjoined,
   selectUnreadTotal,
   useStore,
   type RoomFilter,
 } from "../store";
 import { useCallState } from "./CallBar";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
+import { waitForRoom } from "./CreateRoom";
 import { PresenceDot } from "./Presence";
 import { VoicePanel } from "./VoicePanel";
-import { Avatar, Button, ChannelBadge, dragOff, dragRegion, HoverRow, Icon } from "./ui";
+import {
+  Avatar,
+  Button,
+  ChannelBadge,
+  dragOff,
+  dragRegion,
+  HoverRow,
+  Icon,
+  Spinner,
+} from "./ui";
 import { corner, headingSize, labelText, space, textSize } from "../lib/scale";
 
 const FILTERS: RoomFilter[] = ["all", "unread", "dms", "muted"];
@@ -70,14 +81,26 @@ export function RoomList({
 
   // Both of these allocate, so they have to be memoised rather than derived
   // inside a store selector.
-  const groups = useMemo(
-    () =>
-      groupRooms(
-        filterRooms(allRooms, { activeSpaceId, filter, search, spaces, hideMuted }),
-        spaces.find((sp) => sp.id === activeSpaceId)?.children,
-      ),
-    [allRooms, activeSpaceId, filter, search, spaces, hideMuted],
-  );
+  const activeSpace = spaces.find((sp) => sp.id === activeSpaceId);
+  const unjoined = useUnjoinedRooms(activeSpace?.id ?? null, activeSpace?.children ?? []);
+
+  const groups = useMemo(() => {
+    const joined = groupRooms(
+      filterRooms(allRooms, { activeSpaceId, filter, search, spaces, hideMuted }),
+      activeSpace?.children,
+    );
+    // Only when the list is showing everything: a filter for unread or muted
+    // rooms has nothing to say about rooms we aren't in.
+    if (filter !== "all") return joined;
+    const needle = search.trim().toLowerCase();
+    const showing = unjoined.filter(
+      (r) =>
+        !allRooms.some(
+          (x) => x.id === r.id && (x.membership === "joined" || x.membership === "invited"),
+        ) && (!needle || (r.name ?? "").toLowerCase().includes(needle)),
+    );
+    return withUnjoined(joined, showing, activeSpace?.children);
+  }, [allRooms, activeSpaceId, activeSpace, filter, search, spaces, hideMuted, unjoined]);
 
   const heading =
     spaces.find((s) => s.id === activeSpaceId)?.name.toLowerCase() ??
@@ -352,7 +375,7 @@ export function RoomList({
                   background: "var(--border-subtle)",
                 }}
               />
-              <span>{group.rooms.length}</span>
+              <span>{group.rooms.length + (group.unjoined?.length ?? 0)}</span>
             </div>
 
             {group.rooms.map((room) => (
@@ -365,6 +388,9 @@ export function RoomList({
                   if (isVoiceChannel(room)) void joinVoice(room.id);
                 }}
               />
+            ))}
+            {group.unjoined?.map((room) => (
+              <UnjoinedRow key={room.id} room={room} via={activeSpace?.id ?? null} />
             ))}
           </div>
         ))}
@@ -573,7 +599,8 @@ function RoomRow({
           size={36}
           radius={13}
         />
-        {!room.isDirect && (
+        {/* A space invite is a server, not a channel. */}
+        {!room.isDirect && !room.isSpace && (
           <ChannelBadge kind={room.isVideoRoom ? "video" : "text"} />
         )}
         {/* A live call owns the same corner and is the more urgent of the two,
@@ -681,6 +708,117 @@ function RoomRow({
       </div>
     </HoverRow>
   );
+}
+
+/**
+ * The open space's rooms that anyone in it can join, fetched from the space's
+ * hierarchy — the room list only knows rooms we're already in.
+ *
+ * Asked again when the space's children change, so a room someone adds shows
+ * up without reopening the space.
+ */
+function useUnjoinedRooms(spaceId: string | null, children: string[]): PublicRoom[] {
+  const [found, setFound] = useState<{ spaceId: string; rooms: PublicRoom[] } | null>(null);
+  const childrenKey = children.join(",");
+
+  useEffect(() => {
+    if (!spaceId) return;
+    let live = true;
+    ipc
+      .getSpaceRooms(spaceId)
+      .then((rooms) => live && setFound({ spaceId, rooms }))
+      // Not worth a banner: the joined rooms are all still there.
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [spaceId, childrenKey]);
+
+  return useMemo(
+    () =>
+      found && found.spaceId === spaceId
+        ? found.rooms.filter(
+            // Invite-only rooms can't be walked into, and Discord doesn't show
+            // you channels you can't open either.
+            (r) => !r.isSpace && (r.joinRule === "public" || r.joinRule === "restricted"),
+          )
+        : [],
+    [found, spaceId],
+  );
+}
+
+/**
+ * A room in the space we haven't joined. Clicking it joins, then opens it —
+ * and for a voice room, connects, as clicking any voice room does.
+ */
+function UnjoinedRow({ room, via }: { room: PublicRoom; via: string | null }) {
+  const [busy, setBusy] = useState(false);
+  const name = room.name ?? room.alias ?? "a room";
+
+  async function join() {
+    if (busy) return;
+    setBusy(true);
+    const { selectRoom, showBanner } = useStore.getState();
+    try {
+      // A child that names no servers is on the space's own, which ours knows.
+      await ipc.joinRoom(room.id, room.via.length ? room.via : via ? [serverOf(via)] : []);
+      await waitForRoom(room.id);
+      await selectRoom(room.id);
+      if (room.isVoice) void joinVoice(room.id);
+    } catch (e) {
+      showBanner("error", ipc.asUwuError(e).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <HoverRow
+      onClick={() => void join()}
+      title={`join ${name}`}
+      style={{
+        display: "flex",
+        gap: space(10),
+        alignItems: "center",
+        padding: space("9px 10px"),
+        borderRadius: corner(16),
+        marginBottom: 2,
+      }}
+    >
+      <div style={{ position: "relative", flex: "none", opacity: 0.55 }}>
+        <Avatar id={room.id} name={name} mxc={room.avatarUrl} size={36} radius={13} />
+        <ChannelBadge kind={room.isVoice ? "video" : "text"} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          className="uwu-ellipsis"
+          style={{
+            fontFamily: "var(--font-display)",
+            fontWeight: 700,
+            fontSize: textSize(14.5),
+            color: "var(--text-tertiary)",
+          }}
+        >
+          {name}
+        </div>
+        <div
+          className="uwu-ellipsis"
+          style={{ fontSize: textSize(12), color: "var(--text-tertiary)", marginTop: 1 }}
+        >
+          {room.isVoice ? "click to join and hop in" : "click to join"}
+        </div>
+      </div>
+      {busy ? (
+        <Spinner size={14} />
+      ) : (
+        <Icon name="plus-circle" size={16} color="var(--text-tertiary)" />
+      )}
+    </HoverRow>
+  );
+}
+
+/** `!abc:veil.gg` → `veil.gg`. */
+function serverOf(roomId: string): string {
+  return roomId.slice(roomId.indexOf(":") + 1);
 }
 
 /** A video room we're in, which the sidebar treats as a Discord voice channel. */
