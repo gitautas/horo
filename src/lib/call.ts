@@ -18,7 +18,9 @@ import {
   RemoteTrack,
   Room,
   RoomEvent,
+  ScreenSharePresets,
   Track,
+  VideoPresets,
   type RemoteParticipant,
   type TrackPublication,
 } from "livekit-client";
@@ -66,6 +68,13 @@ export interface CallState {
   participants: CallParticipantView[];
   error: string | null;
 }
+
+/**
+ * Screen shares at 1080p and 30fps. Livekit's default is 15fps, which turns
+ * scrolling and video playback into a slideshow; capture and encoding share
+ * one preset so the frame rate asked of the screen is the one that's sent.
+ */
+const SCREEN_SHARE = ScreenSharePresets.h1080fps30;
 
 export const IDLE_CALL: CallState = {
   roomId: null,
@@ -176,8 +185,20 @@ class CallController {
       const credentials = await ipc.joinCall(roomId);
 
       const room = new Room({
-        adaptiveStream: true,
+        // Size subscriptions by device pixels, not CSS pixels: on a Retina
+        // screen a 400px tile is 800 real pixels, and asking for the layer
+        // that fits 400 is what made faces look soft.
+        adaptiveStream: { pixelDensity: "screen" },
         dynacast: true,
+        // Livekit's defaults are 720p at 1.7 Mbps with 180p and 360p layers
+        // under it, so any grid tile got 360p at best. A camera that can't do
+        // 1080p just delivers what it can; the resolution is only ideal.
+        videoCaptureDefaults: { resolution: VideoPresets.h1080.resolution },
+        publishDefaults: {
+          videoEncoding: VideoPresets.h1080.encoding,
+          videoSimulcastLayers: [VideoPresets.h360, VideoPresets.h540],
+          screenShareEncoding: SCREEN_SHARE.encoding,
+        },
         // Voice-only: these are the settings that make a call sound like a call
         // rather than a speakerphone in a stairwell.
         audioCaptureDefaults: {
@@ -320,6 +341,10 @@ class CallController {
     try {
       await this.room.localParticipant.setScreenShareEnabled(enabled, {
         audio: true,
+        resolution: SCREEN_SHARE.resolution,
+        // Tells the encoder this is text and UI, so it spends bits on edges
+        // rather than smoothing them away.
+        contentHint: "detail",
       });
       this.update({ screenShareEnabled: enabled });
     } catch (error) {
