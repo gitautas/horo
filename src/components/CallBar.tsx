@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 
 import { call, IDLE_CALL, type CallState } from "../lib/call";
-import { localpart } from "../lib/display";
 import { useStore } from "../store";
-import { Avatar, Icon } from "./ui";
+import { Icon } from "./ui";
 import { corner, space, textSize } from "../lib/scale";
 
 export function useCallState(): CallState {
@@ -12,7 +11,7 @@ export function useCallState(): CallState {
   return state;
 }
 
-/** The strip that appears above the composer while a call is running. */
+/** The strip above the composer while a call is running, on a phone. */
 export function CallBar() {
   const state = useCallState();
   const rooms = useStore((s) => s.rooms);
@@ -85,53 +84,6 @@ export function CallBar() {
         </div>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: space(6) }}>
-        {state.participants
-          .filter((p) => !p.isLocal)
-          .slice(0, 4)
-          .map((participant) => (
-            <div
-              key={participant.identity}
-              title={localpart(participant.userId)}
-              style={{
-                position: "relative",
-                borderRadius: corner(12),
-                outline: participant.isSpeaking
-                  ? "2px solid var(--accent-primary)"
-                  : "2px solid transparent",
-                outlineOffset: 1,
-                transition: "outline-color var(--dur-fast) var(--ease-out)",
-              }}
-            >
-              <Avatar
-                id={participant.userId}
-                name={localpart(participant.userId)}
-                size={28}
-                radius={10}
-              />
-              {participant.isMuted && (
-                <div
-                  style={{
-                    position: "absolute",
-                    right: -3,
-                    bottom: -3,
-                    width: 13,
-                    height: 13,
-                    borderRadius: "50%",
-                    background: "var(--ink-800)",
-                    border: "1.5px solid var(--ink-950)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <Icon name="microphone-slash" size={7} color="var(--status-danger)" />
-                </div>
-              )}
-            </div>
-          ))}
-      </div>
-
       <div style={{ display: "flex", gap: space(6) }}>
         <CallButton
           icon={state.micEnabled ? "microphone" : "microphone-slash"}
@@ -144,6 +96,12 @@ export function CallBar() {
           active={state.deafened}
           title={state.deafened ? "undeafen" : "deafen"}
           onClick={() => void call.setDeafened(!state.deafened)}
+        />
+        <CallButton
+          icon={state.cameraEnabled ? "video-camera" : "video-camera-slash"}
+          active={!state.cameraEnabled}
+          title={state.cameraEnabled ? "turn camera off" : "turn camera on"}
+          onClick={() => void call.setCameraEnabled(!state.cameraEnabled)}
         />
         <CallButton
           icon="phone-x"

@@ -52,7 +52,7 @@ fn membership_state_str(state: &MembershipState) -> &'static str {
 const CALL_ROOM_TYPES: &[&str] = &["m.video_room", "io.element.video", "org.matrix.msc3417.call"];
 
 /// Whether a room is a call rather than a conversation.
-fn is_call_room_type(room_type: Option<&str>) -> bool {
+pub(crate) fn is_call_room_type(room_type: Option<&str>) -> bool {
     room_type.is_some_and(|t| CALL_ROOM_TYPES.contains(&t))
 }
 
@@ -196,8 +196,22 @@ pub async fn summarise(room: &Room) -> Result<RoomSummary> {
         recency: room.recency_stamp().map(|s| s.into()).unwrap_or(0),
         parent_spaces,
         has_active_call: room.has_active_room_call(),
+        call_participants: call_participants(room),
         is_video_room: room.is_call() || is_call_room_type(room_type),
     })
+}
+
+/// Everyone in the room's call, in the order they joined. The SDK lists one
+/// entry per membership, so someone on their phone and laptop appears twice.
+fn call_participants(room: &Room) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for user in room.active_room_call_participants() {
+        let user = user.to_string();
+        if !out.contains(&user) {
+            out.push(user);
+        }
+    }
+    out
 }
 
 async fn collect_parent_spaces(room: &Room) -> Vec<String> {
@@ -355,6 +369,7 @@ async fn summarise_or_placeholder(room: &Room) -> RoomSummary {
                 recency: 0,
                 parent_spaces: Vec::new(),
                 has_active_call: false,
+                call_participants: Vec::new(),
                 is_video_room: false,
             }
         }
@@ -494,7 +509,7 @@ async fn space_children(space: &Room) -> Vec<String> {
         return Vec::new();
     };
 
-    events
+    let mut children: Vec<ChildOrder> = events
         .into_iter()
         .filter_map(|raw| {
             let event = raw.deserialize().ok()?;
@@ -505,10 +520,42 @@ async fn space_children(space: &Room) -> Vec<String> {
             // insisting on a non-empty `via`: not every server round-trips that
             // field, and dropping a real child leaves the space looking empty —
             // a much worse failure than keeping a stale one.
-            let is_present = event.as_sync().is_some_and(|sync| sync.as_original().is_some());
-            is_present.then_some(state_key.to_string())
+            let original = event.as_sync()?.as_original()?;
+            Some(ChildOrder {
+                order: original.content.order.as_ref().map(|o| o.as_str().to_owned()),
+                ts: original.origin_server_ts.0.into(),
+                id: state_key.to_string(),
+            })
         })
-        .collect()
+        .collect();
+
+    // The sidebar lists a space's rooms in this order, so it has to be the one
+    // every client agrees on rather than whatever order the store kept them in.
+    children.sort_by(ChildOrder::cmp);
+    children.into_iter().map(|c| c.id).collect()
+}
+
+/// Where a room sits in its space, by the spec's rule: an explicit `order`
+/// first, compared as strings; then when it was added; then the room ID, so
+/// two clients never disagree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChildOrder {
+    order: Option<String>,
+    ts: u64,
+    id: String,
+}
+
+impl ChildOrder {
+    fn cmp(a: &Self, b: &Self) -> std::cmp::Ordering {
+        // Rooms with an order come before rooms without one.
+        let by_order = match (&a.order, &b.order) {
+            (Some(x), Some(y)) => x.cmp(y),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        };
+        by_order.then(a.ts.cmp(&b.ts)).then_with(|| a.id.cmp(&b.id))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -542,6 +589,37 @@ pub struct NewRoom {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub parent_space: Option<String>,
+    /// A voice room: a call you join by opening it, with chat alongside.
+    #[serde(default)]
+    #[ts(as = "Option<_>", optional)]
+    pub voice: bool,
+}
+
+/// The room type a new voice room gets. Of the spellings in
+/// [`CALL_ROOM_TYPES`] it's the one Element Call's rooms use and the one Ruma
+/// knows as `RoomType::Call`, so Element and the SDK both see a call room.
+const VOICE_ROOM_TYPE: &str = "org.matrix.msc3417.call";
+
+/// Power levels for a room we create, so that everyone in it can join a call.
+///
+/// Joining is writing a call membership state event, and state defaults to
+/// moderators only, which leaves a call nobody else can join. The override
+/// replaces the default `events` map wholesale, so it restates Synapse's
+/// defaults rather than losing them — the same thing Element does.
+fn power_levels_for_calls() -> serde_json::Value {
+    serde_json::json!({
+        "events": {
+            "m.room.name": 50,
+            "m.room.power_levels": 100,
+            "m.room.history_visibility": 100,
+            "m.room.canonical_alias": 50,
+            "m.room.avatar": 50,
+            "m.room.tombstone": 100,
+            "m.room.server_acl": 100,
+            "m.room.encryption": 100,
+            "org.matrix.msc3401.call.member": 0,
+        },
+    })
 }
 
 #[derive(Debug, Clone, serde::Serialize, TS)]
@@ -559,6 +637,7 @@ pub async fn create(core: &MatrixCore, new: NewRoom) -> Result<NewRoomResult> {
     use matrix_sdk::ruma::{
         api::client::room::{Visibility, create_room},
         events::{InitialStateEvent, room::encryption::RoomEncryptionEventContent},
+        serde::Raw,
     };
 
     let name = new.name.trim();
@@ -602,6 +681,21 @@ pub async fn create(core: &MatrixCore, new: NewRoom) -> Result<NewRoomResult> {
             )
             .to_raw_any(),
         ];
+    }
+
+    // Every room, not just voice rooms: a text room has a call button too.
+    request.power_level_content_override = Some(
+        Raw::new(&power_levels_for_calls())
+            .map(Raw::cast_unchecked)
+            .map_err(|e| Error::Other(e.to_string()))?,
+    );
+
+    if new.voice {
+        request.creation_content = Some(
+            Raw::new(&serde_json::json!({ "type": VOICE_ROOM_TYPE }))
+                .map(Raw::cast_unchecked)
+                .map_err(|e| Error::Other(e.to_string()))?,
+        );
     }
 
     let room = core.client.create_room(request).await?;
@@ -915,6 +1009,8 @@ pub async fn invite(core: &MatrixCore, room_id: &RoomId, user_id: &str) -> Resul
 #[cfg(test)]
 mod room_type_tests {
     use super::*;
+    use matrix_sdk::ruma::room::RoomType;
+
     use crate::matrix::packs::PACK_ROOM_TYPE;
 
     #[test]
@@ -936,6 +1032,38 @@ mod room_type_tests {
             assert!(is_call_room_type(Some(room_type)), "{room_type} should be a call room");
             assert!(!is_utility_room_type(Some(room_type)), "{room_type} should be visible");
         }
+    }
+
+    #[test]
+    fn space_children_follow_the_spec_order() {
+        let child = |order: Option<&str>, ts: u64, id: &str| ChildOrder {
+            order: order.map(str::to_owned),
+            ts,
+            id: id.to_owned(),
+        };
+        let mut children = vec![
+            child(None, 1, "!late-unordered"),
+            child(Some("b"), 9, "!b"),
+            child(None, 1, "!early-unordered"),
+            child(Some("a"), 50, "!a"),
+        ];
+        children.sort_by(ChildOrder::cmp);
+        let ids: Vec<_> = children.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["!a", "!b", "!early-unordered", "!late-unordered"]);
+    }
+
+    #[test]
+    fn a_voice_room_we_make_is_one_we_recognise() {
+        assert!(is_call_room_type(Some(VOICE_ROOM_TYPE)));
+        assert_eq!(VOICE_ROOM_TYPE, RoomType::Call.as_str());
+    }
+
+    #[test]
+    fn everyone_can_join_a_call_in_a_room_we_make() {
+        let levels = power_levels_for_calls();
+        assert_eq!(levels["events"]["org.matrix.msc3401.call.member"], 0);
+        // Restated, not dropped: the override replaces the whole map.
+        assert_eq!(levels["events"]["m.room.power_levels"], 100);
     }
 
     #[test]

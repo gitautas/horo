@@ -157,9 +157,12 @@ function inspect(rooms: RoomSummary[], seen: Map<string, Seen>): void {
 
     // Someone started a call in a room you're in — but not the call you're
     // already sitting in, which is where `hasActiveCall` also goes true.
+    // A voice room's call is the room itself, and people drift in and out of
+    // it all day — announcing that is a Discord channel pinging on every join.
     if (
       settings.notifyCalls &&
       !room.isMuted &&
+      !room.isVideoRoom &&
       room.hasActiveCall &&
       !previous.call &&
       room.id !== callRoomId

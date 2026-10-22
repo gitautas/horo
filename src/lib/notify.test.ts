@@ -70,6 +70,7 @@ function room(patch: Partial<RoomSummary> & { id: string }): RoomSummary {
     recency: 1,
     parentSpaces: [],
     hasActiveCall: false,
+    callParticipants: [],
     isVideoRoom: false,
     ...patch,
   };

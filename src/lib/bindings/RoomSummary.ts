@@ -33,6 +33,11 @@ parentSpaces: Array<string>,
  */
 hasActiveCall: boolean, 
 /**
+ * Who is in that session, one entry per person however many devices
+ * they joined from — the roster under a voice room in the sidebar.
+ */
+callParticipants: Array<string>, 
+/**
  * An MSC3417 video room — a call you join, not a text room.
  */
 isVideoRoom: boolean, };

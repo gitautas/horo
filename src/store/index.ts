@@ -684,7 +684,17 @@ export interface RoomGroup {
  * Invites first (they're a question waiting on you), then people, then rooms.
  * Within each group the order comes from `filterRooms`.
  */
-export function groupRooms(rooms: RoomSummary[]): RoomGroup[] {
+/**
+ * The sidebar's sections, Discord style.
+ *
+ * DMs are a conversation list, so the latest one is on top. Rooms and voice
+ * rooms are places, and places stay where they are: a room that jumps to the
+ * top whenever someone talks or joins a call moves out from under the cursor,
+ * and the click lands on whatever slid into its spot. So they're ordered by the
+ * space's own order when one is open, and by name otherwise. Unread rooms
+ * stand out by their badge, not their position.
+ */
+export function groupRooms(rooms: RoomSummary[], order: string[] = []): RoomGroup[] {
   const invites = rooms.filter((r) => r.membership === "invited");
   const joined = rooms.filter((r) => r.membership !== "invited");
 
@@ -692,12 +702,30 @@ export function groupRooms(rooms: RoomSummary[]): RoomGroup[] {
   if (invites.length) groups.push({ title: "invites", rooms: invites });
 
   const dms = joined.filter((r) => r.isDirect);
-  const channels = joined.filter((r) => !r.isDirect);
+  const channels = placeOrder(
+    joined.filter((r) => !r.isDirect),
+    order,
+  );
+  const text = channels.filter((r) => !r.isVideoRoom);
+  const voice = channels.filter((r) => r.isVideoRoom);
 
   if (dms.length) groups.push({ title: "direct messages", rooms: dms });
-  if (channels.length) groups.push({ title: "rooms", rooms: channels });
+  if (text.length) groups.push({ title: "rooms", rooms: text });
+  if (voice.length) groups.push({ title: "voice", rooms: voice });
 
   return groups;
+}
+
+/** Rooms in `order` first, in that order; the rest after, by name. */
+function placeOrder(rooms: RoomSummary[], order: string[]): RoomSummary[] {
+  const position = new Map(order.map((id, i) => [id, i]));
+  const at = (r: RoomSummary) => position.get(r.id) ?? Number.POSITIVE_INFINITY;
+  return [...rooms].sort(
+    (a, b) =>
+      at(a) - at(b) ||
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) ||
+      a.id.localeCompare(b.id),
+  );
 }
 
 export function selectUnreadTotal(s: State): number {

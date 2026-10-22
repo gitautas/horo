@@ -147,7 +147,11 @@ pub async fn join(core: &MatrixCore, room_id: &RoomId, video: bool) -> Result<Ca
     // Read before our own membership goes in: nobody here yet means we are the
     // one starting the call, and the one who has to ring everyone else.
     let existing = focus_from_existing_members(core, room_id).await;
-    let starting = existing.is_none();
+    // Except in a voice room, where the call is the room: walking into one is
+    // like walking into a Discord voice channel, and nobody gets pinged for that.
+    // The notification also counts as the room's latest message, which jumped
+    // the room to the top of everyone's sidebar each time someone came in.
+    let starting = existing.is_none() && !is_voice_room(&room);
     let service_url = match existing {
         Some(url) => url,
         None => own_focus(core).await?,
@@ -197,6 +201,11 @@ pub async fn join(core: &MatrixCore, room_id: &RoomId, video: bool) -> Result<Ca
     }
 
     Ok(credentials)
+}
+
+fn is_voice_room(room: &matrix_sdk::Room) -> bool {
+    let room_type = room.room_type().map(|t| t.as_str().to_owned());
+    room.is_call() || crate::matrix::rooms::is_call_room_type(room_type.as_deref())
 }
 
 /// Tell the room a call has started. Returns whether that rings phones.

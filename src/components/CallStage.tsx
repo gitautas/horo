@@ -7,13 +7,18 @@ import { localpart } from "../lib/display";
 import * as ipc from "../lib/ipc";
 import { useStore } from "../store";
 import { useCallState } from "./CallBar";
-import { Avatar, Icon, Spinner } from "./ui";
+import { Avatar, Icon } from "./ui";
 import { corner, space, textSize } from "../lib/scale";
 import { useIsMobile } from "../lib/viewport";
 
 /**
- * The video stage: a grid of participant tiles above the timeline, in the shape
- * people already know from Discord and Meet.
+ * The video stage: a grid of cameras and shared screens above the timeline, in
+ * the shape people already know from Discord and Meet.
+ *
+ * Only video gets a tile. A voice call with nobody on camera has nothing to
+ * look at, so there's no stage at all — who's in it is listed under the room
+ * in the sidebar, and the controls live in the sidebar's voice panel, as in
+ * Discord.
  *
  * Clicking a tile focuses it — it takes the stage and everything else becomes a
  * filmstrip — and clicking the focused tile goes back to the grid.
@@ -41,14 +46,17 @@ export function CallStage({ roomId }: { roomId: string }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [fullscreen]);
 
-  // Only draw for the room being looked at; a call elsewhere shows as the
-  // compact bar instead.
-  if (state.roomId !== roomId || state.status === "idle") return null;
-
-  const connecting = state.status === "connecting";
-  const reconnecting = state.status === "reconnecting";
-
   const tiles = tilesOf(state.participants);
+
+  // Only draw for the room being looked at, and only when there's video.
+  // Leaving fullscreen as well means the next video doesn't open fullscreen.
+  const showing = state.roomId === roomId && state.status !== "idle" && tiles.length > 0;
+  useEffect(() => {
+    if (!showing) setFullscreen(false);
+  }, [showing]);
+  if (!showing) return null;
+
+  const reconnecting = state.status === "reconnecting";
   // A shared screen is the thing everyone is looking at, so until someone
   // picks otherwise it gets the stage. A pick that has left the call (they
   // hung up, or stopped sharing) falls back the same way.
@@ -86,23 +94,7 @@ export function CallStage({ roomId }: { roomId: string }) {
         flex: "none",
       }}
     >
-      {connecting ? (
-        <div
-          style={{
-            flex: 1,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: space(12),
-            color: "var(--text-tertiary)",
-            fontSize: textSize(13),
-          }}
-        >
-          <Spinner size={22} />
-          connecting to the call…
-        </div>
-      ) : focused ? (
+      {focused ? (
         <Focus
           focused={focused}
           others={tiles.filter((t) => t !== focused)}
@@ -130,40 +122,46 @@ export function CallStage({ roomId }: { roomId: string }) {
             : `${state.participants.length} in the call`}
         </span>
 
-        <Control
-          icon={state.micEnabled ? "microphone" : "microphone-slash"}
-          title={state.micEnabled ? "mute" : "unmute"}
-          active={!state.micEnabled}
-          onClick={() => void run(() => call.setMicEnabled(!state.micEnabled))}
-        />
-        <Control
-          icon={state.cameraEnabled ? "video-camera" : "video-camera-slash"}
-          title={state.cameraEnabled ? "turn camera off" : "turn camera on"}
-          active={!state.cameraEnabled}
-          onClick={() => void run(() => call.setCameraEnabled(!state.cameraEnabled))}
-        />
-        {screenShareSupported() && (
-          <Control
-            icon="monitor-arrow-up"
-            title={state.screenShareEnabled ? "stop sharing" : "share your screen"}
-            highlight={state.screenShareEnabled}
-            onClick={() =>
-              void run(() => call.setScreenShareEnabled(!state.screenShareEnabled))
-            }
-          />
+        {/* Fullscreen covers the sidebar and its voice panel, so it brings
+            the controls along. */}
+        {fullscreen && (
+          <>
+            <Control
+              icon={state.micEnabled ? "microphone" : "microphone-slash"}
+              title={state.micEnabled ? "mute" : "unmute"}
+              active={!state.micEnabled}
+              onClick={() => void run(() => call.setMicEnabled(!state.micEnabled))}
+            />
+            <Control
+              icon={state.cameraEnabled ? "video-camera" : "video-camera-slash"}
+              title={state.cameraEnabled ? "turn camera off" : "turn camera on"}
+              active={!state.cameraEnabled}
+              onClick={() => void run(() => call.setCameraEnabled(!state.cameraEnabled))}
+            />
+            {screenShareSupported() && (
+              <Control
+                icon="monitor-arrow-up"
+                title={state.screenShareEnabled ? "stop sharing" : "share your screen"}
+                highlight={state.screenShareEnabled}
+                onClick={() =>
+                  void run(() => call.setScreenShareEnabled(!state.screenShareEnabled))
+                }
+              />
+            )}
+            <Control
+              icon={state.deafened ? "speaker-slash" : "speaker-high"}
+              title={state.deafened ? "undeafen" : "deafen"}
+              active={state.deafened}
+              onClick={() => void run(() => call.setDeafened(!state.deafened))}
+            />
+            <Control icon="phone-x" title="leave the call" danger onClick={() => void call.leave()} />
+          </>
         )}
-        <Control
-          icon={state.deafened ? "speaker-slash" : "speaker-high"}
-          title={state.deafened ? "undeafen" : "deafen"}
-          active={state.deafened}
-          onClick={() => void run(() => call.setDeafened(!state.deafened))}
-        />
         <Control
           icon={fullscreen ? "corners-in" : "corners-out"}
           title={fullscreen ? "exit fullscreen" : "fullscreen"}
           onClick={() => setFullscreen((v) => !v)}
         />
-        <Control icon="phone-x" title="leave the call" danger onClick={() => void call.leave()} />
       </div>
     </div>
   );
@@ -188,13 +186,14 @@ interface TileView {
 /**
  * A screen share is its own tile, the way Discord shows a stream next to the
  * person streaming it, rather than replacing their face. Shares come first —
- * they're what people joined to look at.
+ * they're what people joined to look at. Someone with their camera off has no
+ * tile: an avatar in a box says nothing the sidebar doesn't.
  */
 function tilesOf(participants: CallParticipantView[]): TileView[] {
   const screens = participants
     .filter((p) => p.screenTrack)
     .map((p) => ({ key: `${p.identity}:screen`, participant: p, track: p.screenTrack, screen: true }));
-  const cameras = participants.map((p) => ({
+  const cameras = participants.filter((p) => p.cameraTrack).map((p) => ({
     key: `${p.identity}:camera`,
     participant: p,
     track: p.cameraTrack,

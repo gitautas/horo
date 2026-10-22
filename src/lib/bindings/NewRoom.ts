@@ -15,4 +15,8 @@ alias?: string | null, encrypted?: boolean, invite?: Array<string>,
 /**
  * The space to file it under, if one was open when the user hit create.
  */
-parentSpace?: string | null, };
+parentSpace?: string | null, 
+/**
+ * A voice room: a call you join by opening it, with chat alongside.
+ */
+voice?: boolean, };

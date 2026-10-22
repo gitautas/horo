@@ -248,9 +248,10 @@ export function ChatPane({ room, onBack }: { room: RoomSummary; onBack?: () => v
 
       <TimelineView roomId={room.id} threadRoot={threadRoot ?? undefined} />
 
-      {/* A call in some other room stays as the compact strip, so it's still
-          reachable without leaving the room you're reading. */}
-      {callState.roomId !== room.id && <CallBar />}
+      {/* The sidebar's voice panel holds the call's controls on a desktop. A
+          phone has no sidebar beside the room, so the strip stands in for it —
+          in the call's own room too, which may have nothing on screen. */}
+      {onBack && <CallBar />}
 
       <Composer
         roomId={room.id}

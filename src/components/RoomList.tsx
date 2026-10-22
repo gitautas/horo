@@ -1,8 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { accentFor, formatStamp, localpart } from "../lib/display";
-import type { RoomSummary } from "../lib/types";
+import { call, type CallParticipantView } from "../lib/call";
+import { accentFor, displayNameFor, formatStamp, localpart } from "../lib/display";
+import * as ipc from "../lib/ipc";
+import { cachedProfile, loadProfile } from "../lib/profiles";
+import type { Profile, RoomSummary } from "../lib/types";
 import {
   filterRooms,
   groupRooms,
@@ -10,7 +13,9 @@ import {
   useStore,
   type RoomFilter,
 } from "../store";
+import { useCallState } from "./CallBar";
 import { PresenceDot } from "./Presence";
+import { VoicePanel } from "./VoicePanel";
 import { Avatar, Button, ChannelBadge, dragOff, dragRegion, HoverRow, Icon } from "./ui";
 import { corner, headingSize, labelText, space, textSize } from "../lib/scale";
 
@@ -65,6 +70,7 @@ export function RoomList({
     () =>
       groupRooms(
         filterRooms(allRooms, { activeSpaceId, filter, search, spaces, hideMuted }),
+        spaces.find((sp) => sp.id === activeSpaceId)?.children,
       ),
     [allRooms, activeSpaceId, filter, search, spaces, hideMuted],
   );
@@ -346,16 +352,23 @@ export function RoomList({
             </div>
 
             {group.rooms.map((room) => (
-              <RoomRow
-                key={room.id}
-                room={room}
-                active={room.id === activeRoomId}
-                onSelect={() => void selectRoom(room.id)}
-              />
+              <div key={room.id}>
+                <RoomRow
+                  room={room}
+                  active={room.id === activeRoomId}
+                  onSelect={() => {
+                    void selectRoom(room.id);
+                    if (isVoiceChannel(room)) void joinVoice(room.id);
+                  }}
+                />
+                {isVoiceChannel(room) && <VoiceRoster room={room} />}
+              </div>
             ))}
           </div>
         ))}
       </div>
+
+      <VoicePanel />
     </div>
   );
 }
@@ -502,6 +515,135 @@ function RoomRow({
         )}
       </div>
     </HoverRow>
+  );
+}
+
+/** A video room we're in, which the sidebar treats as a Discord voice channel. */
+function isVoiceChannel(room: RoomSummary): boolean {
+  return room.isVideoRoom && room.membership === "joined";
+}
+
+/**
+ * Clicking a voice channel is joining it, the way Discord does it. Already
+ * being in it means the click only opens the room, and being in another call
+ * means moving over — `call.join` leaves the old one first.
+ *
+ * Mic only: walking into a channel shouldn't turn a camera on. The camera
+ * button in the call is one tap away.
+ */
+async function joinVoice(roomId: string) {
+  const { roomId: current, status } = call.getState();
+  if (current === roomId && status !== "idle" && status !== "failed") return;
+  try {
+    await call.join(roomId, { video: false });
+  } catch (e) {
+    useStore.getState().showBanner("error", ipc.asUwuError(e).message);
+  }
+}
+
+/**
+ * Who's in a voice channel, listed under it.
+ *
+ * The room's call membership state says who is in any channel. For the one
+ * we're connected to, LiveKit knows sooner and knows more — who's talking,
+ * who's muted — so that list wins while we're in it.
+ */
+function VoiceRoster({ room }: { room: RoomSummary }) {
+  const state = useCallState();
+  const live = state.roomId === room.id && state.status === "connected";
+
+  const entries = live
+    ? dedupeByUser(state.participants).map((p) => ({
+        userId: p.userId,
+        isSpeaking: p.isSpeaking,
+        isMuted: p.isMuted,
+      }))
+    : room.callParticipants.map((userId) => ({
+        userId,
+        isSpeaking: false,
+        isMuted: false,
+      }));
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div style={{ padding: space("0 0 6px 30px") }}>
+      {entries.map((entry) => (
+        <RosterEntry key={entry.userId} {...entry} />
+      ))}
+    </div>
+  );
+}
+
+/** One row per person: someone in on two devices is still one person. */
+function dedupeByUser(participants: CallParticipantView[]): CallParticipantView[] {
+  const seen = new Set<string>();
+  return participants.filter((p) => {
+    if (seen.has(p.userId)) return false;
+    seen.add(p.userId);
+    return true;
+  });
+}
+
+function RosterEntry({
+  userId,
+  isSpeaking,
+  isMuted,
+}: {
+  userId: string;
+  isSpeaking: boolean;
+  isMuted: boolean;
+}) {
+  const [profile, setProfile] = useState<Profile | null>(
+    () => cachedProfile(userId) ?? null,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    loadProfile(userId)
+      .then((p) => !cancelled && setProfile(p))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  const name = displayNameFor(userId, profile?.displayName);
+
+  return (
+    <div
+      title={userId}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: space(8),
+        padding: space("3px 10px"),
+      }}
+    >
+      <div
+        style={{
+          flex: "none",
+          borderRadius: corner(8),
+          outline: isSpeaking ? "2px solid var(--accent-primary)" : "2px solid transparent",
+          outlineOffset: 1,
+          transition: "outline-color var(--dur-fast) var(--ease-out)",
+        }}
+      >
+        <Avatar id={userId} name={name} mxc={profile?.avatarUrl} size={20} radius={7} />
+      </div>
+      <span
+        className="uwu-ellipsis"
+        style={{
+          flex: 1,
+          minWidth: 0,
+          fontSize: textSize(12.5),
+          color: isSpeaking ? "var(--text-primary)" : "var(--text-secondary)",
+        }}
+      >
+        {name}
+      </span>
+      {isMuted && <Icon name="microphone-slash" size={12} color="var(--status-danger)" />}
+    </div>
   );
 }
 

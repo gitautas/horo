@@ -89,6 +89,8 @@ export interface RoomSummary {
   recency: number;
   parentSpaces: string[];
   hasActiveCall: boolean;
+  /** Who is in the call, once each — the roster under a voice room. */
+  callParticipants: string[];
   /** An MSC3417 video room — a call you join, not a text room. */
   isVideoRoom: boolean;
 }
@@ -105,6 +107,8 @@ export interface NewRoom {
   invite?: string[];
   /** The space to file it under, if one was open. */
   parentSpace?: string | null;
+  /** A voice room: a call you join by opening it, with chat alongside. */
+  voice?: boolean;
 }
 
 export interface NewRoomResult {

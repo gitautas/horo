@@ -31,6 +31,7 @@ function Dialog() {
   const [mode, setMode] = useState<Mode>("create");
   const [busy, setBusy] = useState(false);
 
+  const [voice, setVoice] = useState(false);
   const [name, setName] = useState("");
   const [topic, setTopic] = useState("");
   const [isPublic, setIsPublic] = useState(false);
@@ -54,6 +55,7 @@ function Dialog() {
         alias: alias.trim() || undefined,
         encrypted,
         parentSpace: addToSpace ? activeSpaceId : null,
+        voice,
       });
 
       close();
@@ -100,8 +102,25 @@ function Dialog() {
 
       {mode === "create" ? (
         <>
+          <Field label="kind">
+            <div style={{ display: "flex", gap: space(6) }}>
+              <ModeTab label="text" active={!voice} onClick={() => setVoice(false)} />
+              <ModeTab label="voice" active={voice} onClick={() => setVoice(true)} />
+            </div>
+            <Hint>
+              {voice
+                ? "click it in the sidebar to hop in, and see who's there without opening it. chat still works inside."
+                : "a room for talking in text. you can still start a call in it."}
+            </Hint>
+          </Field>
+
           <Field label="name">
-            <Input value={name} onChange={setName} placeholder="movie night" autoFocus />
+            <Input
+              value={name}
+              onChange={setName}
+              placeholder={voice ? "hangout" : "movie night"}
+              autoFocus
+            />
           </Field>
 
           <Field label="what's it for">
@@ -126,18 +145,11 @@ function Dialog() {
               </span>
               <Input value={alias} onChange={setAlias} placeholder="movie-night" />
             </div>
-            <div
-              style={{
-                fontSize: textSize(11.5),
-                color: "var(--text-tertiary)",
-                lineHeight: 1.45,
-                marginTop: 6,
-              }}
-            >
+            <Hint>
               optional. an address is just a nicer name to share than the room
               id — it doesn't let anyone in on its own, that's what "anyone can
               join" above decides.
-            </div>
+            </Hint>
           </Field>
 
           <SwitchRow
@@ -257,6 +269,21 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return (
     <div style={{ marginBottom: 14 }}>
       <RaveLabel style={{ marginBottom: 6 }}>{label}</RaveLabel>
+      {children}
+    </div>
+  );
+}
+
+function Hint({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        fontSize: textSize(11.5),
+        color: "var(--text-tertiary)",
+        lineHeight: 1.45,
+        marginTop: 6,
+      }}
+    >
       {children}
     </div>
   );

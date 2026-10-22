@@ -192,6 +192,9 @@ pub struct RoomSummary {
     pub parent_spaces: Vec<String>,
     /// True while a MatrixRTC session is live in this room.
     pub has_active_call: bool,
+    /// Who is in that session, one entry per person however many devices
+    /// they joined from — the roster under a voice room in the sidebar.
+    pub call_participants: Vec<String>,
     /// An MSC3417 video room — a call you join, not a text room.
     pub is_video_room: bool,
 }
