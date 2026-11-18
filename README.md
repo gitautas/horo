@@ -31,6 +31,13 @@ npm run android        # Android dev  (android:build -- --apk for an .apk)
 Android needs an SDK, NDK and JDK; `npm run android` finds them if they are
 installed.
 
+```bash
+npm test                         # frontend
+cargo test --workspace           # Rust; skips the homeserver tests
+scripts/test-homeserver/start.sh # a throwaway Synapse in Docker, then:
+HORO_TEST_HOMESERVER=http://localhost:8008 cargo test -p horo-core --test homeserver
+```
+
 Tagging `v*` builds every platform and publishes a signed release. The
 repository needs `TAURI_SIGNING_PRIVATE_KEY` and
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in its Actions secrets. Keep that key safe:

@@ -131,7 +131,26 @@ fn install_ios_store() -> std::result::Result<(), String> {
     }
 }
 
+/// Set once by [`use_file_storage`]; never cleared.
+static FILE_STORAGE_ONLY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Keep session secrets out of the OS keychain for the rest of the process:
+/// they go to the `0600` fallback file in the data directory instead, exactly
+/// as on a machine with no usable keychain.
+///
+/// For tests and other throwaway processes. The keychain is shared with the
+/// real app under the same service name, so a test signing in would otherwise
+/// leave entries there (and on macOS, can stop to ask for the login password).
+pub fn use_file_storage() {
+    FILE_STORAGE_ONLY.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 fn keyring_entry(user_id: &str) -> Option<KeychainEntry> {
+    if FILE_STORAGE_ONLY.load(std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
+
     #[cfg(target_os = "ios")]
     if let Err(e) = install_ios_store() {
         tracing::warn!("no usable keychain ({e}); falling back to file storage");

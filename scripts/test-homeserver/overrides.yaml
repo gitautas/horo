@@ -1,0 +1,28 @@
+
+# --- appended by scripts/test-homeserver/start.sh ---------------------------
+# A throwaway homeserver for horo-core's integration tests. Never expose it.
+
+# Tests register their own users, as many as they like.
+enable_registration: true
+enable_registration_without_verification: true
+
+# Tests send in bursts that would trip every default limit.
+rc_message: { per_second: 1000, burst_count: 1000 }
+rc_registration: { per_second: 1000, burst_count: 1000 }
+rc_login:
+  address: { per_second: 1000, burst_count: 1000 }
+  account: { per_second: 1000, burst_count: 1000 }
+  failed_attempts: { per_second: 1000, burst_count: 1000 }
+rc_joins:
+  local: { per_second: 1000, burst_count: 1000 }
+  remote: { per_second: 1000, burst_count: 1000 }
+rc_invites:
+  per_room: { per_second: 1000, burst_count: 1000 }
+  per_user: { per_second: 1000, burst_count: 1000 }
+
+experimental_features:
+  # Simplified sliding sync (MSC4186): what matrix-sdk-ui's SyncService and
+  # room list speak, and so what the app needs to sync at all.
+  msc3575_enabled: true
+  # Room summaries, which the space hierarchy uses.
+  msc3266_enabled: true

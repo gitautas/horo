@@ -66,6 +66,21 @@ jobs:
 
       - run: cargo clippy --workspace --all-targets
 
+      # Unit tests for every crate, plus horo-core's integration tests against
+      # a throwaway Synapse (crates/horo-core/tests/homeserver.rs). Those skip
+      # themselves without HORO_TEST_HOMESERVER locally, but fail in CI.
+      - name: Start test homeserver
+        run: scripts/test-homeserver/start.sh
+
+      - name: Test
+        env:
+          HORO_TEST_HOMESERVER: http://localhost:8008
+        run: cargo test --workspace
+
+      - name: Homeserver log
+        if: failure()
+        run: docker logs horo-test-synapse 2>&1 | tail -200
+
       # src/lib/bindings is generated from the Rust wire types and committed, so
       # the frontend build never needs cargo. That only holds while nobody
       # forgets `npm run bindings` after changing one; regenerate here and fail
