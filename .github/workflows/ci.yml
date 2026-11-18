@@ -57,14 +57,14 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: '. -> src-tauri/target'
           key: ci-linux
 
       # `tauri::generate_context!` reads ../dist, which no frontend build has
       # produced here. An empty index.html is all it asks for.
       - run: mkdir -p dist && touch dist/index.html
 
-      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets
+      - run: cargo clippy --workspace --all-targets
 
       # src/lib/bindings is generated from the Rust wire types and committed, so
       # the frontend build never needs cargo. That only holds while nobody

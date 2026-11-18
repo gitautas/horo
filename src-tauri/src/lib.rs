@@ -1,13 +1,15 @@
+//! The Tauri shell: a thin adapter that exposes `horo-core` and `horo-rtc` to
+//! the React frontend as commands, events and the `horo://` media scheme.
+
 mod commands;
-mod dto;
-mod error;
-mod events;
-mod matrix;
+mod host;
 mod photos;
-mod rtc;
 mod update;
-mod verification;
 mod webrtc;
+
+// The core's modules, under the names this crate has always used for them.
+use horo_core::{dto, error, matrix, verification};
+use horo_rtc as rtc;
 
 use matrix::core::AppState;
 use tauri::Manager;
@@ -260,10 +262,10 @@ fn install_settings_menu_item(app: &tauri::AppHandle) -> tauri::Result<()> {
 
     app.on_menu_event(|app, event| {
         match event.id().as_ref() {
-            "settings" => events::emit(app, events::EV_OPEN_SETTINGS, ()),
-            "zoom-in" => events::emit(app, events::EV_ZOOM, "in"),
-            "zoom-out" => events::emit(app, events::EV_ZOOM, "out"),
-            "zoom-reset" => events::emit(app, events::EV_ZOOM, "reset"),
+            "settings" => host::emit(app, host::EV_OPEN_SETTINGS, ()),
+            "zoom-in" => host::emit(app, host::EV_ZOOM, "in"),
+            "zoom-out" => host::emit(app, host::EV_ZOOM, "out"),
+            "zoom-reset" => host::emit(app, host::EV_ZOOM, "reset"),
             _ => {}
         }
     });

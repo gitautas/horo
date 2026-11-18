@@ -1,0 +1,58 @@
+# One workspace for every Rust crate in the app.
+#
+# `horo-core` is the Matrix layer and `horo-rtc` the MatrixRTC signalling; both
+# are UI-agnostic. `src-tauri` is the current shell, a thin adapter over them.
+# See docs/gpui-rewrite-plan.md for where this is going.
+[workspace]
+resolver = "3"
+members = ["src-tauri", "crates/*"]
+
+[workspace.package]
+version = "0.11.0"
+edition = "2024"
+rust-version = "1.93"
+authors = ["horo"]
+
+[workspace.dependencies]
+horo-core = { path = "crates/horo-core" }
+horo-rtc = { path = "crates/horo-rtc" }
+
+matrix-sdk = { version = "0.18", default-features = false, features = [
+  "e2e-encryption",
+  "automatic-room-key-forwarding",
+  "sqlite",
+  "bundled-sqlite",
+  "markdown",
+  "sso-login",
+  "qrcode",
+] }
+# Timeline aggregation (edits/reactions/replies), sliding-sync room list, and
+# spaces — the same layer Element X is built on.
+matrix-sdk-ui = { version = "0.18", default-features = false }
+# For the few base types matrix-sdk doesn't re-export (LatestEventValue).
+matrix-sdk-base = { version = "0.18", default-features = false }
+# `ruma` and `eyeball_im` come from the SDK's own re-exports (matrix_sdk::ruma,
+# matrix_sdk_ui::eyeball_im) so their versions can never drift out of sync.
+
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "fs"] }
+futures-util = "0.3"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Generates src/lib/bindings from the wire types — `npm run bindings`. Reads
+# the serde attributes, so what it writes is what actually crosses the bridge.
+ts-rs = "12"
+
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+url = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Profiles only take effect at the workspace root.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

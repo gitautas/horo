@@ -19,7 +19,7 @@ fs.rmSync(out, { recursive: true, force: true });
 // points ts-rs at `out` and keeps u64 a `number`.
 execFileSync(
   "cargo",
-  ["test", "--manifest-path", "src-tauri/Cargo.toml", "--lib", "export_bindings"],
+  ["test", "--workspace", "--lib", "export_bindings"],
   { cwd: root, stdio: "inherit" },
 );
 

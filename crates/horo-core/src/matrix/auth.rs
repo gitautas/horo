@@ -28,7 +28,7 @@ use crate::{
         RegisterStageKind, RegisterStep, SessionInfo, SsoProvider, TermsPolicy,
     },
     error::{Error, Result},
-    events,
+    events::{self, Host},
     matrix::{
         core::{AppState, MatrixCore},
         presence, rooms, session,
@@ -159,7 +159,7 @@ pub async fn discover_livekit_focus(homeserver_url: &str) -> Option<String> {
 
 /// Password sign-in. On success the session is persisted and syncing starts.
 pub async fn login_password(
-    app: tauri::AppHandle,
+    host: Host,
     state: &AppState,
     data_dir: &Path,
     server: &str,
@@ -185,13 +185,13 @@ pub async fn login_password(
 
     let homeserver = probe.homeserver().to_string();
     let session = MatrixSession::from(&response);
-    finish_login(app, state, data_dir, &homeserver, session).await
+    finish_login(host, state, data_dir, &homeserver, session).await
 }
 
 /// SSO sign-in. The SDK spins up a loopback listener for the redirect; we just
 /// have to get the user's browser to the URL.
 pub async fn login_sso(
-    app: tauri::AppHandle,
+    host: Host,
     state: &AppState,
     data_dir: &Path,
     server: &str,
@@ -201,18 +201,15 @@ pub async fn login_sso(
     // sessions on one store is what `session_gate` exists to prevent.
     let _gate = state.session_gate.lock().await;
 
-    use tauri_plugin_opener::OpenerExt;
-
     let probe = probe_client(server).await?;
-    let opener = app.clone();
+    let opener = host.clone();
 
     let mut builder = probe.matrix_auth().login_sso(move |url: String| {
         let opener = opener.clone();
         async move {
             opener
-                .opener()
-                .open_url(url, None::<&str>)
-                .map_err(|e| matrix_sdk::Error::UnknownError(Box::new(e)))
+                .open_url(&url)
+                .map_err(|e| matrix_sdk::Error::UnknownError(e.into()))
         }
     });
     builder = builder.initial_device_display_name(DEVICE_NAME);
@@ -225,7 +222,7 @@ pub async fn login_sso(
 
     let homeserver = probe.homeserver().to_string();
     let session = MatrixSession::from(&response);
-    finish_login(app, state, data_dir, &homeserver, session).await
+    finish_login(host, state, data_dir, &homeserver, session).await
 }
 
 /// One turn of account registration.
@@ -238,7 +235,7 @@ pub async fn login_sso(
 /// attempt by `session`.
 #[allow(clippy::too_many_arguments)]
 pub async fn register(
-    app: tauri::AppHandle,
+    host: Host,
     state: &AppState,
     data_dir: &Path,
     server: &str,
@@ -292,7 +289,7 @@ pub async fn register(
         },
     };
     let homeserver = probe.homeserver().to_string();
-    let info = finish_login(app, state, data_dir, &homeserver, session).await?;
+    let info = finish_login(host, state, data_dir, &homeserver, session).await?;
     Ok(RegisterStep::Done { session: info })
 }
 
@@ -483,7 +480,7 @@ fn friendly_email_error(error: &HttpError) -> String {
 /// Shared tail of both login flows: build the real, store-backed client,
 /// restore the just-issued session into it, persist, and start syncing.
 async fn finish_login(
-    app: tauri::AppHandle,
+    host: Host,
     state: &AppState,
     data_dir: &Path,
     homeserver: &str,
@@ -505,7 +502,7 @@ async fn finish_login(
 
     let pointer = session::save(data_dir, homeserver, &matrix_session, &passphrase)?;
 
-    let core = bootstrap(app, client, pointer, data_dir.to_path_buf()).await?;
+    let core = bootstrap(host, client, pointer, data_dir.to_path_buf()).await?;
     let info = core.session_info().await?;
     state.set(core).await;
     Ok(info)
@@ -513,7 +510,7 @@ async fn finish_login(
 
 /// Bring back a previously saved session, if there is one.
 pub async fn restore(
-    app: tauri::AppHandle,
+    host: Host,
     state: &AppState,
     data_dir: &Path,
 ) -> Result<Option<SessionInfo>> {
@@ -538,7 +535,7 @@ pub async fn restore(
 
     client.matrix_auth().restore_session(restored.session, RoomLoadSettings::All).await?;
 
-    let core = bootstrap(app, client, restored.pointer, data_dir.to_path_buf()).await?;
+    let core = bootstrap(host, client, restored.pointer, data_dir.to_path_buf()).await?;
     let info = core.session_info().await?;
     state.set(core).await;
     Ok(Some(info))
@@ -615,7 +612,7 @@ async fn purge_poisoned_media_cache(client: &Client, data_dir: &Path) {
 
 /// Construct the `MatrixCore` and start every background stream the UI relies on.
 pub async fn bootstrap(
-    app: tauri::AppHandle,
+    host: Host,
     client: Client,
     pointer: session::SessionPointer,
     data_dir: PathBuf,
@@ -646,10 +643,10 @@ pub async fn bootstrap(
     sync_service.start().await;
 
     let mut tasks = Vec::new();
-    tasks.push(events::spawn_sync_status_task(app.clone(), core.clone()));
-    tasks.push(rooms::spawn_room_list_task(app.clone(), core.clone()));
-    tasks.push(events::spawn_verification_task(app.clone(), core.clone()));
-    tasks.push(presence::spawn_presence_task(app.clone(), core.clone()));
+    tasks.push(events::spawn_sync_status_task(host.clone(), core.clone()));
+    tasks.push(rooms::spawn_room_list_task(host.clone(), core.clone()));
+    tasks.push(events::spawn_verification_task(host.clone(), core.clone()));
+    tasks.push(presence::spawn_presence_task(host.clone(), core.clone()));
     core.tasks.lock().await.extend(tasks);
 
     Ok(core)

@@ -49,12 +49,12 @@ if (capture("git", ["rev-parse", "HEAD"]) !== capture("git", ["rev-parse", `${re
 }
 
 function getVersion() {
-  const cargo = fs.readFileSync("src-tauri/Cargo.toml", "utf8");
+  const cargo = fs.readFileSync("Cargo.toml", "utf8");
 
   const match = cargo.match(/^version\s*=\s*"([^"]+)"/m);
 
   if (!match) {
-    throw new Error("Could not find version in src-tauri/Cargo.toml");
+    throw new Error("Could not find version in Cargo.toml");
   }
 
   return match[1];
@@ -81,8 +81,9 @@ if (existingTags) {
 
 console.log(`Bumping ${currentVersion} → ${newVersion}`);
 
-// Update Cargo.toml
-const cargoPath = "src-tauri/Cargo.toml";
+// Update Cargo.toml — the workspace root, whose `[workspace.package]` version
+// every crate inherits.
+const cargoPath = "Cargo.toml";
 let cargo = fs.readFileSync(cargoPath, "utf8");
 
 cargo = cargo.replace(
@@ -121,7 +122,7 @@ if (fs.existsSync("package-lock.json")) {
 }
 
 // Make sure everything is clean before committing
-run("git", ["add", "package.json", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock"]);
+run("git", ["add", "package.json", "Cargo.toml", "Cargo.lock"]);
 
 if (fs.existsSync("package-lock.json")) {
   run("git", ["add", "package-lock.json"]);

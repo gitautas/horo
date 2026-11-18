@@ -28,7 +28,6 @@ use matrix_sdk::ruma::{
     presence::PresenceState,
 };
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
 use tokio::{
     sync::{Mutex, Notify},
     task::JoinHandle,
@@ -37,7 +36,7 @@ use ts_rs::TS;
 
 use crate::{
     error::Result,
-    events::{self, EV_PRESENCE},
+    events::{self, Event, Host},
     matrix::MatrixCore,
 };
 
@@ -225,7 +224,7 @@ pub async fn snapshot(core: &MatrixCore) -> Result<Vec<PresenceDto>> {
 }
 
 /// Poll the watched set, push what changed, and keep our own presence alive.
-pub fn spawn_presence_task(app: AppHandle, core: Arc<MatrixCore>) -> JoinHandle<()> {
+pub fn spawn_presence_task(host: Host, core: Arc<MatrixCore>) -> JoinHandle<()> {
     tokio::spawn(async move {
         // Presence support is discovered rather than advertised — there's no
         // capability flag for it — so we start optimistic and find out.
@@ -262,9 +261,8 @@ pub fn spawn_presence_task(app: AppHandle, core: Arc<MatrixCore>) -> JoinHandle<
                 if now_supported != supported {
                     supported = now_supported;
                     events::emit(
-                        &app,
-                        EV_PRESENCE,
-                        PresenceUpdate { users: Vec::new(), supported },
+                        &host,
+                        Event::Presence(PresenceUpdate { users: Vec::new(), supported }),
                     );
                 }
 
@@ -286,9 +284,8 @@ pub fn spawn_presence_task(app: AppHandle, core: Arc<MatrixCore>) -> JoinHandle<
 
                     if !changed.is_empty() {
                         events::emit(
-                            &app,
-                            EV_PRESENCE,
-                            PresenceUpdate { users: changed, supported: true },
+                            &host,
+                            Event::Presence(PresenceUpdate { users: changed, supported: true }),
                         );
                     }
                 }

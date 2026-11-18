@@ -22,7 +22,6 @@ use matrix_sdk::{
 use matrix_sdk_ui::timeline::{
     RoomExt, TimelineEventItemId, TimelineFocus, TimelineItem, TimelineReadReceiptTracking,
 };
-use tauri::AppHandle;
 
 use crate::{
     dto::{
@@ -30,7 +29,7 @@ use crate::{
         convert_timeline_item,
     },
     error::{Error, Result},
-    events::{EV_TIMELINE, emit, spawn_typing_task},
+    events::{Event, Host, emit, spawn_typing_task},
     matrix::{MatrixCore, core::OpenTimeline},
 };
 
@@ -50,7 +49,7 @@ pub fn timeline_key(room_id: &RoomId, thread_root: Option<&str>) -> String {
 /// Returns the current items so the UI can paint immediately; subsequent
 /// changes arrive as `matrix://timeline` diffs.
 pub async fn open(
-    app: &AppHandle,
+    host: &Host,
     core: &Arc<MatrixCore>,
     room_id: &RoomId,
     thread_root: Option<String>,
@@ -119,7 +118,7 @@ pub async fn open(
             Some(existing) => Some(existing.timeline.clone()),
             None => {
                 let task = {
-                    let app = app.clone();
+                    let host = host.clone();
                     let core = core.clone();
                     let key = key.clone();
                     let own_user = own_user.clone();
@@ -134,9 +133,8 @@ pub async fn open(
                                 diffs.into_iter().map(|d| convert_diff(d, &own_user)).collect();
 
                             emit(
-                                &app,
-                                EV_TIMELINE,
-                                TimelineUpdate { room_id: key.clone(), diffs: converted },
+                                &host,
+                                Event::Timeline(TimelineUpdate { room_id: key.clone(), diffs: converted }),
                             );
                         }
                     })
@@ -160,7 +158,7 @@ pub async fn open(
 
     // Typing notices only matter for the room the user is actually looking at.
     if thread_root.is_none()
-        && let Some(handle) = spawn_typing_task(app.clone(), core.clone(), room_id.to_owned())
+        && let Some(handle) = spawn_typing_task(host.clone(), core.clone(), room_id.to_owned())
     {
         core.tasks.lock().await.push(handle);
     }

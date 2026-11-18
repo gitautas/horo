@@ -1,40 +1,64 @@
-//! Events pushed from Rust to the frontend, and the tasks that produce them.
+//! What the core tells whoever is driving it, and the tasks that produce it.
 //!
-//! Names are namespaced with `matrix://` so they can't collide with Tauri's own
-//! event traffic.
+//! The core never talks to a UI directly. It pushes typed [`Event`]s into a
+//! [`Host`], and the host decides what they become: the Tauri shell turns them
+//! into `matrix://…` events for the WebView, a native UI can feed them straight
+//! into its own state.
 
 use std::{sync::Arc, time::Duration};
 
-use tauri::{AppHandle, Emitter};
 use tokio::task::JoinHandle;
 
 use crate::{
-    dto::{SyncState, SyncStatus, TypingUpdate, TypingUser},
-    matrix::MatrixCore,
+    dto::{RoomsUpdate, SyncState, SyncStatus, TimelineUpdate, TypingUpdate, TypingUser},
+    matrix::{MatrixCore, presence::PresenceUpdate},
+    verification::{SasStateDto, VerificationRequestDto},
 };
 
-pub const EV_ROOMS: &str = "matrix://rooms";
-pub const EV_TIMELINE: &str = "matrix://timeline";
-pub const EV_TYPING: &str = "matrix://typing";
-pub const EV_PRESENCE: &str = "matrix://presence";
-pub const EV_SYNC_STATUS: &str = "matrix://sync-status";
-pub const EV_VERIFICATION_STATE: &str = "matrix://verification-state";
-pub const EV_VERIFICATION_REQUEST: &str = "matrix://verification-request";
-pub const EV_VERIFICATION_UPDATE: &str = "matrix://verification-update";
+/// Everything the core reports on its own initiative, as opposed to in answer
+/// to a call.
+#[derive(Debug, Clone)]
+pub enum Event {
+    /// A batch of diffs to the room list, numbered so a snapshot can say which
+    /// batches it already contains.
+    Rooms(RoomsUpdate),
+    /// Diffs to one open timeline.
+    Timeline(TimelineUpdate),
+    /// Who is typing in a room with an open timeline.
+    Typing(TypingUpdate),
+    /// Presence changes for watched users, or the server's support for it.
+    Presence(PresenceUpdate),
+    /// The sync service's state, for the connection indicator.
+    SyncStatus(SyncStatus),
+    /// Our own cross-signing state, lowercased from the SDK's
+    /// `VerificationState` (`unknown`, `verified`, `unverified`).
+    VerificationState(String),
+    /// A verification request we have just learned about.
+    VerificationRequest(VerificationRequestDto),
+    /// A known verification request moved on.
+    VerificationRequestUpdate(VerificationRequestDto),
+    /// An emoji (SAS) verification moved on.
+    SasUpdate(SasStateDto),
+}
 
-/// The menu bar asking the UI to open settings. Not a Matrix event — it comes
-/// from the window, so it gets its own namespace.
-pub const EV_OPEN_SETTINGS: &str = "horo://open-settings";
+/// What the core needs from the app around it.
+///
+/// Implementations must be cheap to call from any tokio task: `emit` runs on
+/// sync and timeline tasks, and anything slow there holds up the stream.
+pub trait EventSink: Send + Sync + 'static {
+    /// Deliver an event. Failure (the window is gone, say) is the host's to
+    /// swallow: it must never take down the task that produced the event.
+    fn emit(&self, event: Event);
 
-/// The View menu's zoom items, with `"in"`, `"out"` or `"reset"`.
-pub const EV_ZOOM: &str = "horo://zoom";
+    /// Open a URL in the system browser — SSO sign-in sends people there.
+    fn open_url(&self, url: &str) -> Result<(), String>;
+}
 
-pub fn emit<T: serde::Serialize + Clone>(app: &AppHandle, event: &str, payload: T) {
-    // A failed emit means the window is gone; there's nothing useful to do
-    // about it and it must not take down the producing task.
-    if let Err(e) = app.emit(event, payload) {
-        tracing::debug!("emit {event} failed: {e}");
-    }
+/// A shared handle to the app's [`EventSink`].
+pub type Host = Arc<dyn EventSink>;
+
+pub fn emit(host: &Host, event: Event) {
+    host.emit(event);
 }
 
 /// First wait before restarting a sync that stopped on an error, doubled on
@@ -49,7 +73,7 @@ const SYNC_RETRY_MAX: Duration = Duration::from_secs(60);
 /// the proxy, a sliding sync session the server dropped) leaves the service
 /// stopped until someone calls `start()` again, and until then nothing new
 /// arrives: no messages, no notifications, no incoming calls.
-pub fn spawn_sync_status_task(app: AppHandle, core: Arc<MatrixCore>) -> JoinHandle<()> {
+pub fn spawn_sync_status_task(host: Host, core: Arc<MatrixCore>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut states = core.sync_service.state();
         let mut retry = SYNC_RETRY_MIN;
@@ -67,11 +91,7 @@ pub fn spawn_sync_status_task(app: AppHandle, core: Arc<MatrixCore>) -> JoinHand
                 State::Offline => (SyncState::Offline, Some("offline".to_owned())),
             };
 
-            emit(
-                &app,
-                EV_SYNC_STATUS,
-                SyncStatus { state: sync_state, message },
-            );
+            emit(&host, Event::SyncStatus(SyncStatus { state: sync_state, message }));
 
             match state {
                 State::Running => retry = SYNC_RETRY_MIN,
@@ -93,23 +113,22 @@ pub fn spawn_sync_status_task(app: AppHandle, core: Arc<MatrixCore>) -> JoinHand
 
 /// Watch our own cross-signing state, and surface verification requests from
 /// our other devices — the "new device wants in~" banner in the design.
-pub fn spawn_verification_task(app: AppHandle, core: Arc<MatrixCore>) -> JoinHandle<()> {
+pub fn spawn_verification_task(host: Host, core: Arc<MatrixCore>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let encryption = core.client.encryption();
 
-        let app_for_state = app.clone();
+        let host_for_state = host.clone();
         let state_task = tokio::spawn(async move {
             let mut states = encryption.verification_state();
             while let Some(state) = states.next().await {
                 emit(
-                    &app_for_state,
-                    EV_VERIFICATION_STATE,
-                    serde_json::json!({ "state": format!("{state:?}").to_lowercase() }),
+                    &host_for_state,
+                    Event::VerificationState(format!("{state:?}").to_lowercase()),
                 );
             }
         });
 
-        crate::verification::watch_requests(app, core).await;
+        crate::verification::watch_requests(host, core).await;
         state_task.abort();
     })
 }
@@ -117,7 +136,7 @@ pub fn spawn_verification_task(app: AppHandle, core: Arc<MatrixCore>) -> JoinHan
 /// Typing notifications for one room. Started when a timeline opens and dropped
 /// when it closes, so we're not subscribed to rooms nobody is looking at.
 pub fn spawn_typing_task(
-    app: AppHandle,
+    host: Host,
     core: Arc<MatrixCore>,
     room_id: matrix_sdk::ruma::OwnedRoomId,
 ) -> Option<JoinHandle<()>> {
@@ -147,11 +166,7 @@ pub fn spawn_typing_task(
                 users.push(TypingUser { user_id: user_id.to_string(), display_name });
             }
 
-            emit(
-                &app,
-                EV_TYPING,
-                TypingUpdate { room_id: room_id.to_string(), users },
-            );
+            emit(&host, Event::Typing(TypingUpdate { room_id: room_id.to_string(), users }));
         }
     }))
 }

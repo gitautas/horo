@@ -25,12 +25,11 @@ use matrix_sdk::{
 };
 use matrix_sdk_ui::timeline::EncryptedMessage;
 use serde::Serialize;
-use tauri::AppHandle;
 use ts_rs::TS;
 
 use crate::{
     error::{Error, Result},
-    events::{EV_VERIFICATION_REQUEST, EV_VERIFICATION_UPDATE, emit},
+    events::{Event, Host, emit},
     matrix::MatrixCore,
 };
 
@@ -161,15 +160,15 @@ fn log_cancel(flow_id: &str, what: &str, info: &CancelInfo) {
 
 /// Register handlers for incoming verification requests and keep them running
 /// for the life of the session.
-pub async fn watch_requests(app: AppHandle, core: Arc<MatrixCore>) {
+pub async fn watch_requests(host: Host, core: Arc<MatrixCore>) {
     let client = core.client.clone();
 
     // Path 1: another of our own devices asks to verify, over to-device.
-    let app_to_device = app.clone();
+    let host_to_device = host.clone();
     let core_to_device = core.clone();
     client.add_event_handler(
         move |event: ToDeviceKeyVerificationRequestEvent, client: Client| {
-            let app = app_to_device.clone();
+            let host = host_to_device.clone();
             let core = core_to_device.clone();
             async move {
                 let Some(request) = client
@@ -179,16 +178,16 @@ pub async fn watch_requests(app: AppHandle, core: Arc<MatrixCore>) {
                 else {
                     return;
                 };
-                announce(app, core, request).await;
+                announce(host, core, request).await;
             }
         },
     );
 
     // Path 2: someone verifies us from inside a room (the DM flow).
-    let app_in_room = app.clone();
+    let host_in_room = host.clone();
     let core_in_room = core.clone();
     client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, client: Client| {
-        let app = app_in_room.clone();
+        let host = host_in_room.clone();
         let core = core_in_room.clone();
         async move {
             if !matches!(event.content.msgtype, MessageType::VerificationRequest(_)) {
@@ -201,7 +200,7 @@ pub async fn watch_requests(app: AppHandle, core: Arc<MatrixCore>) {
             else {
                 return;
             };
-            announce(app, core, request).await;
+            announce(host, core, request).await;
         }
     });
 
@@ -210,8 +209,8 @@ pub async fn watch_requests(app: AppHandle, core: Arc<MatrixCore>) {
 }
 
 /// Tell the UI about a request, then follow it until it resolves.
-async fn announce(app: AppHandle, core: Arc<MatrixCore>, request: VerificationRequest) {
-    emit(&app, EV_VERIFICATION_REQUEST, to_dto(&request, &request.state()));
+async fn announce(host: Host, core: Arc<MatrixCore>, request: VerificationRequest) {
+    emit(&host, Event::VerificationRequest(to_dto(&request, &request.state())));
 
     tokio::spawn(async move {
         let is_self = request.is_self_verification();
@@ -222,13 +221,13 @@ async fn announce(app: AppHandle, core: Arc<MatrixCore>, request: VerificationRe
                 log_cancel(&flow_id, "request", info);
             }
 
-            emit(&app, EV_VERIFICATION_UPDATE, to_dto(&request, &state));
+            emit(&host, Event::VerificationRequestUpdate(to_dto(&request, &state)));
 
             // Once the other side picks SAS, start reporting emoji instead.
             if let VerificationRequestState::Transitioned { verification, .. } = &state
                 && let Verification::SasV1(sas) = verification
             {
-                watch_sas(app.clone(), sas.clone(), request.flow_id().to_owned());
+                watch_sas(host.clone(), sas.clone(), request.flow_id().to_owned());
             }
 
             if matches!(state, VerificationRequestState::Done) {
@@ -343,7 +342,7 @@ fn sas_dto(sas: &SasVerification, flow_id: &str, state: &SasState) -> SasStateDt
     }
 }
 
-fn watch_sas(app: AppHandle, sas: SasVerification, flow_id: String) {
+fn watch_sas(host: Host, sas: SasVerification, flow_id: String) {
     tokio::spawn(async move {
         // Subscribe *before* reading the current state. `changes()` only ever
         // yields transitions that happen after the call — it does not replay
@@ -385,7 +384,7 @@ fn watch_sas(app: AppHandle, sas: SasVerification, flow_id: String) {
                 log_cancel(&flow_id, "sas", info);
             }
 
-            emit(&app, EV_VERIFICATION_UPDATE, sas_dto(&sas, &flow_id, &state));
+            emit(&host, Event::SasUpdate(sas_dto(&sas, &flow_id, &state)));
             if matches!(state, SasState::Done { .. } | SasState::Cancelled(_)) {
                 break;
             }
@@ -423,7 +422,7 @@ async fn find_sas(core: &MatrixCore, user_id: &str, flow_id: &str) -> Result<Sas
 
 /// Ask another device (or user) to verify us.
 pub async fn request(
-    app: &AppHandle,
+    host: &Host,
     core: &Arc<MatrixCore>,
     user_id: Option<String>,
 ) -> Result<()> {
@@ -457,7 +456,7 @@ pub async fn request(
         }
     };
 
-    announce(app.clone(), core.clone(), request).await;
+    announce(host.clone(), core.clone(), request).await;
     Ok(())
 }
 
@@ -557,7 +556,7 @@ pub async fn own_devices(core: &MatrixCore) -> Result<Vec<DeviceInfo>> {
 }
 
 /// Start verifying one of our own devices.
-pub async fn verify_device(app: &AppHandle, core: &Arc<MatrixCore>, device_id: &str) -> Result<()> {
+pub async fn verify_device(host: &Host, core: &Arc<MatrixCore>, device_id: &str) -> Result<()> {
     let user_id = core.own_user_id()?;
     let device_id = matrix_sdk::ruma::OwnedDeviceId::from(device_id);
 
@@ -574,7 +573,7 @@ pub async fn verify_device(app: &AppHandle, core: &Arc<MatrixCore>, device_id: &
         .await
         .map_err(|e| Error::Other(format!("couldn't start verification: {e}")))?;
 
-    announce(app.clone(), core.clone(), request).await;
+    announce(host.clone(), core.clone(), request).await;
     Ok(())
 }
 

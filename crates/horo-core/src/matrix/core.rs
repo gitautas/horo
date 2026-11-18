@@ -128,7 +128,8 @@ impl MatrixCore {
     }
 }
 
-/// The one piece of state Tauri manages. `None` until someone signs in.
+/// The app's handle on the current session, held by whichever shell drives the
+/// core (Tauri manages it as state today). `None` until someone signs in.
 #[derive(Default)]
 pub struct AppState {
     pub core: RwLock<Option<Arc<MatrixCore>>>,

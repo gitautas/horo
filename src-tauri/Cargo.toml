@@ -1,10 +1,10 @@
 [package]
 name = "horo"
-version = "0.11.0"
 description = "a cute matrix client"
-authors = ["horo"]
-edition = "2024"
-rust-version = "1.93"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
 
 [lib]
 # The `_lib` suffix keeps the lib name distinct from the bin name on Windows.
@@ -19,47 +19,17 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 
-matrix-sdk = { version = "0.18", default-features = false, features = [
-  "e2e-encryption",
-  "automatic-room-key-forwarding",
-  "sqlite",
-  "bundled-sqlite",
-  "markdown",
-  "sso-login",
-  "qrcode",
-] }
-# Timeline aggregation (edits/reactions/replies), sliding-sync room list, and
-# spaces — the same layer Element X is built on.
-matrix-sdk-ui = { version = "0.18", default-features = false }
-# For the few base types matrix-sdk doesn't re-export (LatestEventValue).
-matrix-sdk-base = { version = "0.18", default-features = false }
-# `ruma` and `eyeball_im` come from the SDK's own re-exports (matrix_sdk::ruma,
-# matrix_sdk_ui::eyeball_im) so their versions can never drift out of sync.
+horo-core.workspace = true
+horo-rtc.workspace = true
+matrix-sdk.workspace = true
 
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "fs"] }
-tokio-stream = "0.1"
-futures-util = "0.3"
-
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-# Generates src/lib/bindings from the wire types — `npm run bindings`. Reads
-# the serde attributes, so what it writes is what actually crosses the bridge.
-ts-rs = "12"
-
-anyhow = "1"
-thiserror = "2"
-tracing = "0.1"
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ts-rs.workspace = true
+tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# `v1` (the default) picks the right native store per platform: Keychain on
-# macOS, Credential Manager on Windows, Secret Service on *nix.
-keyring = "4"
-rand = "0.9"
-url = "2"
-mime = "0.3"
-mime_guess = "2"
-uuid = { version = "1", features = ["v4"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest.workspace = true
 
 # rustls 0.23 picks its crypto backend from crate features, and refuses to
 # guess when more than one is on. Ours has both: `hyper-rustls` asks for
@@ -102,26 +72,6 @@ webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 # Only for `webkit_get_*_version`, which the safe wrapper doesn't re-export.
 webkit2gtk-sys = "=2.0.2"
 
-
-# `keyring`'s `v1` API — the layer that picks a store per platform — excludes
-# iOS by design: its `set_credential_store` returns `Invalid("platform", ..)`
-# there, and `apple-native-keyring-store` refuses to compile for iOS at all
-# unless the `protected` feature is on, which `v1` never enables. So iOS
-# registers the data-protection keychain itself (see `session.rs`). Cargo
-# unifies features across the graph, so naming `protected` here also switches
-# it on inside `keyring`'s own copy of the store, which is what clears the
-# `compile_error!`.
-[target.'cfg(target_os = "ios")'.dependencies]
-keyring-core = "1"
-apple-native-keyring-store = { version = "1", features = ["protected"] }
-
 [features]
 # Enabled by the Tauri CLI for production builds. DO NOT REMOVE.
 custom-protocol = ["tauri/custom-protocol"]
-
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = "s"
-panic = "abort"
-strip = true

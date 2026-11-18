@@ -13,6 +13,7 @@ use crate::{
     },
     error::{Error, Result},
     matrix::{auth, core::AppState, directory, media, packs, presence, profile, rooms, timeline},
+    host::host,
     rtc, verification,
 };
 
@@ -48,7 +49,7 @@ pub async fn login_password(
     password: String,
 ) -> Result<SessionInfo> {
     let dir = data_dir(&app)?;
-    auth::login_password(app.clone(), &state, &dir, &server, &username, &password).await
+    auth::login_password(host(&app), &state, &dir, &server, &username, &password).await
 }
 
 #[tauri::command]
@@ -59,7 +60,7 @@ pub async fn login_sso(
     provider_id: Option<String>,
 ) -> Result<SessionInfo> {
     let dir = data_dir(&app)?;
-    auth::login_sso(app.clone(), &state, &dir, &server, provider_id).await
+    auth::login_sso(host(&app), &state, &dir, &server, provider_id).await
 }
 
 #[tauri::command]
@@ -74,7 +75,7 @@ pub async fn register_account(
 ) -> Result<RegisterStep> {
     let dir = data_dir(&app)?;
     auth::register(
-        app.clone(),
+        host(&app),
         &state,
         &dir,
         &server,
@@ -102,7 +103,7 @@ pub async fn restore_session(
     state: State<'_, AppState>,
 ) -> Result<Option<SessionInfo>> {
     let dir = data_dir(&app)?;
-    auth::restore(app.clone(), &state, &dir).await
+    auth::restore(host(&app), &state, &dir).await
 }
 
 #[tauri::command]
@@ -282,7 +283,7 @@ pub async fn set_room_muted(
     // Muting writes push rules, which the room-list stream has no reason to
     // report; without this the toggle only catches up when something else about
     // the room changes.
-    rooms::emit_room_refresh(&app, &core, &room_id).await;
+    rooms::emit_room_refresh(&host(&app), &core, &room_id).await;
     Ok(())
 }
 
@@ -342,7 +343,7 @@ where
             tracing::warn!("{room_id}: {e}");
             first_error.get_or_insert(e);
         }
-        rooms::emit_room_refresh(app, core, &room_id).await;
+        rooms::emit_room_refresh(&host(app), core, &room_id).await;
     }
     first_error.map_or(Ok(()), Err)
 }
@@ -431,7 +432,7 @@ pub async fn open_timeline(
     thread_root: Option<String>,
 ) -> Result<Vec<TimelineItemDto>> {
     let core = state.core().await?;
-    timeline::open(&app, &core, &parse_room_id(&room_id)?, thread_root).await
+    timeline::open(&host(&app), &core, &parse_room_id(&room_id)?, thread_root).await
 }
 
 #[tauri::command]
@@ -740,7 +741,7 @@ pub async fn request_verification(
     state: State<'_, AppState>,
     user_id: Option<String>,
 ) -> Result<()> {
-    verification::request(&app, &state.core().await?, user_id).await
+    verification::request(&host(&app), &state.core().await?, user_id).await
 }
 
 #[tauri::command]
@@ -792,7 +793,7 @@ pub async fn verify_device(
     state: State<'_, AppState>,
     device_id: String,
 ) -> Result<()> {
-    verification::verify_device(&app, &state.core().await?, &device_id).await
+    verification::verify_device(&host(&app), &state.core().await?, &device_id).await
 }
 
 #[tauri::command]

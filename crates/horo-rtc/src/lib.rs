@@ -36,7 +36,7 @@ use matrix_sdk::ruma::{
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{
+use horo_core::{
     error::{Error, Result},
     matrix::MatrixCore,
 };
@@ -90,7 +90,7 @@ struct SfuResponse {
 /// Joining someone else's call uses *their* focus instead, so we land on
 /// their SFU rather than a second, disconnected one.
 async fn own_focus(core: &MatrixCore) -> Result<String> {
-    crate::matrix::auth::discover_livekit_focus(core.client.homeserver().as_str())
+    horo_core::matrix::auth::discover_livekit_focus(core.client.homeserver().as_str())
         .await
         .ok_or_else(|| {
             Error::Other(
@@ -205,7 +205,7 @@ pub async fn join(core: &MatrixCore, room_id: &RoomId, video: bool) -> Result<Ca
 
 fn is_voice_room(room: &matrix_sdk::Room) -> bool {
     let room_type = room.room_type().map(|t| t.as_str().to_owned());
-    room.is_call() || crate::matrix::rooms::is_call_room_type(room_type.as_deref())
+    room.is_call() || horo_core::matrix::rooms::is_call_room_type(room_type.as_deref())
 }
 
 /// Tell the room a call has started. Returns whether that rings phones.

@@ -11,7 +11,6 @@ use matrix_sdk::{
     },
 };
 use matrix_sdk_ui::room_list_service::filters;
-use tauri::AppHandle;
 use tokio::task::JoinHandle;
 use ts_rs::TS;
 
@@ -21,7 +20,7 @@ use crate::{
         Verification,
     },
     error::{Error, Result},
-    events::EV_ROOMS,
+    events::{Event, Host},
     matrix::MatrixCore,
 };
 
@@ -52,7 +51,7 @@ fn membership_state_str(state: &MembershipState) -> &'static str {
 const CALL_ROOM_TYPES: &[&str] = &["m.video_room", "io.element.video", "org.matrix.msc3417.call"];
 
 /// Whether a room is a call rather than a conversation.
-pub(crate) fn is_call_room_type(room_type: Option<&str>) -> bool {
+pub fn is_call_room_type(room_type: Option<&str>) -> bool {
     room_type.is_some_and(|t| CALL_ROOM_TYPES.contains(&t))
 }
 
@@ -250,7 +249,7 @@ async fn collect_parent_spaces(room: &Room) -> Vec<String> {
 /// The sliding-sync list yields `VectorDiff`s; we translate each one and pass it
 /// through so the UI mutates its list in place. A full `Reset` arrives first,
 /// and again whenever the filter changes.
-pub fn spawn_room_list_task(app: AppHandle, core: Arc<MatrixCore>) -> JoinHandle<()> {
+pub fn spawn_room_list_task(host: Host, core: Arc<MatrixCore>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let all_rooms = match core.room_list.all_rooms().await {
             Ok(rooms) => rooms,
@@ -289,7 +288,7 @@ pub fn spawn_room_list_task(app: AppHandle, core: Arc<MatrixCore>) -> JoinHandle
                 RoomsUpdate { seq: mirror.seq, diffs: converted }
             };
 
-            crate::events::emit(&app, EV_ROOMS, update);
+            crate::events::emit(&host, Event::Rooms(update));
         }
     })
 }
@@ -302,7 +301,7 @@ pub fn spawn_room_list_task(app: AppHandle, core: Arc<MatrixCore>) -> JoinHandle
 ///
 /// Folding into the mirror under the same lock the stream uses keeps `seq`
 /// meaning what it claims to: batch N is the Nth change to the list.
-pub async fn emit_room_refresh(app: &AppHandle, core: &MatrixCore, room_id: &RoomId) {
+pub async fn emit_room_refresh(host: &Host, core: &MatrixCore, room_id: &RoomId) {
     let Ok(room) = core.room(&room_id.to_owned()) else { return };
     let value = summarise_or_placeholder(&room).await;
 
@@ -318,7 +317,7 @@ pub async fn emit_room_refresh(app: &AppHandle, core: &MatrixCore, room_id: &Roo
         RoomsUpdate { seq: mirror.seq, diffs: vec![Diff::Set { index, value }] }
     };
 
-    crate::events::emit(app, EV_ROOMS, update);
+    crate::events::emit(host, Event::Rooms(update));
 }
 
 /// Replay a diff onto the mirror. Index-bearing operations are bounds-checked:

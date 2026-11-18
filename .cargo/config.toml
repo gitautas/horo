@@ -7,3 +7,9 @@ TS_RS_EXPORT_DIR = { value = "src/lib/bindings", relative = true }
 # u64 and i64 cross the bridge as JSON numbers, and `JSON.parse` hands them
 # back as `number`. ts-rs would otherwise call them `bigint`.
 TS_RS_LARGE_INT = "number"
+
+[build]
+# The workspace root moved up from src-tauri/ to the repo root, which would move
+# the target directory with it. Keeping it where it was means the Tauri CLI, the
+# release workflow's artefact paths and the CI cache all keep working unchanged.
+target-dir = "src-tauri/target"

@@ -1,0 +1,18 @@
+[package]
+name = "horo-rtc"
+description = "MatrixRTC call signalling for horo: membership, LiveKit credentials, ringing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+horo-core.workspace = true
+matrix-sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ts-rs.workspace = true
+tracing.workspace = true
+url.workspace = true
+reqwest.workspace = true
