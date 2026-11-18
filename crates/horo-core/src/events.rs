@@ -78,8 +78,17 @@ pub fn spawn_sync_status_task(host: Host, core: Arc<MatrixCore>) -> JoinHandle<(
         let mut states = core.sync_service.state();
         let mut retry = SYNC_RETRY_MIN;
 
+        // Sync is started before this task subscribes, and a subscriber only
+        // hears about later changes, so start from where it already is. Without
+        // this the UI never hears "running" at all, and an error that happened
+        // before we got here would never be retried.
+        let mut current = Some(states.next_now());
+
         loop {
-            let state = states.next().await;
+            let state = match current.take() {
+                Some(state) => Some(state),
+                None => states.next().await,
+            };
             let Some(state) = state else { break };
 
             use matrix_sdk_ui::sync_service::State;
