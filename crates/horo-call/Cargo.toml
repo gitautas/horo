@@ -1,0 +1,27 @@
+[package]
+name = "horo-call"
+description = "horo's call engine: a LiveKit room joined with horo's own signalling, peers and audio path, plus a command-line client for MatrixRTC calls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+horo-livekit.workspace = true
+horo-media.workspace = true
+horo-devices.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+# The command-line client: Matrix sign-in and the MatrixRTC membership.
+horo-core.workspace = true
+horo-rtc.workspace = true
+matrix-sdk.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rpassword = "7"
+
+[dev-dependencies]
+jsonwebtoken = "9"
+serde.workspace = true

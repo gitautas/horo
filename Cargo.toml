@@ -18,6 +18,7 @@ horo-core = { path = "crates/horo-core" }
 horo-rtc = { path = "crates/horo-rtc" }
 horo-livekit = { path = "crates/horo-livekit" }
 horo-devices = { path = "crates/horo-devices" }
+horo-media = { path = "crates/horo-media" }
 
 matrix-sdk = { version = "0.18", default-features = false, features = [
   "e2e-encryption",
