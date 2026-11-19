@@ -77,6 +77,13 @@ jobs:
       - name: Start test LiveKit server
         run: scripts/test-livekit/start.sh
 
+      # A second LiveKit with its TURN server on, for horo-media's relayed
+      # calls. It prints the env the tests read; GITHUB_ENV wants one per line.
+      - name: Start test LiveKit server with TURN
+        # `shell: bash` adds pipefail, so a failed start isn't hidden by the pipe.
+        shell: bash
+        run: scripts/test-livekit/start-turn.sh | sed 's/^export //' | tr ' ' '\n' >> "$GITHUB_ENV"
+
       - name: Test
         env:
           HORO_TEST_HOMESERVER: http://localhost:8008
@@ -89,7 +96,9 @@ jobs:
 
       - name: LiveKit log
         if: failure()
-        run: docker logs horo-test-livekit 2>&1 | tail -200
+        run: |
+          docker logs horo-test-livekit 2>&1 | tail -100
+          docker logs horo-test-livekit-turn 2>&1 | tail -100
 
       # src/lib/bindings is generated from the Rust wire types and committed, so
       # the frontend build never needs cargo. That only holds while nobody
