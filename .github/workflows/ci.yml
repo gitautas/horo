@@ -72,14 +72,24 @@ jobs:
       - name: Start test homeserver
         run: scripts/test-homeserver/start.sh
 
+      # horo-livekit's signal client against a real SFU
+      # (crates/horo-livekit/tests/livekit.rs).
+      - name: Start test LiveKit server
+        run: scripts/test-livekit/start.sh
+
       - name: Test
         env:
           HORO_TEST_HOMESERVER: http://localhost:8008
+          HORO_TEST_LIVEKIT: ws://127.0.0.1:7880
         run: cargo test --workspace
 
       - name: Homeserver log
         if: failure()
         run: docker logs horo-test-synapse 2>&1 | tail -200
+
+      - name: LiveKit log
+        if: failure()
+        run: docker logs horo-test-livekit 2>&1 | tail -200
 
       # src/lib/bindings is generated from the Rust wire types and committed, so
       # the frontend build never needs cargo. That only holds while nobody
