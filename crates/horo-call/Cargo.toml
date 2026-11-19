@@ -21,6 +21,9 @@ horo-rtc.workspace = true
 matrix-sdk.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rpassword = "7"
+# Picks aws-lc-rs as the process's TLS crypto, as the Tauri shell does:
+# matrix-sdk also links ring, and then rustls won't choose on its own.
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
 
 [dev-dependencies]
 jsonwebtoken = "9"

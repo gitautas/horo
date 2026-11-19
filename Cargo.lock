@@ -2647,6 +2647,7 @@ dependencies = [
  "jsonwebtoken",
  "matrix-sdk",
  "rpassword",
+ "rustls",
  "serde",
  "thiserror 2.0.20",
  "tokio",
