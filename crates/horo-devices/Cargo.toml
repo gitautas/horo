@@ -1,0 +1,19 @@
+[package]
+name = "horo-devices"
+description = "Microphones and speakers for horo: capture and playback at 48 kHz mono, 20 ms frames"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+# CoreAudio, WASAPI, ALSA. Phones get their own backends (AVAudioSession +
+# VPIO on iOS, AAudio on Android) behind the same interface.
+cpal = "0.18"
+# Device rates (44.1 kHz is common) to the codec's 48 kHz and back.
+rubato = "5"
+# The only thing the real-time callbacks touch: lock-free, no allocation.
+ringbuf = "0.6"
+thiserror.workspace = true
+tracing.workspace = true

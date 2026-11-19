@@ -29,5 +29,6 @@ opus = "0.4"
 
 [dev-dependencies]
 horo-livekit.workspace = true
+horo-devices.workspace = true
 jsonwebtoken = "9"
 serde.workspace = true
