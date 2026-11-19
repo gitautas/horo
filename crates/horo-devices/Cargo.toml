@@ -17,3 +17,12 @@ rubato = "5"
 ringbuf = "0.6"
 thiserror.workspace = true
 tracing.workspace = true
+
+# Apple's VoiceProcessingIO: echo cancellation, noise suppression and gain
+# control in one I/O unit, as FaceTime uses (see `apple.rs`).
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+objc2-audio-toolbox = { version = "0.3.2", features = ["AUComponent", "AudioComponent", "AudioOutputUnit", "AudioUnitProperties", "objc2-core-audio-types"] }
+objc2-core-audio-types = { version = "0.3.2", features = ["CoreAudioBaseTypes"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-avf-audio = { version = "0.3.2", features = ["AVAudioSession", "AVAudioSessionTypes"] }
