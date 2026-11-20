@@ -1,0 +1,22 @@
+[package]
+name = "horo-desktop"
+description = "horo on the desktop, in gpui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "horo"
+path = "src/main.rs"
+
+[dependencies]
+horo-ui = { path = "../../crates/horo-ui" }
+horo-core.workspace = true
+gpui = { package = "gpui-pre", version = "=0.3.12" }
+# Shaders compile at startup (Xcode 27 has no offline Metal compiler), and
+# font-kit is what renders text on macOS at all.
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["runtime_shaders", "font-kit"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }

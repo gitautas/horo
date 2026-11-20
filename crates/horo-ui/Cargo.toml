@@ -1,0 +1,18 @@
+[package]
+name = "horo-ui"
+description = "horo's gpui interface: theme, views, and the bridge from horo-core's events into gpui state"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+horo-core.workspace = true
+# gpui-component 0.10 is built on `gpui-pre`, a republished Zed snapshot
+# (docs/spikes/gpui-desktop.md on the spike branch); both pinned together.
+gpui = { package = "gpui-pre", version = "=0.3.12" }
+gpui-component = "0.10"
+tokio.workspace = true
+tracing.workspace = true
+anyhow.workspace = true

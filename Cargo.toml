@@ -5,7 +5,7 @@
 # See docs/gpui-rewrite-plan.md for where this is going.
 [workspace]
 resolver = "3"
-members = ["src-tauri", "crates/*"]
+members = ["src-tauri", "crates/*", "apps/*"]
 
 [workspace.package]
 version = "0.11.0"
