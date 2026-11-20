@@ -87,7 +87,7 @@ impl Backend {
     }
 
     /// Run `future` on the core's runtime; await the result from gpui.
-    pub fn run<F, T>(&self, future: F) -> impl Future<Output = anyhow::Result<T>> + 'static
+    pub fn run<F, T>(&self, future: F) -> impl Future<Output = anyhow::Result<T>> + use<F, T>
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,

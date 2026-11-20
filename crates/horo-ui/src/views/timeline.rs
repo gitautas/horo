@@ -42,6 +42,8 @@ pub struct Timeline {
     paginating: bool,
     at_start: bool,
     error: Option<SharedString>,
+    /// A read marker is due to go out shortly.
+    marking_read: bool,
 }
 
 impl Timeline {
@@ -69,6 +71,7 @@ impl Timeline {
             paginating: false,
             at_start: false,
             error: None,
+            marking_read: false,
         };
 
         let backend = Backend::global(cx);
@@ -99,7 +102,32 @@ impl Timeline {
         if self.items.len() < 30 {
             self.paginate(cx);
         }
+        self.mark_read(cx);
         cx.notify();
+    }
+
+    /// The room is on screen, so what's in it has been seen: move the read
+    /// marker (which clears its unread badge), at most once a second.
+    fn mark_read(&mut self, cx: &mut Context<Self>) {
+        if self.marking_read {
+            return;
+        }
+        self.marking_read = true;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_secs(1)).await;
+            let Ok(task) = this.update(cx, |timeline, cx| {
+                timeline.marking_read = false;
+                let backend = Backend::global(cx);
+                let (state, room_id) = (backend.state.clone(), timeline.room_id.clone());
+                backend.run(async move { timeline::mark_as_read(&*state.core().await?, &room_id).await })
+            }) else {
+                return;
+            };
+            if let Ok(Err(e)) = task.await {
+                tracing::debug!("marking read: {e}");
+            }
+        })
+        .detach();
     }
 
     fn failed(&mut self, error: String, cx: &mut Context<Self>) {
@@ -124,6 +152,7 @@ impl Timeline {
                 }
             }
         }
+        self.mark_read(cx);
         cx.notify();
     }
 

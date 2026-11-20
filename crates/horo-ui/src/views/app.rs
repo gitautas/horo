@@ -28,7 +28,7 @@ impl AppView {
             self.login = None;
             if self.shell.is_none() {
                 let store = self.store.clone();
-                self.shell = Some(cx.new(|cx| Shell::new(store, cx)));
+                self.shell = Some(cx.new(|cx| Shell::new(store, window, cx)));
             }
         } else if !matches!(self.store.read(cx).phase, Phase::Restoring) {
             self.shell = None;

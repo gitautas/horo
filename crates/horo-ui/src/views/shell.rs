@@ -16,41 +16,44 @@ use crate::{
     rooms::{self, View},
     store::{Phase, Store},
     theme::Palette,
-    views::{avatar::monogram, timeline::Timeline},
+    views::{avatar::monogram, composer::Composer, timeline::Timeline},
 };
 
 pub struct Shell {
     store: Entity<Store>,
-    /// The open room's timeline, and which room it is.
-    timeline: Option<(String, Entity<Timeline>)>,
+    /// The open room: which, its timeline and its composer.
+    timeline: Option<(String, Entity<Timeline>, Entity<Composer>)>,
 }
 
 impl Shell {
-    pub fn new(store: Entity<Store>, cx: &mut Context<Self>) -> Shell {
-        cx.observe(&store, |this, _, cx| {
-            this.follow_room(cx);
+    pub fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Shell {
+        cx.observe_in(&store, window, |this, _, window, cx| {
+            this.follow_room(window, cx);
             cx.notify()
         })
         .detach();
         let mut shell = Shell { store, timeline: None };
-        shell.follow_room(cx);
+        shell.follow_room(window, cx);
         shell
     }
 
-    /// Open the selected room's timeline, closing the last one.
-    fn follow_room(&mut self, cx: &mut Context<Self>) {
-        let selected = self.store.read(cx).room.clone();
-        if self.timeline.as_ref().map(|(id, _)| id) == selected.as_ref() {
+    /// Open the selected room's timeline and composer, closing the last.
+    fn follow_room(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let store = self.store.read(cx);
+        let selected = store.room.clone();
+        if self.timeline.as_ref().map(|(id, ..)| id) == selected.as_ref() {
             return;
         }
-        if let Some((_, old)) = self.timeline.take() {
+        let name = selected.as_ref().and_then(|id| store.rooms.iter().find(|r| r.id == *id)).map(|r| r.name.clone()).unwrap_or_default();
+        if let Some((_, old, _)) = self.timeline.take() {
             old.read(cx).close(cx);
         }
         let Some(id) = selected else { return };
         let Ok(room_id) = OwnedRoomId::try_from(id.as_str()) else { return };
         let store = self.store.clone();
-        let view = cx.new(|cx| Timeline::new(room_id, &store, cx));
-        self.timeline = Some((id, view));
+        let timeline = cx.new(|cx| Timeline::new(room_id.clone(), &store, cx));
+        let composer = cx.new(|cx| Composer::new(room_id, &name, window, cx));
+        self.timeline = Some((id, timeline, composer));
     }
 
     fn rail(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
@@ -263,8 +266,10 @@ impl Shell {
         let store = self.store.read(cx);
         let room = store.room.as_ref().and_then(|id| store.rooms.iter().find(|r| r.id == *id)).cloned();
         let body = match (&room, &self.timeline) {
-            (Some(_), Some((_, timeline))) => div().flex_1().min_h_0().child(timeline.clone()),
-            _ => div().m_auto().text_color(palette.text_tertiary).child("pick a room"),
+            (Some(_), Some((_, timeline, composer))) => {
+                v_flex().flex_1().min_h_0().child(div().flex_1().min_h_0().child(timeline.clone())).child(composer.clone())
+            }
+            _ => v_flex().m_auto().text_color(palette.text_tertiary).child("pick a room"),
         };
         v_flex()
             .flex_1()
