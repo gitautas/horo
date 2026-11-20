@@ -33,7 +33,7 @@ use horo_media::{
         codec::Encoder,
         echo::EchoCanceller,
         gate::{GATE_OFF_DB, GateReading, NoiseGate},
-        jitter::JitterBuffer,
+        jitter::{JitterBuffer, JitterStats},
         mixer::mix,
     },
 };
@@ -455,6 +455,18 @@ impl Speaker {
     /// [`Microphone::set_echo_canceller`].
     pub fn set_echo_canceller(&mut self, echo: Option<EchoCanceller>) {
         self.echo = echo;
+    }
+
+    /// Each live remote track's jitter buffer: target delay and counters.
+    pub fn stats(&self) -> Vec<(Duration, JitterStats)> {
+        let now = Instant::now();
+        let remotes = self.remotes.lock().unwrap();
+        remotes
+            .tracks
+            .values()
+            .filter(|r| now.duration_since(r.last_packet) <= IDLE)
+            .map(|r| (r.buffer.target_delay(), r.buffer.stats()))
+            .collect()
     }
 
     /// The next 20 ms of everyone else, mixed.

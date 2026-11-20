@@ -1,0 +1,131 @@
+<!doctype html>
+<!--
+  livekit-client on the other end of a horo-call engine: the interop check.
+
+  Serve this folder next to a copy of livekit-client's ESM build and open it
+  with the room's URL and a token (see run.sh):
+
+    index.html?url=ws://127.0.0.1:7880&token=<jwt>&hz=660
+
+  "Start" publishes a sine of `hz` as a microphone track with
+  livekit-client's default audio settings (Opus with DTX and RED, as
+  Element Call and horo's WebView build publish), and listens to whatever
+  else is in the room: the loudest frequency, its level, and the receive
+  stats. Everything lands in `window.interop` and the <pre> below;
+  `window.lk` has the room, the tone's gain node and the published track,
+  to drive silence (`lk.gain.gain.value = 0`, DTX) and mute
+  (`lk.track.mute()`) from the console.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>horo interop</title>
+    <style>
+      body { font: 14px ui-monospace, monospace; margin: 16px; }
+      button { font: inherit; padding: 6px 14px; }
+    </style>
+  </head>
+  <body>
+    <button id="start">Start</button>
+    <pre id="status">not started</pre>
+    <script type="module">
+      import { Room, RoomEvent, Track } from "./livekit-client.esm.mjs";
+
+      const params = new URLSearchParams(location.search);
+      const url = params.get("url") ?? "ws://127.0.0.1:7880";
+      const token = params.get("token");
+      const hz = Number(params.get("hz") ?? 660);
+      const state = (window.interop = { phase: "idle", publishing: null, participants: [], heard: null, receive: null, send: null, errors: [] });
+      const show = () => (document.getElementById("status").textContent = JSON.stringify(state, null, 2));
+
+      async function stats(rtc, kind) {
+        if (!rtc) return null;
+        const report = await rtc.getStats();
+        let rtp = null;
+        const codecs = new Map();
+        report.forEach((s) => {
+          if (s.type === kind && s.kind === "audio") rtp = s;
+          if (s.type === "codec") codecs.set(s.id, s);
+        });
+        if (!rtp) return null;
+        const codec = codecs.get(rtp.codecId);
+        return kind === "inbound-rtp"
+          ? {
+              codec: codec && `${codec.mimeType} ${codec.sdpFmtpLine ?? ""}`.trim(),
+              packets: rtp.packetsReceived,
+              lost: rtp.packetsLost,
+              jitterMs: Math.round((rtp.jitter ?? 0) * 1000),
+              concealedSamples: rtp.concealedSamples,
+              totalSamples: rtp.totalSamplesReceived,
+              jitterBufferMs: rtp.jitterBufferEmittedCount ? Math.round((rtp.jitterBufferDelay / rtp.jitterBufferEmittedCount) * 1000) : null,
+            }
+          : { codec: codec && `${codec.mimeType} ${codec.sdpFmtpLine ?? ""}`.trim(), packets: rtp.packetsSent, bytes: rtp.bytesSent };
+      }
+
+      async function start() {
+        state.phase = "connecting";
+        show();
+        const ctx = new AudioContext({ sampleRate: 48000 });
+        await ctx.resume();
+
+        const room = new Room();
+        room.on(RoomEvent.ParticipantConnected, () => (state.participants = [...room.remoteParticipants.values()].map((p) => p.identity)));
+        room.on(RoomEvent.ParticipantDisconnected, () => (state.participants = [...room.remoteParticipants.values()].map((p) => p.identity)));
+        let analyser = null;
+        let remote = null;
+        room.on(RoomEvent.TrackSubscribed, (track) => {
+          if (track.kind !== Track.Kind.Audio) return;
+          remote = track;
+          // Chrome only feeds WebAudio from a remote stream that an element plays.
+          const element = track.attach();
+          element.muted = true;
+          document.body.append(element);
+          analyser = ctx.createAnalyser();
+          analyser.fftSize = 8192;
+          ctx.createMediaStreamSource(new MediaStream([track.mediaStreamTrack])).connect(analyser);
+        });
+        await room.connect(url, token);
+        state.participants = [...room.remoteParticipants.values()].map((p) => p.identity);
+
+        const osc = ctx.createOscillator();
+        osc.frequency.value = hz;
+        const gain = ctx.createGain();
+        gain.gain.value = 0.25;
+        const out = ctx.createMediaStreamDestination();
+        osc.connect(gain).connect(out);
+        osc.start();
+        const published = await room.localParticipant.publishTrack(out.stream.getAudioTracks()[0], { source: Track.Source.Microphone, name: "tone" });
+        // For driving the check from the console: silence (DTX), mute.
+        window.lk = { room, gain, track: published.track };
+        state.phase = "in the room";
+        state.publishing = `${hz} Hz as ${room.localParticipant.identity}`;
+
+        const freq = new Float32Array(4096);
+        const time = new Float32Array(8192);
+        setInterval(async () => {
+          if (analyser) {
+            analyser.getFloatFrequencyData(freq);
+            analyser.getFloatTimeDomainData(time);
+            let peak = 0;
+            for (let i = 1; i < freq.length; i++) if (freq[i] > freq[peak]) peak = i;
+            const rms = Math.sqrt(time.reduce((a, s) => a + s * s, 0) / time.length);
+            state.heard = { hz: Math.round((peak * ctx.sampleRate) / analyser.fftSize), dbfs: Math.round(20 * Math.log10(rms || 1e-9) * 10) / 10 };
+          }
+          try {
+            state.receive = await stats(remote?.receiver, "inbound-rtp");
+            state.send = await stats(published.track?.sender, "outbound-rtp");
+          } catch (e) {
+            state.errors.push(String(e));
+          }
+          show();
+        }, 500);
+      }
+
+      document.getElementById("start").onclick = () =>
+        start().catch((e) => {
+          state.phase = "failed";
+          state.errors.push(String(e?.stack ?? e));
+          show();
+        });
+    </script>
+  </body>

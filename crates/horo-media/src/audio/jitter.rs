@@ -21,6 +21,11 @@
 //!   frame is dropped to bring the delay back down.
 //! - **Silence.** After 200 ms of running dry, playback pauses and
 //!   rebuffers rather than inventing sound.
+//! - **DTX.** A sender with discontinuous transmission (livekit-client's
+//!   default, so Element Call's) stops sending while its speaker is quiet,
+//!   bar a 1–2 byte packet every 400 ms. After one of those, a missing frame
+//!   isn't late: Opus plays comfort noise and the playhead keeps time, so
+//!   speech resuming lands where it should instead of after a rebuffer.
 //!
 //! Time comes in as an argument everywhere, so a whole call's worth of
 //! network can be simulated in a test.
@@ -44,6 +49,10 @@ const MAX_TARGET: Duration = Duration::from_millis(300);
 const SLACK: Duration = Duration::from_millis(60);
 /// Running dry for longer than this (200 ms) is inventing sound: rebuffer.
 const MAX_STRETCHED: u32 = 10;
+/// An Opus packet this small carries no audio: the sender is in DTX.
+const DTX_MAX_LEN: usize = 2;
+/// DTX sends a packet every 400 ms; a second without one, the sender is gone.
+const MAX_SILENT: u32 = 50;
 const FRAME_U64: u64 = FRAME as u64;
 
 /// What came out of one [`JitterBuffer::pop`].
@@ -60,6 +69,8 @@ pub enum Played {
     /// Nothing had arrived yet: a frame was invented and the playhead held,
     /// adding 20 ms of delay.
     Stretched,
+    /// The sender is in DTX: comfort noise, on time.
+    Silent,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -77,6 +88,8 @@ pub struct JitterStats {
     pub dropped: u64,
     /// Times playback stopped to rebuffer.
     pub rebuffers: u64,
+    /// Frames of comfort noise while the sender was in DTX.
+    pub silent: u64,
 }
 
 pub struct JitterBuffer {
@@ -90,6 +103,9 @@ pub struct JitterBuffer {
     /// The newest packet's arrival time and RTP time.
     last_arrival: Option<(Instant, u64)>,
     stretched_in_a_row: u32,
+    /// The last packet played was a DTX one: gaps are silence, not lateness.
+    in_dtx: bool,
+    silent_in_a_row: u32,
     stats: JitterStats,
 }
 
@@ -102,6 +118,8 @@ impl JitterBuffer {
             jitter: 0.0,
             last_arrival: None,
             stretched_in_a_row: 0,
+            in_dtx: false,
+            silent_in_a_row: 0,
             stats: JitterStats::default(),
         })
     }
@@ -181,7 +199,15 @@ impl JitterBuffer {
         let played = if let Some(packet) = self.packets.remove(&next) {
             self.decoder.decode(&packet, out)?;
             self.stats.decoded += 1;
+            self.in_dtx = packet.len() <= DTX_MAX_LEN;
+            self.silent_in_a_row = 0;
             Played::Decoded
+        } else if self.in_dtx && self.silent_in_a_row < MAX_SILENT {
+            // The sender is quiet and said so: comfort noise, on time.
+            self.decoder.conceal(out)?;
+            self.stats.silent += 1;
+            self.silent_in_a_row += 1;
+            Played::Silent
         } else if let Some(following) = self.packets.get(&(next + FRAME_U64)) {
             self.decoder.recover(following, out)?;
             self.stats.recovered += 1;
@@ -191,12 +217,14 @@ impl JitterBuffer {
             self.decoder.conceal(out)?;
             self.stats.concealed += 1;
             Played::Concealed
-        } else if self.stretched_in_a_row >= MAX_STRETCHED {
+        } else if self.stretched_in_a_row >= MAX_STRETCHED || self.in_dtx {
             // Nothing for 200 ms: the speaker stopped or the path is gone.
             // Stop inventing sound and wait for real audio again.
             self.stats.rebuffers += 1;
             self.next = None;
             self.stretched_in_a_row = 0;
+            self.in_dtx = false;
+            self.silent_in_a_row = 0;
             self.packets.clear();
             out.fill(0.0);
             return Ok(Played::Buffering);
@@ -402,6 +430,51 @@ mod tests {
         assert_eq!(stretched as u32, MAX_STRETCHED, "{kinds:?}");
         assert_eq!(*kinds.last().unwrap(), Played::Buffering);
         assert_eq!(buffer.stats().rebuffers, 1);
+    }
+
+    /// Speech, two seconds of DTX (a 1-byte packet every 400 ms, as WebRTC
+    /// sends), speech again: the gap plays as silence on time, with no
+    /// stretching, rebuffering or dropping, and the speech after it is clean.
+    #[test]
+    fn dtx_silence_keeps_time_and_speech_resumes_cleanly() {
+        let mut encoder = Encoder::new().unwrap();
+        let mut buffer = JitterBuffer::new().unwrap();
+        let start = Instant::now();
+        let tone = |i: u64| -> [f32; FRAME] {
+            std::array::from_fn(|n| {
+                let t = ((i * FRAME_U64 + n as u64) % SAMPLE_RATE as u64) as f64 / SAMPLE_RATE as f64;
+                ((t * 440.0 * std::f64::consts::TAU).sin() * 0.25) as f32
+            })
+        };
+        // The TOC byte of a real packet, alone: a DTX frame.
+        let dtx = vec![encoder.encode(&tone(0)).unwrap()[0] & !0x03];
+        let mut out = [0f32; FRAME];
+        let mut kinds = Vec::new();
+        let mut resumed = Vec::new();
+        // 1 s speech, 2 s DTX, 1 s speech; 30 ms on the wire, a pull every 20 ms.
+        for i in 0..200u64 {
+            let packet = match i {
+                50..150 if (i - 50) % 20 == 0 => Some(dtx.clone()),
+                50..150 => None,
+                _ => Some(encoder.encode(&tone(i)).unwrap()),
+            };
+            if let Some(packet) = packet {
+                buffer.push(i * FRAME_U64, packet, start + Duration::from_millis(i * 20 + 30));
+            }
+            let kind = buffer.pop(&mut out).unwrap();
+            kinds.push(kind);
+            if i >= 170 {
+                resumed.extend_from_slice(&out);
+            }
+        }
+        let s = buffer.stats();
+        assert_eq!((s.stretched, s.rebuffers, s.dropped, s.concealed), (0, 0, 0, 0), "{s:?}");
+        assert!(s.silent >= 90, "the gap plays as silence: {s:?}");
+        let purity = power_at(&resumed, 440.0) / [330.0, 400.0, 480.0, 550.0].map(|f| power_at(&resumed, f)).into_iter().fold(f64::MIN_POSITIVE, f64::max);
+        assert!(purity > 100.0, "speech after DTX isn't clean: purity {purity:.0}");
+        // On time: the frame played at the last tick is the one sent then,
+        // less the start-up delay, with no stretch added in the gap.
+        assert!(buffer.buffered() <= Duration::from_millis(60), "{:?}", buffer.buffered());
     }
 
     #[test]
