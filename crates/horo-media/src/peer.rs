@@ -20,6 +20,12 @@
 //!    would start the checks;
 //! 3. `Disconnected` is a state, not an error: str0m reports it whenever it
 //!    has no pair to try.
+//!
+//! [`Peer::restart`] is for when the network changed under a call (Wi-Fi to
+//! Ethernet, a laptop waking up): every socket and TURN allocation is
+//! replaced, the old candidates invalidated, and the ICE credentials renewed,
+//! while DTLS and SRTP carry on, so the call resumes without renegotiating
+//! its media.
 
 use std::{
     collections::HashMap,
@@ -67,6 +73,9 @@ pub enum PeerError {
 }
 
 pub type Result<T, E = PeerError> = std::result::Result<T, E>;
+
+/// A connected path silent this long is taken for dead: see [`PeerEvent::Path`].
+pub const PATH_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// A TURN server, as `/voip/turnServer` or LiveKit's join response gives it.
 #[derive(Debug, Clone)]
@@ -129,6 +138,11 @@ pub enum PeerEvent {
     Audio { mid: Mid, rtp_time: u64, data: Arc<[u8]> },
     /// A TURN relay failed after the call started; ICE may still have others.
     RelayLost(String),
+    /// Nothing has arrived from the remote for [`PATH_TIMEOUT`] (`alive:
+    /// false`), or something has again (`true`). Faster than ICE's own
+    /// verdict, which can take most of a minute; the remote's keepalives and
+    /// RTCP never leave a connected path this quiet.
+    Path { alive: bool },
     /// The loop ended. Nothing follows.
     Closed(String),
 }
@@ -139,6 +153,8 @@ enum Command {
     AcceptOffer { sdp: String, reply: oneshot::Sender<Result<String>> },
     RemoteCandidate(String),
     WriteAudio { mid: Mid, rtp_time: u64, data: Vec<u8> },
+    Restart { config: Box<PeerConfig>, offer: bool, reply: oneshot::Sender<Result<Option<String>>> },
+    Sever,
     Close,
 }
 
@@ -153,70 +169,9 @@ impl Peer {
     pub async fn start(config: PeerConfig) -> Result<(Peer, mpsc::UnboundedReceiver<PeerEvent>)> {
         let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
         let mut rtc = Rtc::new(Instant::now());
-        let mut transports = Vec::new();
-
-        for ip in &config.host_addresses {
-            match UdpSocket::bind(SocketAddr::new(*ip, 0)).await {
-                Ok(socket) => {
-                    let socket = Arc::new(socket);
-                    let local = socket.local_addr()?;
-                    rtc.add_local_candidate(Candidate::host(local, "udp").map_err(|e| PeerError::Candidate(e.to_string()))?);
-                    spawn_udp_reader(transports.len(), socket.clone(), inbound_tx.clone());
-                    transports.push(Transport::Udp { socket, local });
-                }
-                Err(e) => tracing::warn!("{}: no UDP candidate on {ip}: {e}", config.name),
-            }
-        }
-
-        if config.ice_tcp {
-            // Active candidates never accept, so their port is the discard
-            // port (RFC 6544 §4.5). The address is only a label for routing.
-            let ip = config
-                .host_addresses
-                .first()
-                .copied()
-                .or_else(default_route_address)
-                .unwrap_or(IpAddr::from([127, 0, 0, 1]));
-            let local = SocketAddr::new(ip, 9);
-            let candidate = Candidate::builder()
-                .tcp()
-                .host(local)
-                .tcptype(TcpType::Active)
-                .build()
-                .map_err(|e| PeerError::Candidate(e.to_string()))?;
-            rtc.add_local_candidate(candidate);
-            transports.push(Transport::Tcp { local, streams: HashMap::new() });
-        }
-
-        // All TURN allocations at once: each can take a few round trips.
-        let allocations = config.turn_servers.iter().map(|server| {
-            let config = config.clone();
-            let server = server.clone();
-            async move { (server.uri.clone(), allocate(&config, &server).await) }
-        });
-        for (uri, outcome) in futures_join_all(allocations).await {
-            match outcome {
-                Ok((relay, mut reader)) => {
-                    let relayed = relay.turn.relayed().expect("allocated");
-                    rtc.add_local_candidate(Candidate::relayed(relayed, relayed, "udp").map_err(|e| PeerError::Candidate(e.to_string()))?);
-                    let index = transports.len();
-                    let tx = inbound_tx.clone();
-                    tokio::spawn(async move {
-                        while let Some(msg) = reader.next().await {
-                            if tx.send(Inbound { transport: index, source: None, data: msg }).is_err() {
-                                break;
-                            }
-                        }
-                    });
-                    tracing::info!("{}: relayed candidate {relayed} via {uri}", config.name);
-                    transports.push(Transport::Relay(Box::new(relay)));
-                }
-                Err(e) => tracing::warn!("{}: {e}", config.name),
-            }
-        }
-
-        if transports.is_empty() {
-            return Err(PeerError::NoCandidates);
+        let (transports, candidates) = gather(&config, &inbound_tx, 0).await?;
+        for candidate in &candidates {
+            rtc.add_local_candidate(candidate.clone());
         }
 
         let (commands, commands_rx) = mpsc::unbounded_channel();
@@ -224,12 +179,15 @@ impl Peer {
         let mut driver = Driver {
             name: config.name,
             rtc,
-            transports,
+            transports: transports.into_iter().map(Some).collect(),
+            local_candidates: candidates,
             inbound_tx,
             outbox: Vec::new(),
             events,
             pending_offer: None,
             timeout: Instant::now(),
+            last_received: None,
+            path_alive: true,
         };
         // Rule 1: drain after the first mutations too.
         driver.drain()?;
@@ -270,8 +228,24 @@ impl Peer {
         self.commands.send(Command::WriteAudio { mid, rtp_time, data }).map_err(|_| PeerError::Closed)
     }
 
+    /// The network changed: gather afresh from `config` (new TURN
+    /// credentials, a new default route) and restart ICE, keeping DTLS and
+    /// the media. With `offer` (the publisher), returns the ICE-restart offer
+    /// to send; otherwise (the subscriber) the remote's next offer restarts
+    /// it, and the answer carries the new candidates.
+    pub async fn restart(&self, config: PeerConfig, offer: bool) -> Result<Option<String>> {
+        self.ask(|reply| Command::Restart { config: Box::new(config), offer, reply }).await
+    }
+
     pub fn close(&self) {
         let _ = self.commands.send(Command::Close);
+    }
+
+    /// Close every socket without a word to anyone: the network gone. For
+    /// testing reconnects; [`Peer::restart`] brings it back.
+    #[doc(hidden)]
+    pub fn sever(&self) {
+        let _ = self.commands.send(Command::Sever);
     }
 }
 
@@ -290,8 +264,8 @@ struct Inbound {
 }
 
 enum Transport {
-    Udp { socket: Arc<UdpSocket>, local: SocketAddr },
-    Tcp { local: SocketAddr, streams: HashMap<SocketAddr, tokio::net::tcp::OwnedWriteHalf> },
+    Udp { socket: Arc<UdpSocket>, local: SocketAddr, _reader: Reader },
+    Tcp { local: SocketAddr, streams: HashMap<SocketAddr, (tokio::net::tcp::OwnedWriteHalf, Reader)> },
     Relay(Box<Relay>),
 }
 
@@ -300,6 +274,7 @@ struct Relay {
     uri: String,
     turn: Turn,
     write: ServerWrite,
+    _reader: Option<Reader>,
 }
 
 enum ServerWrite {
@@ -381,6 +356,93 @@ fn parse_turn_uri(uri: &str) -> Option<(String, u16, TurnTransport)> {
     Some((host, port, transport))
 }
 
+/// Every candidate `config` asks for, with the transports behind them.
+/// Transport indices start at `first`, so readers report where they belong.
+async fn gather(
+    config: &PeerConfig,
+    inbound_tx: &mpsc::UnboundedSender<Inbound>,
+    first: usize,
+) -> Result<(Vec<Transport>, Vec<Candidate>)> {
+    let mut transports = Vec::new();
+    let mut candidates = Vec::new();
+    let candidate_error = |e: str0m::error::IceError| PeerError::Candidate(e.to_string());
+
+    for ip in &config.host_addresses {
+        match UdpSocket::bind(SocketAddr::new(*ip, 0)).await {
+            Ok(socket) => {
+                let socket = Arc::new(socket);
+                let local = socket.local_addr()?;
+                candidates.push(Candidate::host(local, "udp").map_err(candidate_error)?);
+                let reader = spawn_udp_reader(first + transports.len(), socket.clone(), inbound_tx.clone());
+                transports.push(Transport::Udp { socket, local, _reader: reader });
+            }
+            Err(e) => tracing::warn!("{}: no UDP candidate on {ip}: {e}", config.name),
+        }
+    }
+
+    if config.ice_tcp {
+        // Active candidates never accept, so their port is the discard
+        // port (RFC 6544 §4.5). The address is only a label for routing.
+        let ip = config
+            .host_addresses
+            .first()
+            .copied()
+            .or_else(default_route_address)
+            .unwrap_or(IpAddr::from([127, 0, 0, 1]));
+        let local = SocketAddr::new(ip, 9);
+        let candidate = Candidate::builder().tcp().host(local).tcptype(TcpType::Active).build().map_err(candidate_error)?;
+        candidates.push(candidate);
+        transports.push(Transport::Tcp { local, streams: HashMap::new() });
+    }
+
+    // All TURN allocations at once: each can take a few round trips.
+    let allocations = config.turn_servers.iter().map(|server| {
+        let config = config.clone();
+        let server = server.clone();
+        async move { (server.uri.clone(), allocate(&config, &server).await) }
+    });
+    for (uri, outcome) in futures_join_all(allocations).await {
+        match outcome {
+            Ok((mut relay, mut reader)) => {
+                let relayed = relay.turn.relayed().expect("allocated");
+                candidates.push(Candidate::relayed(relayed, relayed, "udp").map_err(candidate_error)?);
+                let index = first + transports.len();
+                let tx = inbound_tx.clone();
+                relay._reader = Some(Reader::spawn(async move {
+                    while let Some(msg) = reader.next().await {
+                        if tx.send(Inbound { transport: index, source: None, data: msg }).is_err() {
+                            break;
+                        }
+                    }
+                }));
+                tracing::info!("{}: relayed candidate {relayed} via {uri}", config.name);
+                transports.push(Transport::Relay(Box::new(relay)));
+            }
+            Err(e) => tracing::warn!("{}: {e}", config.name),
+        }
+    }
+
+    if transports.is_empty() {
+        return Err(PeerError::NoCandidates);
+    }
+    Ok((transports, candidates))
+}
+
+/// A reader task, stopped when its transport goes.
+struct Reader(tokio::task::AbortHandle);
+
+impl Reader {
+    fn spawn(task: impl std::future::Future<Output = ()> + Send + 'static) -> Reader {
+        Reader(tokio::spawn(task).abort_handle())
+    }
+}
+
+impl Drop for Reader {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Connect to a TURN server and allocate, within a deadline.
 async fn allocate(config: &PeerConfig, server: &TurnServer) -> Result<(Relay, ServerRead)> {
     let setup = |reason: String| PeerError::TurnSetup { server: server.uri.clone(), reason };
@@ -451,18 +513,18 @@ async fn allocate(config: &PeerConfig, server: &TurnServer) -> Result<(Relay, Se
             }
         }
     }
-    Ok((Relay { uri: server.uri.clone(), turn, write }, read))
+    Ok((Relay { uri: server.uri.clone(), turn, write, _reader: None }, read))
 }
 
-fn spawn_udp_reader(index: usize, socket: Arc<UdpSocket>, tx: mpsc::UnboundedSender<Inbound>) {
-    tokio::spawn(async move {
+fn spawn_udp_reader(index: usize, socket: Arc<UdpSocket>, tx: mpsc::UnboundedSender<Inbound>) -> Reader {
+    Reader::spawn(async move {
         let mut buf = vec![0u8; 2048];
         while let Ok((n, source)) = socket.recv_from(&mut buf).await {
             if tx.send(Inbound { transport: index, source: Some(source), data: buf[..n].to_vec() }).is_err() {
                 break;
             }
         }
-    });
+    })
 }
 
 /// `join_all` without pulling in `futures`: tasks on the current runtime.
@@ -484,13 +546,20 @@ where
 struct Driver {
     name: String,
     rtc: Rtc,
-    transports: Vec<Transport>,
+    /// Indexed as the readers report; a restart retires the old ones to
+    /// `None` so a late packet from them can't land on a new transport.
+    transports: Vec<Option<Transport>>,
+    /// Ours, to invalidate on a restart.
+    local_candidates: Vec<Candidate>,
     inbound_tx: mpsc::UnboundedSender<Inbound>,
     /// Datagrams str0m wants sent: (proto, from, to, bytes).
     outbox: Vec<(Protocol, SocketAddr, SocketAddr, Vec<u8>)>,
     events: mpsc::UnboundedSender<PeerEvent>,
     pending_offer: Option<SdpPendingOffer>,
     timeout: Instant,
+    /// When anything last came in, once something has.
+    last_received: Option<Instant>,
+    path_alive: bool,
 }
 
 impl Driver {
@@ -500,6 +569,10 @@ impl Driver {
             let step: Result<bool> = tokio::select! {
                 command = commands.recv() => match command {
                     None | Some(Command::Close) => break "closed".to_owned(),
+                    Some(Command::Restart { config, offer, reply }) => {
+                        let _ = reply.send(self.restart(*config, offer).await);
+                        Ok(true)
+                    }
                     Some(command) => self.command(command).map(|_| true),
                 },
                 Some(inbound) = inbound.recv() => self.receive(inbound).map(|_| true),
@@ -520,11 +593,12 @@ impl Driver {
     }
 
     fn next_wake(&self) -> Instant {
-        let relays = self.transports.iter().filter_map(|t| match t {
+        let relays = self.transports.iter().flatten().filter_map(|t| match t {
             Transport::Relay(relay) => relay.turn.next_timeout(),
             _ => None,
         });
-        relays.fold(self.timeout, Instant::min)
+        // At least once a second, for the path check in `tick`.
+        relays.fold(self.timeout, Instant::min).min(Instant::now() + Duration::from_secs(1))
     }
 
     /// Rule 1: poll until str0m has nothing left but a timeout.
@@ -618,14 +692,22 @@ impl Driver {
                 writer.write(pt, Instant::now(), MediaTime::new(rtp_time, str0m::media::Frequency::FORTY_EIGHT_KHZ), data)?;
                 self.drain()?;
             }
-            Command::Close => {}
+            Command::Sever => {
+                for slot in &mut self.transports {
+                    *slot = None;
+                }
+            }
+            Command::Close | Command::Restart { .. } => {}
         }
         Ok(())
     }
 
     fn receive(&mut self, inbound: Inbound) -> Result<()> {
         let now = Instant::now();
-        let (proto, source, destination, data) = match &mut self.transports[inbound.transport] {
+        let Some(Some(transport)) = self.transports.get_mut(inbound.transport) else {
+            return Ok(()); // from a transport a restart retired
+        };
+        let (proto, source, destination, data) = match transport {
             Transport::Udp { local, .. } => (Protocol::Udp, inbound.source.expect("UDP has a source"), *local, inbound.data),
             Transport::Tcp { local, .. } => (Protocol::Tcp, inbound.source.expect("TCP has a source"), *local, inbound.data),
             Transport::Relay(relay) => match relay.turn.handle(&inbound.data, now) {
@@ -640,6 +722,11 @@ impl Driver {
                 }
             },
         };
+        self.last_received = Some(now);
+        if !self.path_alive {
+            self.path_alive = true;
+            let _ = self.events.send(PeerEvent::Path { alive: true });
+        }
         // Not STUN, DTLS, RTP or RTCP: nothing str0m wants. Drop it.
         let Ok(contents) = data.as_slice().try_into() else { return Ok(()) };
         self.rtc.handle_input(Input::Receive(now, Receive { proto, source, destination, contents }))?;
@@ -650,7 +737,7 @@ impl Driver {
     /// `false` once str0m says the connection is over.
     fn tick(&mut self) -> Result<bool> {
         let now = Instant::now();
-        for transport in &mut self.transports {
+        for transport in self.transports.iter_mut().flatten() {
             if let Transport::Relay(relay) = transport
                 && let Err(e) = relay.turn.poll(now).map(|out| relay.turn.outgoing.extend(out))
             {
@@ -660,6 +747,10 @@ impl Driver {
         if !self.rtc.is_alive() {
             return Ok(false);
         }
+        if self.path_alive && self.last_received.is_some_and(|t| now.duration_since(t) > PATH_TIMEOUT) {
+            self.path_alive = false;
+            let _ = self.events.send(PeerEvent::Path { alive: false });
+        }
         self.rtc.handle_input(Input::Timeout(now))?;
         self.drain()?;
         Ok(true)
@@ -668,9 +759,9 @@ impl Driver {
     /// Put everything queued on the wire.
     async fn flush(&mut self) -> Result<()> {
         let now = Instant::now();
-        let tcp_index = self.transports.iter().position(|t| matches!(t, Transport::Tcp { .. }));
+        let tcp_index = self.transports.iter().position(|t| matches!(t, Some(Transport::Tcp { .. })));
         for (proto, source, destination, data) in std::mem::take(&mut self.outbox) {
-            let Some(transport) = self.transports.iter_mut().find(|t| match t {
+            let Some(transport) = self.transports.iter_mut().flatten().find(|t| match t {
                 Transport::Udp { local, .. } => proto == Protocol::Udp && *local == source,
                 Transport::Tcp { .. } => proto == Protocol::Tcp,
                 Transport::Relay(relay) => proto == Protocol::Udp && relay.turn.relayed() == Some(source),
@@ -692,10 +783,11 @@ impl Driver {
                             stream.set_nodelay(true)?;
                             let (read, write) = stream.into_split();
                             let index = tcp_index.expect("this is the TCP transport");
-                            spawn_rfc4571_reader(index, destination, read, self.inbound_tx.clone());
-                            entry.insert(write)
+                            let reader = spawn_rfc4571_reader(index, destination, read, self.inbound_tx.clone());
+                            entry.insert((write, reader))
                         }
                     };
+                    let stream = &mut stream.0;
                     // RFC 4571: each packet prefixed with its length.
                     let mut framed = Vec::with_capacity(data.len() + 2);
                     framed.extend_from_slice(&(data.len() as u16).to_be_bytes());
@@ -713,7 +805,7 @@ impl Driver {
             }
         }
         // Whatever TURN produced on its own: auth retries, refreshes, rebinds.
-        for transport in &mut self.transports {
+        for transport in self.transports.iter_mut().flatten() {
             if let Transport::Relay(relay) = transport {
                 for msg in std::mem::take(&mut relay.turn.outgoing) {
                     relay.write.send(&msg).await?;
@@ -723,10 +815,42 @@ impl Driver {
         Ok(())
     }
 
+    /// New sockets, allocations and candidates for a changed network; the
+    /// old ones retired. With `offer`, an ICE-restart offer for the remote.
+    async fn restart(&mut self, config: PeerConfig, offer: bool) -> Result<Option<String>> {
+        self.shut_down().await;
+        for slot in &mut self.transports {
+            *slot = None;
+        }
+        for candidate in std::mem::take(&mut self.local_candidates) {
+            self.rtc.direct_api().invalidate_candidate(&candidate);
+        }
+        let (transports, candidates) = gather(&config, &self.inbound_tx, self.transports.len()).await?;
+        for candidate in &candidates {
+            self.rtc.add_local_candidate(candidate.clone());
+        }
+        self.local_candidates = candidates;
+        self.transports.extend(transports.into_iter().map(Some));
+        tracing::info!("{}: restarted on {} new candidates", self.name, self.local_candidates.len());
+
+        let sdp = if offer {
+            let mut change = self.rtc.sdp_api();
+            change.ice_restart(true);
+            let (offer, pending) = change.apply().ok_or_else(|| PeerError::Sdp("nothing to offer".into()))?;
+            self.pending_offer = Some(pending);
+            Some(offer.to_sdp_string())
+        } else {
+            None
+        };
+        self.drain()?;
+        self.nudge()?;
+        Ok(sdp)
+    }
+
     /// Release TURN allocations so the server doesn't hold them for ten minutes.
     async fn shut_down(&mut self) {
         let now = Instant::now();
-        for transport in &mut self.transports {
+        for transport in self.transports.iter_mut().flatten() {
             if let Transport::Relay(relay) = transport
                 && let Some(msg) = relay.turn.deallocate(now)
             {
@@ -741,8 +865,8 @@ fn spawn_rfc4571_reader(
     remote: SocketAddr,
     mut read: tokio::net::tcp::OwnedReadHalf,
     tx: mpsc::UnboundedSender<Inbound>,
-) {
-    tokio::spawn(async move {
+) -> Reader {
+    Reader::spawn(async move {
         while let Ok(len) = read.read_u16().await {
             let mut data = vec![0u8; len as usize];
             if read.read_exact(&mut data).await.is_err() {
@@ -752,7 +876,7 @@ fn spawn_rfc4571_reader(
                 break;
             }
         }
-    });
+    })
 }
 
 #[cfg(test)]

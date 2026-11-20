@@ -15,6 +15,7 @@
 //! this client offers, and the *subscriber*, which the server offers. Every
 //! offer, answer and candidate says which one it is for ([`Target`]).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -134,6 +135,7 @@ pub struct AddTrack {
 #[derive(Clone)]
 pub struct SignalClient {
     requests: mpsc::UnboundedSender<signal_request::Message>,
+    pump: Arc<tokio::task::AbortHandle>,
 }
 
 impl SignalClient {
@@ -195,6 +197,14 @@ impl SignalClient {
     }
 
     /// Leave the room. The connection closes after this.
+    /// Drop the connection on the floor, saying nothing: what a dead network
+    /// looks like to the server. For testing reconnects. The event stream
+    /// ends without a [`SignalEvent::Closed`].
+    #[doc(hidden)]
+    pub fn sever(&self) {
+        self.pump.abort();
+    }
+
     pub fn leave(&self) -> Result<()> {
         self.send(signal_request::Message::Leave(proto::LeaveRequest {
             reason: proto::DisconnectReason::ClientInitiated as i32,
@@ -238,15 +248,7 @@ pub async fn connect(
     auto_subscribe: bool,
 ) -> Result<(SignalClient, JoinResponse, mpsc::UnboundedReceiver<SignalEvent>)> {
     let url = signal_url(livekit_url, token, auto_subscribe)?;
-    let (mut ws, _) = match tokio_tungstenite::connect_async(url.as_str()).await {
-        Ok(ok) => ok,
-        // The status and body are the only explanation a refusal comes with.
-        Err(tungstenite::Error::Http(response)) => {
-            let body = response.body().as_ref().map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
-            return Err(Error::Refused { status: response.status().as_u16(), body: body.trim().to_owned() });
-        }
-        Err(e) => return Err(e.into()),
-    };
+    let mut ws = open(&url).await?;
 
     let join = tokio::time::timeout(JOIN_TIMEOUT, async {
         loop {
@@ -262,13 +264,78 @@ pub async fn connect(
     .await
     .map_err(|_| Error::JoinTimeout(JOIN_TIMEOUT))??;
 
+    let (client, events) = spawn(ws, join.ping_interval, join.ping_timeout, Vec::new());
+    Ok((client, join, events))
+}
+
+/// Pick a dropped session back up: a new signal connection for the same
+/// participant (`participant_sid`, from the join response), keeping its
+/// tracks and subscriptions on the server. What follows is an ICE restart
+/// on both peer connections: the server offers one for the subscriber; the
+/// publisher's offer is the caller's to send.
+///
+/// Fails with [`Error::Left`] when the server can't resume (the session
+/// timed out, or it moved): then only a fresh [`connect`] will do.
+pub async fn resume(
+    livekit_url: &str,
+    token: &str,
+    participant_sid: &str,
+    reason: proto::ReconnectReason,
+    ping: (i32, i32),
+) -> Result<(SignalClient, Option<proto::ReconnectResponse>, mpsc::UnboundedReceiver<SignalEvent>)> {
+    let mut url = signal_url(livekit_url, token, true)?;
+    url.query_pairs_mut()
+        .append_pair("reconnect", "1")
+        .append_pair("sid", participant_sid)
+        .append_pair("reconnect_reason", &(reason as i32).to_string());
+    let mut ws = open(&url).await?;
+
+    // The server answers with a reconnect response; one that predates it
+    // just carries on, and its first message is already the session's.
+    let (response, first) = tokio::time::timeout(JOIN_TIMEOUT, async {
+        loop {
+            let Some(frame) = ws.next().await else { return Err(Error::ClosedBeforeJoin) };
+            let WsMessage::Binary(bytes) = frame? else { continue };
+            match SignalResponse::decode(bytes.as_ref())?.message {
+                Some(signal_response::Message::Reconnect(response)) => return Ok((Some(response), None)),
+                Some(signal_response::Message::Leave(leave)) => return Err(Error::Left(leave)),
+                Some(other) => return Ok((None, Some(other))),
+                None => {}
+            }
+        }
+    })
+    .await
+    .map_err(|_| Error::JoinTimeout(JOIN_TIMEOUT))??;
+
+    let (client, events) = spawn(ws, ping.0, ping.1, first.into_iter().map(event).collect());
+    Ok((client, response, events))
+}
+
+/// Open the WebSocket, turning an HTTP refusal into its status and body.
+async fn open(url: &url::Url) -> Result<Socket> {
+    match tokio_tungstenite::connect_async(url.as_str()).await {
+        Ok((ws, _)) => Ok(ws),
+        // The status and body are the only explanation a refusal comes with.
+        Err(tungstenite::Error::Http(response)) => {
+            let body = response.body().as_ref().map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+            Err(Error::Refused { status: response.status().as_u16(), body: body.trim().to_owned() })
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Start the connection's pump; `early` are events that arrived during the
+/// handshake, delivered first.
+fn spawn(ws: Socket, ping_interval: i32, ping_timeout: i32, early: Vec<SignalEvent>) -> (SignalClient, mpsc::UnboundedReceiver<SignalEvent>) {
     let (requests, requests_rx) = mpsc::unbounded_channel();
     let (events, events_rx) = mpsc::unbounded_channel();
-    let ping_interval = Duration::from_secs(join.ping_interval.max(1) as u64);
-    let ping_timeout = Duration::from_secs(join.ping_timeout.max(join.ping_interval * 2).max(2) as u64);
-    tokio::spawn(run(ws, requests_rx, events, ping_interval, ping_timeout));
-
-    Ok((SignalClient { requests }, join, events_rx))
+    for e in early {
+        let _ = events.send(e);
+    }
+    let interval = Duration::from_secs(ping_interval.max(1) as u64);
+    let timeout = Duration::from_secs(ping_timeout.max(ping_interval * 2).max(2) as u64);
+    let pump = Arc::new(tokio::spawn(run(ws, requests_rx, events, interval, timeout)).abort_handle());
+    (SignalClient { requests, pump }, events_rx)
 }
 
 type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;

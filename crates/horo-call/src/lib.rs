@@ -18,6 +18,8 @@
 
 use std::{
     collections::HashMap,
+    future::Future,
+    pin::Pin,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -25,9 +27,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use horo_livekit::{AddTrack, SignalClient, SignalEvent, Target, proto};
+use horo_livekit::{AddTrack, SignalClient, SignalEvent, Target, proto, proto::ReconnectReason};
 use horo_media::{
-    MediaKind, Mid, Peer, PeerConfig, PeerEvent, TurnServer,
+    IceConnectionState, MediaKind, Mid, Peer, PeerConfig, PeerEvent, TurnServer,
+    peer::PATH_TIMEOUT,
     audio::{
         FRAME,
         codec::Encoder,
@@ -66,10 +69,15 @@ pub type Result<T, E = CallError> = std::result::Result<T, E>;
 pub type Network = Arc<dyn Fn(&str, &[TurnServer]) -> PeerConfig + Send + Sync>;
 
 /// Host UDP on the default route, ICE-TCP, and every TURN server LiveKit
-/// offers: what a client on an unknown network wants.
+/// offers: what a client on an unknown network wants. Asked afresh on every
+/// reconnect, so a new default route (Wi-Fi to Ethernet) is picked up.
 pub fn default_network() -> Network {
     Arc::new(|name, turn| PeerConfig { turn_servers: turn.to_vec(), ..PeerConfig::default_for(name) })
 }
+
+/// A fresh access token, for a rejoin after the call's own has expired
+/// (MatrixRTC's last about an hour).
+pub type TokenSource = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>> + Send + Sync>;
 
 pub struct CallOptions {
     pub network: Network,
@@ -77,11 +85,13 @@ pub struct CallOptions {
     pub gate_threshold: f32,
     /// Start muted.
     pub muted: bool,
+    /// Where a rejoin gets a new token; without one it reuses the first.
+    pub refresh_token: Option<TokenSource>,
 }
 
 impl Default for CallOptions {
     fn default() -> Self {
-        CallOptions { network: default_network(), gate_threshold: GATE_OFF_DB, muted: false }
+        CallOptions { network: default_network(), gate_threshold: GATE_OFF_DB, muted: false, refresh_token: None }
     }
 }
 
@@ -106,12 +116,21 @@ pub enum CallEvent {
     Speaking(Vec<String>),
     /// The microphone's level, about 30 times a second.
     Level(GateReading),
+    /// The connection dropped and the engine is getting it back; audio stops
+    /// meanwhile. `attempt` counts from 1.
+    Reconnecting { attempt: u32, reason: String },
+    /// Back. `resumed`: the session survived and nobody saw us go;
+    /// otherwise we rejoined as a new participant.
+    Reconnected { resumed: bool },
     /// The call is over; nothing follows.
     Ended(String),
 }
 
 enum Command {
     Mute(bool),
+    Reconnect,
+    Sever { signalling: bool },
+    KillPublisher,
     Leave,
 }
 
@@ -143,32 +162,50 @@ pub struct Joined {
     pub events: mpsc::UnboundedReceiver<CallEvent>,
 }
 
+/// The connection to the room: signalling and both peers, with their event
+/// streams. A rejoin replaces all of it; a resume replaces the signalling.
+struct Link {
+    signal: SignalClient,
+    signal_events: mpsc::UnboundedReceiver<SignalEvent>,
+    publisher: Peer,
+    pub_events: mpsc::UnboundedReceiver<PeerEvent>,
+    subscriber: Peer,
+    sub_events: mpsc::UnboundedReceiver<PeerEvent>,
+    mic_mid: Mid,
+}
+
+fn turn_servers(servers: &[proto::IceServer]) -> Vec<TurnServer> {
+    servers
+        .iter()
+        .flat_map(|s| s.urls.iter().map(|uri| TurnServer { uri: uri.clone(), username: s.username.clone(), credential: s.credential.clone() }))
+        .filter(|s| s.uri.starts_with("turn"))
+        .collect()
+}
+
+/// Join from scratch: signalling, both peers, the microphone track offered.
+async fn open_link(url: &str, token: &str, network: &Network, muted: bool) -> Result<(Link, proto::JoinResponse, Vec<TurnServer>)> {
+    let (signal, join, signal_events) = horo_livekit::connect(url, token, true).await?;
+    let identity = join.participant.as_ref().map(|p| p.identity.clone()).unwrap_or_default();
+    let turn = turn_servers(&join.ice_servers);
+    let (publisher, pub_events) = Peer::start(network(&format!("{identity}/pub"), &turn)).await?;
+    let (subscriber, sub_events) = Peer::start(network(&format!("{identity}/sub"), &turn)).await?;
+    signal.add_track(AddTrack {
+        cid: MIC_CID.into(),
+        name: MIC_CID.into(),
+        kind: proto::TrackType::Audio,
+        source: proto::TrackSource::Microphone,
+        muted,
+    })?;
+    let (sdp, mic_mid) = publisher.offer_audio(&format!("{identity}-mic"), MIC_CID).await?;
+    signal.offer(sdp, 0)?;
+    Ok((Link { signal, signal_events, publisher, pub_events, subscriber, sub_events, mic_mid }, join, turn))
+}
+
 impl Call {
     /// Join the LiveKit room `token` grants, at `livekit_url`.
     pub async fn connect(livekit_url: &str, token: &str, options: CallOptions) -> Result<Joined> {
-        let (signal, join, signal_events) = horo_livekit::connect(livekit_url, token, true).await?;
+        let (link, join, turn) = open_link(livekit_url, token, &options.network, options.muted).await?;
         let identity = join.participant.as_ref().map(|p| p.identity.clone()).unwrap_or_default();
-
-        let turn: Vec<TurnServer> = join
-            .ice_servers
-            .iter()
-            .flat_map(|s| {
-                s.urls.iter().map(|uri| TurnServer { uri: uri.clone(), username: s.username.clone(), credential: s.credential.clone() })
-            })
-            .filter(|s| s.uri.starts_with("turn"))
-            .collect();
-        let (publisher, pub_events) = Peer::start((options.network)(&format!("{identity}/pub"), &turn)).await?;
-        let (subscriber, sub_events) = Peer::start((options.network)(&format!("{identity}/sub"), &turn)).await?;
-
-        signal.add_track(AddTrack {
-            cid: MIC_CID.into(),
-            name: MIC_CID.into(),
-            kind: proto::TrackType::Audio,
-            source: proto::TrackSource::Microphone,
-            muted: options.muted,
-        })?;
-        let (sdp, mic_mid) = publisher.offer_audio(&format!("{identity}-mic"), MIC_CID).await?;
-        signal.offer(sdp, 0)?;
 
         let (events_tx, events) = mpsc::unbounded_channel();
         let (packets_tx, packets) = mpsc::unbounded_channel();
@@ -176,27 +213,32 @@ impl Call {
         let muted = Arc::new(AtomicBool::new(options.muted));
         let remotes = Arc::new(Mutex::new(Remotes::default()));
 
-        let mut participants: HashMap<String, Participant> = HashMap::new();
-        for p in &join.other_participants {
-            participants.insert(p.sid.clone(), participant(p));
-        }
-        let own_sid = join.participant.as_ref().map(|p| p.sid.clone()).unwrap_or_default();
-        let _ = events_tx.send(CallEvent::Participants(sorted(&participants)));
-
-        let engine = Engine {
-            signal,
-            publisher,
-            subscriber,
-            mic_mid,
+        let mut engine = Engine {
+            url: livekit_url.to_owned(),
+            token: token.to_owned(),
+            network: options.network,
+            refresh_token: options.refresh_token,
+            muted: muted.clone(),
+            link,
+            turn,
             mic_sid: None,
             publishing: false,
+            ever_connected: false,
             identity: identity.clone(),
-            own_sid,
-            participants,
+            own_sid: String::new(),
+            ping: (0, 0),
+            participants: HashMap::new(),
             remotes: remotes.clone(),
             events: events_tx.clone(),
+            pub_ice: IceConnectionState::New,
+            sub_ice: IceConnectionState::New,
+            ice_down_since: None,
+            recovery: None,
+            route: horo_media::peer::default_route_address(),
+            route_checked: Instant::now(),
         };
-        let task = tokio::spawn(engine.run(signal_events, pub_events, sub_events, packets, commands_rx));
+        engine.joined(&join);
+        let task = tokio::spawn(engine.run(packets, commands_rx));
 
         let mut gate = NoiseGate::new(horo_media::audio::SAMPLE_RATE);
         gate.set_threshold(options.gate_threshold);
@@ -213,6 +255,33 @@ impl Call {
 
     pub fn is_muted(&self) -> bool {
         self.muted.load(Ordering::Relaxed)
+    }
+
+    /// The network changed (the OS said so): reconnect now, on the new one,
+    /// rather than waiting for the old path to be noticed dead.
+    pub fn reconnect(&self) {
+        let _ = self.commands.send(Command::Reconnect);
+    }
+
+    /// Cut signalling and media without a word to the server, as a dead
+    /// network would. For testing reconnects.
+    #[doc(hidden)]
+    pub fn sever(&self) {
+        let _ = self.commands.send(Command::Sever { signalling: true });
+    }
+
+    /// Cut only the media, leaving signalling up: a network that lost UDP,
+    /// or a WebSocket that hasn't noticed yet. For testing reconnects.
+    /// End the publisher connection outright, which no resume can mend: the
+    /// engine has to rejoin. For testing.
+    #[doc(hidden)]
+    pub fn kill_publisher(&self) {
+        let _ = self.commands.send(Command::KillPublisher);
+    }
+
+    #[doc(hidden)]
+    pub fn sever_media(&self) {
+        let _ = self.commands.send(Command::Sever { signalling: false });
     }
 
     /// Leave the room and wait for the engine to finish.
@@ -238,99 +307,363 @@ fn sorted(participants: &HashMap<String, Participant>) -> Vec<Participant> {
     list
 }
 
-/// The task that owns the signal connection and both peers.
+/// ICE down this long (no path left, and none came back) is a lost
+/// connection, not a blip.
+const ICE_GRACE: Duration = Duration::from_secs(4);
+/// How long an attempt gets to bring the media back before the next.
+const ATTEMPT_WAIT: Duration = Duration::from_secs(10);
+/// Resume attempts before falling back to a fresh join.
+const RESUME_ATTEMPTS: u32 = 2;
+/// Give up when nothing has worked for this long.
+const GIVE_UP: Duration = Duration::from_secs(90);
+
+/// What went wrong, and what it calls for.
+enum Trouble {
+    /// The path is gone; the session may well be alive on the server.
+    Lost(String, ReconnectReason),
+    /// The session is gone: only a fresh join will do.
+    Rejoin(String),
+    /// Over.
+    End(String),
+}
+
+/// A reconnect in progress.
+struct Recovery {
+    started: Instant,
+    attempt: u32,
+    /// When to try again if the media isn't back by then.
+    next: Instant,
+    reason: ReconnectReason,
+    rejoin: bool,
+}
+
+/// The task that owns the link and drives the call.
 struct Engine {
-    signal: SignalClient,
-    publisher: Peer,
-    subscriber: Peer,
-    mic_mid: Mid,
+    url: String,
+    token: String,
+    network: Network,
+    refresh_token: Option<TokenSource>,
+    muted: Arc<AtomicBool>,
+    link: Link,
+    /// TURN servers as last handed out (with their credentials).
+    turn: Vec<TurnServer>,
     /// The server's id for our microphone track, once it's published.
     mic_sid: Option<String>,
+    /// The publisher's DTLS is up: packets can be written.
     publishing: bool,
+    ever_connected: bool,
     identity: String,
     own_sid: String,
+    /// The server's ping interval and timeout, for a resumed connection.
+    ping: (i32, i32),
     participants: HashMap<String, Participant>,
     remotes: Arc<Mutex<Remotes>>,
     events: mpsc::UnboundedSender<CallEvent>,
+    pub_ice: IceConnectionState,
+    sub_ice: IceConnectionState,
+    ice_down_since: Option<Instant>,
+    recovery: Option<Recovery>,
+    /// The address the OS would send from, as last seen: when it changes,
+    /// the machine moved networks and the old path is as good as gone.
+    route: Option<std::net::IpAddr>,
+    route_checked: Instant,
+}
+
+/// How often to look at the default route.
+const ROUTE_CHECK: Duration = Duration::from_secs(2);
+
+fn ice_up(state: IceConnectionState) -> bool {
+    matches!(state, IceConnectionState::Connected | IceConnectionState::Completed)
 }
 
 impl Engine {
-    async fn run(
-        mut self,
-        mut signal_events: mpsc::UnboundedReceiver<SignalEvent>,
-        mut pub_events: mpsc::UnboundedReceiver<PeerEvent>,
-        mut sub_events: mpsc::UnboundedReceiver<PeerEvent>,
-        mut packets: mpsc::UnboundedReceiver<(u64, Vec<u8>)>,
-        mut commands: mpsc::UnboundedReceiver<Command>,
-    ) {
+    /// Take in a join response: who we are, who's here.
+    fn joined(&mut self, join: &proto::JoinResponse) {
+        self.own_sid = join.participant.as_ref().map(|p| p.sid.clone()).unwrap_or_default();
+        self.ping = (join.ping_interval, join.ping_timeout);
+        self.participants = join.other_participants.iter().map(|p| (p.sid.clone(), participant(p))).collect();
+        let _ = self.events.send(CallEvent::Participants(sorted(&self.participants)));
+    }
+
+    async fn run(mut self, mut packets: mpsc::UnboundedReceiver<(u64, Vec<u8>)>, mut commands: mpsc::UnboundedReceiver<Command>) {
+        let mut tick = tokio::time::interval(Duration::from_millis(250));
         let reason = loop {
-            let step = tokio::select! {
-                event = signal_events.recv() => match event {
+            let step: Result<(), Trouble> = tokio::select! {
+                event = self.link.signal_events.recv() => match event {
                     Some(event) => self.on_signal(event).await,
-                    None => Err("signalling closed".to_owned()),
+                    // Severed, or the pump died: the path is gone.
+                    None => Err(Trouble::Lost("signalling lost".into(), ReconnectReason::RrSignalDisconnected)),
                 },
-                event = pub_events.recv() => match event {
-                    Some(PeerEvent::Connected) => {
-                        self.publishing = true;
-                        let _ = self.events.send(CallEvent::Connected);
-                        Ok(())
-                    }
-                    Some(PeerEvent::Closed(reason)) => Err(format!("publisher: {reason}")),
-                    Some(_) => Ok(()),
-                    None => Err("publisher gone".to_owned()),
+                event = self.link.pub_events.recv() => match event {
+                    Some(event) => self.on_publisher(event),
+                    None => Err(Trouble::Rejoin("publisher gone".into())),
                 },
-                event = sub_events.recv() => match event {
+                event = self.link.sub_events.recv() => match event {
                     Some(event) => self.on_subscriber(event),
-                    None => Err("subscriber gone".to_owned()),
+                    None => Err(Trouble::Rejoin("subscriber gone".into())),
                 },
                 Some((rtp, packet)) = packets.recv() => {
                     if self.publishing {
                         // A failed write means the peer is closing; its event says why.
-                        let _ = self.publisher.write_audio(self.mic_mid, rtp, packet);
+                        let _ = self.link.publisher.write_audio(self.link.mic_mid, rtp, packet);
                     }
                     Ok(())
                 }
                 command = commands.recv() => match command {
                     Some(Command::Mute(muted)) => {
                         if let Some(sid) = &self.mic_sid {
-                            let _ = self.signal.mute(sid, muted);
+                            let _ = self.link.signal.mute(sid, muted);
                         }
                         Ok(())
                     }
+                    Some(Command::Reconnect) => Err(Trouble::Lost("the network changed".into(), ReconnectReason::RrSwitchCandidate)),
+                    Some(Command::KillPublisher) => {
+                        self.link.publisher.close();
+                        Ok(())
+                    }
+                    Some(Command::Sever { signalling }) => {
+                        if signalling {
+                            self.link.signal.sever();
+                        }
+                        self.link.publisher.sever();
+                        self.link.subscriber.sever();
+                        Ok(())
+                    }
                     Some(Command::Leave) | None => {
-                        let _ = self.signal.leave();
-                        Err("left".to_owned())
+                        let _ = self.link.signal.leave();
+                        Err(Trouble::End("left".into()))
                     }
                 },
+                _ = tick.tick() => self.on_tick().await,
             };
-            if let Err(reason) = step {
-                break reason;
+            match step {
+                Ok(()) => {}
+                Err(Trouble::End(reason)) => break reason,
+                Err(Trouble::Lost(why, reason)) => self.recover(why, reason, false).await,
+                Err(Trouble::Rejoin(why)) => self.recover(why, ReconnectReason::RrUnknown, true).await,
+            }
+            if let Some(recovery) = &self.recovery
+                && recovery.started.elapsed() > GIVE_UP
+            {
+                break format!("couldn't reconnect in {GIVE_UP:?}");
             }
         };
-        self.publisher.close();
-        self.subscriber.close();
+        self.link.publisher.close();
+        self.link.subscriber.close();
         tracing::info!("{}: call ended: {reason}", self.identity);
         let _ = self.events.send(CallEvent::Ended(reason));
     }
 
-    async fn on_signal(&mut self, event: SignalEvent) -> Result<(), String> {
+    /// Start (or escalate) a reconnect, and make an attempt.
+    async fn recover(&mut self, why: String, reason: ReconnectReason, rejoin: bool) {
+        match &mut self.recovery {
+            // Already at it: a further failure only matters if it says the
+            // session is gone.
+            Some(recovery) => {
+                if rejoin && !recovery.rejoin {
+                    recovery.rejoin = true;
+                    recovery.next = Instant::now();
+                } else {
+                    return;
+                }
+            }
+            None => {
+                tracing::info!("{}: connection lost ({why}); reconnecting", self.identity);
+                self.recovery = Some(Recovery { started: Instant::now(), attempt: 0, next: Instant::now(), reason, rejoin });
+            }
+        }
+        self.attempt(&why).await;
+    }
+
+    /// One attempt: resume the session, or join afresh. Either way the media
+    /// comes back through the ordinary loop; `on_tick` notices it did (or
+    /// that it didn't, and tries again).
+    async fn attempt(&mut self, why: &str) {
+        let Some(recovery) = &mut self.recovery else { return };
+        recovery.attempt += 1;
+        recovery.next = Instant::now() + ATTEMPT_WAIT;
+        if recovery.attempt > RESUME_ATTEMPTS {
+            recovery.rejoin = true;
+        }
+        let (attempt, rejoin, reason) = (recovery.attempt, recovery.rejoin, recovery.reason);
+        let _ = self.events.send(CallEvent::Reconnecting { attempt, reason: why.to_owned() });
+        self.publishing = false;
+        self.pub_ice = IceConnectionState::New;
+        self.sub_ice = IceConnectionState::New;
+        self.ice_down_since = None;
+
+        let outcome = if rejoin { self.rejoin().await } else { self.resume(reason).await };
+        match outcome {
+            Ok(()) => {}
+            // The server won't resume this session: straight to a fresh join.
+            Err(CallError::Signal(horo_livekit::Error::Left(_) | horo_livekit::Error::Refused { .. })) if !rejoin => {
+                tracing::info!("{}: the session can't be resumed; rejoining", self.identity);
+                if let Some(recovery) = &mut self.recovery {
+                    recovery.rejoin = true;
+                    recovery.next = Instant::now();
+                }
+            }
+            // Probably no network yet: wait a little and try again.
+            Err(e) => {
+                tracing::info!("{}: reconnect attempt {attempt} failed: {e}", self.identity);
+                if let Some(recovery) = &mut self.recovery {
+                    recovery.next = Instant::now() + Duration::from_secs(1 << attempt.min(3));
+                }
+            }
+        }
+    }
+
+    /// Same session, new path: signalling reconnects as this participant,
+    /// both peers gather afresh and restart ICE.
+    async fn resume(&mut self, reason: ReconnectReason) -> Result<()> {
+        let (signal, response, signal_events) = horo_livekit::resume(&self.url, &self.token, &self.own_sid, reason, self.ping).await?;
+        if let Some(response) = response
+            && !response.ice_servers.is_empty()
+        {
+            self.turn = turn_servers(&response.ice_servers);
+        }
+        // The server's subscriber offer (an ICE restart) is already on its
+        // way; it waits in `signal_events` until both peers have new
+        // candidates, so the answer carries them.
+        let publisher = (self.network)(&format!("{}/pub", self.identity), &self.turn);
+        let subscriber = (self.network)(&format!("{}/sub", self.identity), &self.turn);
+        self.link.subscriber.restart(subscriber, false).await?;
+        let offer = self.link.publisher.restart(publisher, true).await?;
+        if let Some(sdp) = offer {
+            signal.offer(sdp, 0)?;
+        }
+        self.link.signal = signal;
+        self.link.signal_events = signal_events;
+        Ok(())
+    }
+
+    /// A new session: everything rebuilt, the microphone republished.
+    async fn rejoin(&mut self) -> Result<()> {
+        let _ = self.link.signal.leave();
+        if let Some(refresh) = &self.refresh_token {
+            match refresh().await {
+                Ok(token) => self.token = token,
+                Err(e) => tracing::warn!("{}: no fresh token ({e}); trying the old one", self.identity),
+            }
+        }
+        let (link, join, turn) = open_link(&self.url, &self.token, &self.network, self.muted.load(Ordering::Relaxed)).await?;
+        self.link.publisher.close();
+        self.link.subscriber.close();
+        self.link = link;
+        self.turn = turn;
+        self.mic_sid = None;
+        self.remotes.lock().unwrap().tracks.clear();
+        self.joined(&join);
+        Ok(())
+    }
+
+    async fn on_tick(&mut self) -> Result<(), Trouble> {
+        let now = Instant::now();
+        match &self.recovery {
+            Some(recovery) => {
+                if ice_up(self.pub_ice) && ice_up(self.sub_ice) && self.publishing {
+                    let resumed = !recovery.rejoin;
+                    tracing::info!("{}: reconnected after {:?} ({})", self.identity, recovery.started.elapsed(), if resumed { "resumed" } else { "rejoined" });
+                    self.recovery = None;
+                    let _ = self.events.send(CallEvent::Reconnected { resumed });
+                } else if now >= recovery.next {
+                    self.attempt("still not connected").await;
+                }
+            }
+            None => {
+                if now.duration_since(self.route_checked) >= ROUTE_CHECK {
+                    self.route_checked = now;
+                    let route = horo_media::peer::default_route_address();
+                    if route != self.route {
+                        let why = format!("the network changed ({:?} → {:?})", self.route, route);
+                        self.route = route;
+                        // No route at all: nothing to reconnect over yet. The
+                        // path check notices; the next route change retries.
+                        if route.is_some() {
+                            return Err(Trouble::Lost(why, ReconnectReason::RrSwitchCandidate));
+                        }
+                    }
+                }
+                if let Some(since) = self.ice_down_since
+                    && since.elapsed() > ICE_GRACE
+                {
+                    let reason = if ice_up(self.pub_ice) { ReconnectReason::RrSubscriberFailed } else { ReconnectReason::RrPublisherFailed };
+                    return Err(Trouble::Lost(format!("no media path for {ICE_GRACE:?}"), reason));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn on_ice(&mut self) {
+        let up = ice_up(self.pub_ice) && (ice_up(self.sub_ice) || !self.ever_connected);
+        if up {
+            self.ice_down_since = None;
+        } else if self.ever_connected && self.ice_down_since.is_none() {
+            self.ice_down_since = Some(Instant::now());
+        }
+    }
+
+    fn on_publisher(&mut self, event: PeerEvent) -> Result<(), Trouble> {
         match event {
-            SignalEvent::Answer(answer) => self.publisher.accept_answer(&answer.sdp).await.map_err(|e| format!("publisher answer: {e}"))?,
+            PeerEvent::Connected => {
+                self.publishing = true;
+                if !self.ever_connected {
+                    self.ever_connected = true;
+                    let _ = self.events.send(CallEvent::Connected);
+                }
+            }
+            PeerEvent::IceState(state) => {
+                self.pub_ice = state;
+                // ICE back after a restart: DTLS never went, so writing resumes.
+                if ice_up(state) && self.ever_connected {
+                    self.publishing = true;
+                }
+                self.on_ice();
+            }
+            PeerEvent::Path { alive: false } if self.ever_connected && self.recovery.is_none() => {
+                return Err(Trouble::Lost(format!("nothing from the server for {PATH_TIMEOUT:?}"), ReconnectReason::RrPublisherFailed));
+            }
+            PeerEvent::Closed(reason) => return Err(Trouble::Rejoin(format!("publisher: {reason}"))),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn on_signal(&mut self, event: SignalEvent) -> Result<(), Trouble> {
+        let lost = |what: &str, e: &dyn std::fmt::Display| Trouble::Lost(format!("{what}: {e}"), ReconnectReason::RrSignalDisconnected);
+        match event {
+            SignalEvent::Answer(answer) => {
+                if let Err(e) = self.link.publisher.accept_answer(&answer.sdp).await {
+                    return Err(Trouble::Rejoin(format!("publisher answer: {e}")));
+                }
+            }
             SignalEvent::Offer(offer) => {
-                let answer = self.subscriber.accept_offer(&offer.sdp).await.map_err(|e| format!("subscriber offer: {e}"))?;
-                self.signal.answer(answer, offer.id).map_err(|e| e.to_string())?;
+                let answer = match self.link.subscriber.accept_offer(&offer.sdp).await {
+                    Ok(answer) => answer,
+                    Err(e) => return Err(Trouble::Rejoin(format!("subscriber offer: {e}"))),
+                };
+                self.link.signal.answer(answer, offer.id).map_err(|e| lost("answering", &e))?;
             }
             SignalEvent::Candidate { target: Target::Publisher, candidate } => {
-                if let Err(e) = self.publisher.add_remote_candidate(&candidate) {
+                if let Err(e) = self.link.publisher.add_remote_candidate(&candidate) {
                     tracing::debug!("publisher candidate {candidate:?}: {e}");
                 }
             }
             SignalEvent::Candidate { target: Target::Subscriber, candidate } => {
-                if let Err(e) = self.subscriber.add_remote_candidate(&candidate) {
+                if let Err(e) = self.link.subscriber.add_remote_candidate(&candidate) {
                     tracing::debug!("subscriber candidate {candidate:?}: {e}");
                 }
             }
-            SignalEvent::TrackPublished { cid, track } if cid == MIC_CID => self.mic_sid = track.map(|t| t.sid),
+            SignalEvent::TrackPublished { cid, track } if cid == MIC_CID => {
+                self.mic_sid = track.map(|t| t.sid);
+                // Muted while the track was being republished after a rejoin.
+                if let Some(sid) = &self.mic_sid
+                    && self.muted.load(Ordering::Relaxed)
+                {
+                    let _ = self.link.signal.mute(sid, true);
+                }
+            }
             SignalEvent::Participants(updates) => {
                 let mut changed = false;
                 for p in updates {
@@ -362,14 +695,23 @@ impl Engine {
                     .collect();
                 let _ = self.events.send(CallEvent::Speaking(speaking));
             }
-            SignalEvent::Leave(leave) => return Err(format!("the server ended the call ({:?})", leave.reason())),
-            SignalEvent::Closed(reason) => return Err(format!("signalling closed: {reason}")),
+            SignalEvent::Leave(leave) => {
+                use proto::leave_request::Action;
+                let why = format!("the server asked us to leave ({:?})", leave.reason());
+                return Err(match leave.action() {
+                    Action::Resume => Trouble::Lost(why, ReconnectReason::RrUnknown),
+                    Action::Reconnect => Trouble::Rejoin(why),
+                    Action::Disconnect if leave.can_reconnect => Trouble::Rejoin(why),
+                    Action::Disconnect => Trouble::End(why),
+                });
+            }
+            SignalEvent::Closed(reason) => return Err(Trouble::Lost(format!("signalling closed: {reason}"), ReconnectReason::RrSignalDisconnected)),
             _ => {}
         }
         Ok(())
     }
 
-    fn on_subscriber(&mut self, event: PeerEvent) -> Result<(), String> {
+    fn on_subscriber(&mut self, event: PeerEvent) -> Result<(), Trouble> {
         match event {
             PeerEvent::Audio { mid, rtp_time, data } => {
                 let now = Instant::now();
@@ -377,16 +719,29 @@ impl Engine {
                 let fresh = || JitterBuffer::new().map(|buffer| Remote { buffer, last_packet: now });
                 let remote = match remotes.tracks.entry(mid) {
                     std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                    std::collections::hash_map::Entry::Vacant(entry) => entry.insert(fresh().map_err(|e| e.to_string())?),
+                    std::collections::hash_map::Entry::Vacant(entry) => match fresh() {
+                        Ok(remote) => entry.insert(remote),
+                        Err(e) => return Err(Trouble::End(format!("decoder: {e}"))),
+                    },
                 };
                 if now.duration_since(remote.last_packet) > IDLE {
-                    *remote = fresh().map_err(|e| e.to_string())?;
+                    match fresh() {
+                        Ok(fresh) => *remote = fresh,
+                        Err(e) => return Err(Trouble::End(format!("decoder: {e}"))),
+                    }
                 }
                 remote.last_packet = now;
                 remote.buffer.push(rtp_time, data.to_vec(), now);
             }
+            PeerEvent::IceState(state) => {
+                self.sub_ice = state;
+                self.on_ice();
+            }
             PeerEvent::MediaAdded { mid, kind: MediaKind::Audio } => tracing::debug!("{}: remote audio on {mid}", self.identity),
-            PeerEvent::Closed(reason) => return Err(format!("subscriber: {reason}")),
+            PeerEvent::Path { alive: false } if self.ever_connected && self.recovery.is_none() => {
+                return Err(Trouble::Lost(format!("nothing from the server for {PATH_TIMEOUT:?}"), ReconnectReason::RrSubscriberFailed));
+            }
+            PeerEvent::Closed(reason) => return Err(Trouble::Rejoin(format!("subscriber: {reason}"))),
             _ => {}
         }
         Ok(())

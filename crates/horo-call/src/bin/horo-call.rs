@@ -32,7 +32,7 @@ use std::{
 };
 
 use horo_call::{
-    Call, CallEvent, CallOptions, Joined,
+    Call, CallEvent, CallOptions, Joined, TokenSource,
     devices::{self, AudioDevices},
 };
 use horo_core::{AppState, Event, EventSink, MatrixCore, matrix::auth};
@@ -117,7 +117,7 @@ async fn main() {
         Some("logout") => logout().await,
         Some("devices") => list_devices(),
         Some("join") if args.len() >= 2 => join(&args[1], call_flags(&args[2..])).await,
-        Some("livekit") if args.len() >= 3 => talk(&args[1], &args[2], call_flags(&args[3..])).await,
+        Some("livekit") if args.len() >= 3 => talk(&args[1], &args[2], None, call_flags(&args[3..])).await,
         _ => usage(),
     };
     if let Err(e) = result {
@@ -208,7 +208,17 @@ async fn join(room: &str, flags: CallFlags) -> Fallible {
         })
     };
 
-    let result = talk(&credentials.livekit_url, &credentials.jwt, flags).await;
+    // A full rejoin after the token expired gets a new one the way the first
+    // came: MatrixRTC's OpenID exchange (our membership is still there, so
+    // this rings nobody).
+    let refresh: TokenSource = {
+        let (core, room_id) = (core.clone(), room_id.clone());
+        Arc::new(move || {
+            let (core, room_id) = (core.clone(), room_id.clone());
+            Box::pin(async move { horo_rtc::join(&core, &room_id, false).await.map(|c| c.jwt).map_err(|e| e.to_string()) })
+        })
+    };
+    let result = talk(&credentials.livekit_url, &credentials.jwt, Some(refresh), flags).await;
     refresher.abort();
     if let Err(e) = horo_rtc::leave(&core, &room_id).await {
         eprintln!("withdrawing the call membership: {e}");
@@ -221,8 +231,8 @@ async fn join(room: &str, flags: CallFlags) -> Fallible {
 
 /// Join the LiveKit room, run the devices, and print what happens until the
 /// call ends, the time is up, or the user leaves.
-async fn talk(url: &str, token: &str, flags: CallFlags) -> Fallible {
-    let options = CallOptions { gate_threshold: flags.gate, muted: flags.muted, ..Default::default() };
+async fn talk(url: &str, token: &str, refresh_token: Option<TokenSource>, flags: CallFlags) -> Fallible {
+    let options = CallOptions { gate_threshold: flags.gate, muted: flags.muted, refresh_token, ..Default::default() };
     let Joined { call, microphone, speaker, mut events } = Call::connect(url, token, options).await?;
     let audio = devices::start(microphone, speaker, flags.devices)?;
     eprintln!(
@@ -263,6 +273,8 @@ async fn talk(url: &str, token: &str, flags: CallFlags) -> Fallible {
         tokio::select! {
             event = events.recv() => match event {
                 Some(CallEvent::Connected) => eprintln!("connected"),
+                Some(CallEvent::Reconnecting { attempt, reason }) => eprintln!("reconnecting (attempt {attempt}): {reason}"),
+                Some(CallEvent::Reconnected { resumed }) => eprintln!("{}", if resumed { "reconnected" } else { "reconnected (rejoined the room)" }),
                 Some(CallEvent::Participants(people)) => {
                     let names: Vec<&str> = people.iter().map(|p| p.identity.as_str()).collect();
                     eprintln!("in the call: {}", if names.is_empty() { "nobody else".to_owned() } else { names.join(", ") });

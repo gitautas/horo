@@ -70,6 +70,8 @@ fn loopback() -> Network {
 fn options() -> CallOptions {
     CallOptions { network: loopback(), ..Default::default() }
 }
+// (`loopback` gathers on 127.0.0.1 each time it's asked: a restart gets new
+// ports, as a network switch would get new addresses.)
 
 /// Goertzel power at one frequency.
 fn power_at(samples: &[f32], hz: f64) -> f64 {
@@ -197,4 +199,158 @@ async fn what_alice_says_bob_hears_until_she_mutes() {
     })
     .await;
     bob.leave().await;
+}
+
+/// Alice sends the tone and Bob listens, on a real-time 20 ms clock, for
+/// `seconds`; `at` runs `action` once that far in. Returns Bob's level in
+/// every 100 ms and both sides' events, with when they came.
+async fn run_call(
+    alice: &mut Joined,
+    bob: &mut Joined,
+    seconds: f64,
+    at: f64,
+    action: impl FnOnce(&Call, &Call),
+) -> (Vec<f64>, Vec<(f64, CallEvent)>, Vec<(f64, CallEvent)>) {
+    let started = Instant::now();
+    let mut clock = tokio::time::interval(Duration::from_millis(20));
+    let mut action = Some(action);
+    let (mut sent, mut frame, mut window) = (0u64, [0f32; FRAME], Vec::new());
+    let (mut levels, mut alice_events, mut bob_events) = (Vec::new(), Vec::new(), Vec::new());
+    while started.elapsed().as_secs_f64() < seconds {
+        clock.tick().await;
+        let now = started.elapsed().as_secs_f64();
+        if now >= at
+            && let Some(action) = action.take()
+        {
+            action(&alice.call, &bob.call);
+        }
+        for (i, s) in frame.iter_mut().enumerate() {
+            let t = ((sent + i as u64) % SAMPLE_RATE as u64) as f64 / SAMPLE_RATE as f64;
+            *s = ((t * TONE_HZ * std::f64::consts::TAU).sin() * 0.25) as f32;
+        }
+        sent += FRAME as u64;
+        alice.microphone.push(&frame);
+        bob.speaker.pull(&mut frame);
+        window.extend_from_slice(&frame);
+        if window.len() >= SAMPLE_RATE as usize / 10 {
+            levels.push(rms(&window));
+            window.clear();
+        }
+        for (events, out) in [(&mut alice.events, &mut alice_events), (&mut bob.events, &mut bob_events)] {
+            while let Ok(event) = events.try_recv() {
+                if !matches!(event, CallEvent::Level(_) | CallEvent::Speaking(_)) {
+                    out.push((now, event));
+                }
+            }
+        }
+    }
+    (levels, alice_events, bob_events)
+}
+
+/// Two engines in a fresh room, Bob hearing Alice before anything happens.
+async fn pair(url: &str, name: &str) -> (Joined, Joined) {
+    let room = format!("{name}-{:x}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos());
+    let bob = Call::connect(url, &token("bob", &room), options()).await.expect("bob joins");
+    let alice = Call::connect(url, &token("alice", &room), options()).await.expect("alice joins");
+    (alice, bob)
+}
+
+/// When Bob heard the tone again after `from`, if he did: the start of the
+/// first run of 300 ms at the tone's level.
+fn back_at(levels: &[f64], from: f64) -> Option<f64> {
+    let first = (from * 10.0) as usize;
+    (first..levels.len().saturating_sub(3)).find(|&i| levels[i..i + 3].iter().all(|&l| l > 0.12)).map(|i| i as f64 / 10.0)
+}
+
+fn reconnected(events: &[(f64, CallEvent)]) -> Option<(f64, bool)> {
+    events.iter().find_map(|(at, e)| match e {
+        CallEvent::Reconnected { resumed } => Some((*at, *resumed)),
+        _ => None,
+    })
+}
+
+fn report(name: &str, levels: &[f64], alice: &[(f64, CallEvent)], bob: &[(f64, CallEvent)]) {
+    let timeline: String = levels.iter().map(|&l| if l > 0.12 { '█' } else if l > 0.01 { '▄' } else { '·' }).collect();
+    eprintln!("{name}: bob heard {timeline}");
+    for (who, events) in [("alice", alice), ("bob", bob)] {
+        for (at, e) in events {
+            eprintln!("  {at:>5.2}s {who}: {e:?}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_senders_network_dies_and_the_call_comes_back() {
+    let Some(url) = server() else { return };
+    let (mut alice, mut bob) = pair(&url, "sever-sender").await;
+    let (levels, alice_events, bob_events) = run_call(&mut alice, &mut bob, 22.0, 4.0, |alice, _| alice.sever()).await;
+    report("sender severed at 4 s", &levels, &alice_events, &bob_events);
+    assert!(back_at(&levels, 0.0).is_some_and(|t| t < 4.0), "bob never heard alice before the cut");
+    let (at, resumed) = reconnected(&alice_events).expect("alice never reconnected");
+    assert!(resumed, "alice should resume her session, not rejoin");
+    let back = back_at(&levels, 4.5).expect("bob never heard alice again");
+    eprintln!("alice reconnected at {at:.1}s; bob heard her again at {back:.1}s");
+    assert!(back < 16.0, "back only at {back:.1}s");
+    // A resumed session never left: Bob saw no one go.
+    assert!(!bob_events.iter().any(|(at, e)| *at > 4.0 && matches!(e, CallEvent::Participants(p) if p.is_empty())), "bob saw alice leave");
+    alice.call.leave().await;
+    bob.call.leave().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_listeners_network_dies_and_the_call_comes_back() {
+    let Some(url) = server() else { return };
+    let (mut alice, mut bob) = pair(&url, "sever-listener").await;
+    let (levels, alice_events, bob_events) = run_call(&mut alice, &mut bob, 22.0, 4.0, |_, bob| bob.sever()).await;
+    report("listener severed at 4 s", &levels, &alice_events, &bob_events);
+    reconnected(&bob_events).expect("bob never reconnected");
+    let back = back_at(&levels, 4.5).expect("bob never heard alice again");
+    assert!(back < 16.0, "back only at {back:.1}s");
+    alice.call.leave().await;
+    bob.call.leave().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_network_change_hint_restarts_with_barely_a_gap() {
+    let Some(url) = server() else { return };
+    let (mut alice, mut bob) = pair(&url, "hint").await;
+    let (levels, alice_events, bob_events) = run_call(&mut alice, &mut bob, 12.0, 4.0, |alice, _| alice.reconnect()).await;
+    report("network change hint at 4 s", &levels, &alice_events, &bob_events);
+    let (at, resumed) = reconnected(&alice_events).expect("alice never reconnected");
+    assert!(resumed);
+    assert!(at < 7.0, "took until {at:.1}s");
+    let quiet = levels[40..90].iter().filter(|&&l| l < 0.12).count();
+    eprintln!("{} of 50 tenths below the tone's level after the hint", quiet);
+    assert!(quiet <= 20, "{quiet} tenths of a second lost");
+    alice.call.leave().await;
+    bob.call.leave().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lost_media_with_signalling_still_up_is_noticed_and_restored() {
+    let Some(url) = server() else { return };
+    let (mut alice, mut bob) = pair(&url, "sever-media").await;
+    let (levels, alice_events, bob_events) = run_call(&mut alice, &mut bob, 25.0, 4.0, |alice, _| alice.sever_media()).await;
+    report("sender's media severed at 4 s", &levels, &alice_events, &bob_events);
+    let (at, resumed) = reconnected(&alice_events).expect("alice never reconnected");
+    let back = back_at(&levels, 4.5).expect("bob never heard alice again");
+    eprintln!("alice reconnected at {at:.1}s (resumed: {resumed}); bob heard her again at {back:.1}s");
+    assert!(back < 20.0, "back only at {back:.1}s");
+    alice.call.leave().await;
+    bob.call.leave().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_beyond_resuming_rejoins() {
+    let Some(url) = server() else { return };
+    let (mut alice, mut bob) = pair(&url, "rejoin").await;
+    let (levels, alice_events, bob_events) = run_call(&mut alice, &mut bob, 18.0, 4.0, |alice, _| alice.kill_publisher()).await;
+    report("sender's publisher killed at 4 s", &levels, &alice_events, &bob_events);
+    let (at, resumed) = reconnected(&alice_events).expect("alice never reconnected");
+    assert!(!resumed, "a dead peer connection can't be resumed");
+    let back = back_at(&levels, 4.5).expect("bob never heard alice again");
+    eprintln!("alice rejoined at {at:.1}s; bob heard her again at {back:.1}s");
+    assert!(back < 12.0, "back only at {back:.1}s");
+    alice.call.leave().await;
+    bob.call.leave().await;
 }
