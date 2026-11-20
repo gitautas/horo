@@ -9,11 +9,9 @@
 //! horo-call logout
 //! ```
 //!
-//! `join` and `livekit` take `--echo software|apple|off` (default
-//! software: horo's own canceller, any devices; apple: VoiceProcessingIO,
-//! default devices; off: use headphones), `--input <id>` and `--output <id>`
-//! (ids from `horo-call devices`), `--gate <dB>`, `--muted` and
-//! `--seconds <n>`. While in
+//! `join` and `livekit` take `--input <id>` and `--output <id>` (ids from
+//! `horo-call devices`), `--no-echo-cancellation` (headphones only),
+//! `--gate <dB>`, `--muted` and `--seconds <n>`. While in
 //! a call, type `m` and Enter to toggle mute, `q` and Enter (or Ctrl-C) to
 //! leave.
 //!
@@ -35,7 +33,7 @@ use std::{
 
 use horo_call::{
     Call, CallEvent, CallOptions, Joined,
-    devices::{self, AudioDevices, EchoCancellation},
+    devices::{self, AudioDevices},
 };
 use horo_core::{AppState, Event, EventSink, MatrixCore, matrix::auth};
 use matrix_sdk::ruma::{OwnedRoomAliasId, OwnedRoomId, RoomOrAliasId};
@@ -62,7 +60,7 @@ fn usage() -> ! {
   horo-call login <homeserver> <username>
   horo-call join <#alias:server | !room:server> [options]
   horo-call livekit <url> <token> [options]
-    options: --echo software|apple|off  --input <id>  --output <id>
+    options: --input <id>  --output <id>  --no-echo-cancellation
              --gate <dB>  --muted  --seconds <n>
   horo-call devices
   horo-call logout"
@@ -90,15 +88,7 @@ fn call_flags(args: &[String]) -> CallFlags {
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--echo" => {
-                flags.devices.echo = match args.next().map(String::as_str) {
-                    Some("software") => EchoCancellation::Software,
-                    #[cfg(any(target_os = "macos", target_os = "ios"))]
-                    Some("apple") => EchoCancellation::Apple,
-                    Some("off") => EchoCancellation::Off,
-                    _ => usage(),
-                }
-            }
+            "--no-echo-cancellation" => flags.devices.cancel_echo = false,
             "--input" => flags.devices.input = Some(args.next().cloned().unwrap_or_else(|| usage())),
             "--output" => flags.devices.output = Some(args.next().cloned().unwrap_or_else(|| usage())),
             "--muted" => flags.muted = true,

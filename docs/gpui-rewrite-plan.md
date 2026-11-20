@@ -33,7 +33,7 @@ current look, including the fonts and Phosphor icons), and a web build.
 | D2 | Widget kit | `gpui-component` (longbridge) for inputs, lists, popovers, dialogs, then own components on top | Writing a text input with IME, selection and undo from scratch is months of work. |
 | D3 | RTC transport | `str0m` (sans-I/O WebRTC) behind our own `MediaEngine` trait | Pure Rust, no libwebrtc, no threads of its own, builds for every target. The trait leaves the LiveKit Rust SDK (libwebrtc, what Zed uses) as a fallback if str0m blocks us. |
 | D4 | SFU | Stay on LiveKit, implement its signal protocol ourselves | Required for Element Call interop; the protocol is public protobuf over WSS (`livekit-protocol` crate has the types). |
-| D5 | Echo cancellation | Platform voice processing where it exists; WebRTC APM (`webrtc-audio-processing`) elsewhere | A from-scratch AEC is a research project. iOS/macOS VPIO and Android `VOICE_COMMUNICATION` are what users expect; APM covers Windows/Linux. |
+| D5 | Echo cancellation | `sonora` (WebRTC's AEC3, NS and AGC2 ported to Rust) on every platform | One canceller, any devices, no libwebrtc to build. Measured against macOS VoiceProcessingIO in Phase 2: both bring a loudspeaker chirp's echo down to the room's noise floor, so the platform path was dropped. |
 | D6 | Video codecs | VP8 baseline (libvpx) + H.264 via hardware encoders where available (VideoToolbox, MediaCodec, Media Foundation) | VP8 is what LiveKit and Element Call negotiate by default; hardware H.264 saves battery on phones. |
 | D7 | Packaging/updates | `cargo-packager` + its updater | Replaces the Tauri bundler and `tauri-plugin-updater` with the same artefacts (dmg/.app.tar.gz, NSIS/MSI, AppImage/deb) and a signed update manifest. Existing installs need one last Tauri release that points at the new feed. |
 | D8 | Migration strategy | Big-bang UI rewrite on a branch; backend extracted first and kept shippable in Tauri meanwhile | The Matrix layer is reused, so the old app can keep shipping off the same core crate while the gpui shell catches up. |
@@ -127,9 +127,9 @@ RTP → jitter buffer → Opus dec (+PLC/FEC) → mix N speakers → resample �
 - Device I/O: `cpal` on desktop and Android (AAudio), CoreAudio directly on
   iOS so we can own `AVAudioSession` (category `playAndRecord`, mode
   `voiceChat`, Bluetooth/route changes, interruptions from phone calls).
-- Voice processing: VPIO on macOS/iOS, Android `VOICE_COMMUNICATION` input
-  preset + `AcousticEchoCanceler`, APM on Windows/Linux. One `VoiceProcessor`
-  trait so a platform can fall back to APM.
+- Voice processing: `sonora` everywhere, on the 48 kHz frames between the
+  devices and the engine (`horo_media::audio::echo`). On iOS the session's
+  mode must not be `voiceChat`, which would stack Apple's processing on top.
 - Jitter buffer: adaptive, per remote track, with Opus in-band FEC and PLC.
   This is the piece that decides call quality; budget time for it and for
   tuning under `tc netem` loss/jitter.
@@ -253,7 +253,7 @@ can't fix, take the §4.6 fallback.
 ### Phase 2 — Desktop voice engine (5–6 weeks)
 
 - `horo-livekit` signal client, `horo-media` audio path, TURN client,
-  jitter buffer, APM/VPIO, noise gate, device selection.
+  jitter buffer, echo cancellation (sonora), noise gate, device selection.
 - A headless CLI (`horo-call`) that joins a MatrixRTC call from the terminal:
   the test harness for everything after this.
 - Exit: 30-minute 4-person call with Element Call participants on macOS,

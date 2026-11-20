@@ -8,8 +8,8 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-# CoreAudio, WASAPI, ALSA. Phones get their own backends (AVAudioSession +
-# VPIO on iOS, AAudio on Android) behind the same interface.
+# CoreAudio, WASAPI, ALSA (and AAudio, CoreAudio on the phones, behind the
+# same interface; iOS will need its AVAudioSession set up first).
 cpal = "0.18"
 # Device rates (44.1 kHz is common) to the codec's 48 kHz and back.
 rubato = "5"
@@ -18,11 +18,3 @@ ringbuf = "0.6"
 thiserror.workspace = true
 tracing.workspace = true
 
-# Apple's VoiceProcessingIO: echo cancellation, noise suppression and gain
-# control in one I/O unit, as FaceTime uses (see `apple.rs`).
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-objc2-audio-toolbox = { version = "0.3.2", features = ["AUComponent", "AudioComponent", "AudioOutputUnit", "AudioUnitProperties", "objc2-core-audio-types"] }
-objc2-core-audio-types = { version = "0.3.2", features = ["CoreAudioBaseTypes"] }
-
-[target.'cfg(target_os = "ios")'.dependencies]
-objc2-avf-audio = { version = "0.3.2", features = ["AVAudioSession", "AVAudioSessionTypes"] }

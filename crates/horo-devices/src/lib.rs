@@ -8,10 +8,9 @@
 //! move samples through a lock-free ring. Nothing in them allocates, locks
 //! or waits; when the ring is full or empty they count it and carry on.
 //!
-//! Desktop backends come from cpal (CoreAudio, WASAPI, ALSA). For calls,
-//! Apple platforms have [`Duplex`]: VoiceProcessingIO, microphone and
-//! loudspeaker as one unit with echo cancellation. Elsewhere echo
-//! cancellation is still to come (WebRTC's APM), and Android needs AAudio.
+//! Backends come from cpal (CoreAudio, WASAPI, ALSA). Echo cancellation
+//! isn't done here but in software on the frames, the same on every
+//! platform (`horo_media::audio::echo`).
 
 use std::{
     sync::{
@@ -35,12 +34,6 @@ use ringbuf::{
 mod convert;
 pub use convert::{FromFrames, ToFrames};
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-mod apple;
-#[cfg(target_os = "ios")]
-pub use apple::activate_voice_session;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use apple::Duplex;
 
 pub const SAMPLE_RATE: u32 = 48_000;
 /// One 20 ms frame at 48 kHz.

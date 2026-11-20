@@ -13,8 +13,8 @@
 //!   microphone's level, and the end.
 //!
 //! [`devices::start`] wires the two to real hardware: cpal devices with
-//! horo's software echo canceller on every platform, or Apple's
-//! voice-processing unit on macOS and iOS. Tests wire them to tones instead.
+//! horo's software echo canceller, the same on every platform. Tests wire
+//! them to tones instead.
 
 use std::{
     collections::HashMap,

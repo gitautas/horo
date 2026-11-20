@@ -9,9 +9,13 @@
 //! **Plays a chirp out loud** for about eight seconds. Use the built-in
 //! speakers (headphones leave no echo to cancel) and keep the room quiet.
 //!
-//! The same four phases as horo-devices' VoiceProcessingIO `echo` example,
-//! so the two compare directly: silence and the chirp, each with
-//! processing bypassed and on.
+//! Four phases: silence and the chirp, each with processing bypassed and on
+//! (noise suppression lowers a quiet room, so the floor is measured both
+//! ways). The gap between the two chirps is the echo cancellation; how close
+//! the processed chirp gets to the processed room is how much echo is left.
+//!
+//! On a MacBook Air's own speakers and microphone the processed chirp lands
+//! at the room's noise floor (26.5 dB below the raw echo in that room).
 
 use std::{
     sync::{
@@ -24,7 +28,8 @@ use std::{
 use horo_devices::{Capture, FRAME, Playback, SAMPLE_RATE};
 use horo_media::audio::echo::{EchoCanceller, Processing};
 
-/// A 300 Hz → 3 kHz sweep every half second, as in the VPIO example.
+/// A 300 Hz → 3 kHz sweep every half second: speech-band and not
+/// stationary, so noise suppression can't take credit for it.
 fn chirp(n: u64) -> f32 {
     let t = (n % (SAMPLE_RATE as u64 / 2)) as f64 / SAMPLE_RATE as f64;
     let phase = std::f64::consts::TAU * (300.0 * t + 2700.0 * t * t);
