@@ -12,9 +12,9 @@
 //! - [`CallEvent`]s for the UI: connected, who's here, who's speaking, the
 //!   microphone's level, and the end.
 //!
-//! [`devices::start`] wires the two to real hardware: Apple's
-//! voice-processing unit where there is one (echo cancellation), cpal
-//! otherwise. Tests wire them to tones instead.
+//! [`devices::start`] wires the two to real hardware: cpal devices with
+//! horo's software echo canceller on every platform, or Apple's
+//! voice-processing unit on macOS and iOS. Tests wire them to tones instead.
 
 use std::{
     collections::HashMap,
@@ -31,6 +31,7 @@ use horo_media::{
     audio::{
         FRAME,
         codec::Encoder,
+        echo::EchoCanceller,
         gate::{GATE_OFF_DB, GateReading, NoiseGate},
         jitter::JitterBuffer,
         mixer::mix,
@@ -199,8 +200,8 @@ impl Call {
 
         let mut gate = NoiseGate::new(horo_media::audio::SAMPLE_RATE);
         gate.set_threshold(options.gate_threshold);
-        let microphone = Microphone { gate, encoder: Encoder::new()?, rtp: 0, packets: packets_tx, muted: muted.clone(), events: events_tx };
-        let speaker = Speaker { remotes, frames: Vec::new() };
+        let microphone = Microphone { gate, encoder: Encoder::new()?, rtp: 0, packets: packets_tx, muted: muted.clone(), events: events_tx, echo: None };
+        let speaker = Speaker { remotes, frames: Vec::new(), echo: None };
         Ok(Joined { call: Call { commands, muted, identity, task }, microphone, speaker, events })
     }
 
@@ -400,16 +401,29 @@ pub struct Microphone {
     packets: mpsc::UnboundedSender<(u64, Vec<u8>)>,
     muted: Arc<AtomicBool>,
     events: mpsc::UnboundedSender<CallEvent>,
+    echo: Option<EchoCanceller>,
 }
 
 impl Microphone {
+    /// Clean every frame with `echo` first. Give the [`Speaker`] the same
+    /// canceller, so it knows what was played.
+    pub fn set_echo_canceller(&mut self, echo: Option<EchoCanceller>) {
+        self.echo = echo;
+    }
+
     pub fn set_gate_threshold(&mut self, db: f32) {
         self.gate.set_threshold(db);
     }
 
-    /// One 20 ms frame of microphone: gated, encoded and sent (unless muted).
+    /// One 20 ms frame of microphone: echo-cancelled, gated, encoded and
+    /// sent (unless muted).
     pub fn push(&mut self, frame: &[f32; FRAME]) {
         let mut frame = *frame;
+        // Even while muted: the canceller keeps adapting, so unmuting
+        // doesn't let a burst of echo through.
+        if let Some(echo) = &self.echo {
+            echo.capture(&mut frame);
+        }
         if let Some(reading) = self.gate.process(&mut frame) {
             let _ = self.events.send(CallEvent::Level(reading));
         }
@@ -433,9 +447,16 @@ impl Microphone {
 pub struct Speaker {
     remotes: Arc<Mutex<Remotes>>,
     frames: Vec<[f32; FRAME]>,
+    echo: Option<EchoCanceller>,
 }
 
 impl Speaker {
+    /// Tell `echo` about every frame played; see
+    /// [`Microphone::set_echo_canceller`].
+    pub fn set_echo_canceller(&mut self, echo: Option<EchoCanceller>) {
+        self.echo = echo;
+    }
+
     /// The next 20 ms of everyone else, mixed.
     pub fn pull(&mut self, out: &mut [f32; FRAME]) {
         let now = Instant::now();
@@ -452,5 +473,8 @@ impl Speaker {
         }
         drop(remotes);
         mix(self.frames[..used].iter(), out);
+        if let Some(echo) = &self.echo {
+            echo.render(out);
+        }
     }
 }

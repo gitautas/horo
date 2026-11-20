@@ -1,6 +1,6 @@
 //! The audio path, between the network and the devices.
 //!
-//! Sending: microphone → [`gate`] → [`codec::Encoder`] → `Peer::write_audio`.
+//! Sending: microphone → [`echo`] → [`gate`] → [`codec::Encoder`] → `Peer::write_audio`.
 //! Receiving: `PeerEvent::Audio` → one [`jitter::JitterBuffer`] per speaker
 //! → [`mixer`] → loudspeaker.
 //!
@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 pub mod codec;
+pub mod echo;
 pub mod gate;
 pub mod jitter;
 pub mod mixer;

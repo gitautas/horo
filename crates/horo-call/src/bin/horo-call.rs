@@ -9,8 +9,11 @@
 //! horo-call logout
 //! ```
 //!
-//! `join` and `livekit` take `--plain` (cpal devices, no echo cancellation:
-//! use headphones), `--gate <dB>`, `--muted` and `--seconds <n>`. While in
+//! `join` and `livekit` take `--echo software|apple|off` (default
+//! software: horo's own canceller, any devices; apple: VoiceProcessingIO,
+//! default devices; off: use headphones), `--input <id>` and `--output <id>`
+//! (ids from `horo-call devices`), `--gate <dB>`, `--muted` and
+//! `--seconds <n>`. While in
 //! a call, type `m` and Enter to toggle mute, `q` and Enter (or Ctrl-C) to
 //! leave.
 //!
@@ -32,7 +35,7 @@ use std::{
 
 use horo_call::{
     Call, CallEvent, CallOptions, Joined,
-    devices::{self, AudioDevices},
+    devices::{self, AudioDevices, EchoCancellation},
 };
 use horo_core::{AppState, Event, EventSink, MatrixCore, matrix::auth};
 use matrix_sdk::ruma::{OwnedRoomAliasId, OwnedRoomId, RoomOrAliasId};
@@ -57,8 +60,10 @@ fn usage() -> ! {
     eprintln!(
         "usage:
   horo-call login <homeserver> <username>
-  horo-call join <#alias:server | !room:server> [--plain] [--gate dB] [--muted] [--seconds n]
-  horo-call livekit <url> <token> [--plain] [--gate dB] [--muted] [--seconds n]
+  horo-call join <#alias:server | !room:server> [options]
+  horo-call livekit <url> <token> [options]
+    options: --echo software|apple|off  --input <id>  --output <id>
+             --gate <dB>  --muted  --seconds <n>
   horo-call devices
   horo-call logout"
     );
@@ -81,11 +86,21 @@ struct CallFlags {
 }
 
 fn call_flags(args: &[String]) -> CallFlags {
-    let mut flags = CallFlags { devices: AudioDevices::Voice, gate: horo_media::audio::gate::GATE_OFF_DB, muted: false, seconds: None };
+    let mut flags = CallFlags { devices: AudioDevices::default(), gate: horo_media::audio::gate::GATE_OFF_DB, muted: false, seconds: None };
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--plain" => flags.devices = AudioDevices::Plain { input: None, output: None },
+            "--echo" => {
+                flags.devices.echo = match args.next().map(String::as_str) {
+                    Some("software") => EchoCancellation::Software,
+                    #[cfg(any(target_os = "macos", target_os = "ios"))]
+                    Some("apple") => EchoCancellation::Apple,
+                    Some("off") => EchoCancellation::Off,
+                    _ => usage(),
+                }
+            }
+            "--input" => flags.devices.input = Some(args.next().cloned().unwrap_or_else(|| usage())),
+            "--output" => flags.devices.output = Some(args.next().cloned().unwrap_or_else(|| usage())),
             "--muted" => flags.muted = true,
             "--gate" => flags.gate = args.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| usage()),
             "--seconds" => flags.seconds = Some(args.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| usage())),
@@ -275,7 +290,12 @@ async fn talk(url: &str, token: &str, flags: CallFlags) -> Fallible {
             },
             _ = meter.tick() => {
                 if std::env::var_os("HORO_CALL_METER").is_some() {
-                    eprintln!("mic {loudest:>6.1} dBFS{}", if call.is_muted() { " (muted)" } else { "" });
+                    let echo = audio.echo_stats().map(|s| format!(
+                        ", echo removed {}, delay {}",
+                        s.erle_db.map_or("-".into(), |e| format!("{e:.1} dB")),
+                        s.delay.map_or("-".into(), |d| format!("{d:?}")),
+                    ));
+                    eprintln!("mic {loudest:>6.1} dBFS{}{}", if call.is_muted() { " (muted)" } else { "" }, echo.unwrap_or_default());
                 }
                 loudest = horo_media::audio::gate::FLOOR_DB;
             }

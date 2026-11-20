@@ -26,6 +26,10 @@ webpki-roots = "1"
 
 # Speech codec: libopus, bundled and built with cmake.
 opus = "0.4"
+# Echo cancellation, noise suppression and gain control: WebRTC's audio
+# processing (AEC3) ported to Rust, so every platform gets the same one
+# without building libwebrtc.
+sonora = "0.3"
 
 [dev-dependencies]
 horo-livekit.workspace = true
