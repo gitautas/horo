@@ -354,3 +354,57 @@ async fn a_session_beyond_resuming_rejoins() {
     alice.call.leave().await;
     bob.call.leave().await;
 }
+
+/// Both ends behind a bad network: everything they receive loses `loss` and
+/// waits 20 ms plus up to `jitter` (so packets reorder), each with its own
+/// random sequence.
+fn impaired(loss: f64, jitter: Duration, seed: u64) -> CallOptions {
+    use horo_media::Impairment;
+    let network: Network = Arc::new(move |name, _| {
+        // Each peer connection its own sequence, stable across runs.
+        let salt = name.bytes().fold(seed, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
+        PeerConfig {
+            host_addresses: vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            ice_tcp: false,
+            impairment: Some(Impairment { loss, delay: Duration::from_millis(20), jitter, seed: salt }),
+            ..PeerConfig::default_for(name)
+        }
+    });
+    CallOptions { network, ..Default::default() }
+}
+
+/// The plan's Phase 2 exit bar: 5% loss and 80 ms jitter both ways. 30 s by
+/// default; `HORO_SOAK_SECONDS=1800` for the half-hour soak.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lossy_jittery_network_keeps_the_voice() {
+    let Some(url) = server() else { return };
+    let seconds: f64 = std::env::var("HORO_SOAK_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(30.0);
+    let room = format!("impaired-{:x}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos());
+    let jitter = Duration::from_millis(80);
+    let mut bob = Call::connect(&url, &token("bob", &room), impaired(0.05, jitter, 1)).await.expect("bob joins");
+    let mut alice = Call::connect(&url, &token("alice", &room), impaired(0.05, jitter, 2)).await.expect("alice joins");
+
+    let started = Instant::now();
+    let (levels, alice_events, bob_events) = run_call(&mut alice, &mut bob, seconds, f64::MAX, |_, _| {}).await;
+    let stats = bob.speaker.stats();
+    let reconnects: Vec<_> = alice_events.iter().chain(&bob_events).filter(|(_, e)| matches!(e, CallEvent::Reconnecting { .. })).collect();
+    // From 3 s on: past joining and the jitter buffer settling.
+    let settled = &levels[30.min(levels.len())..];
+    let heard = settled.iter().filter(|&&l| l > 0.12).count() as f64 / settled.len().max(1) as f64;
+    let timeline: String = levels.iter().take(300).map(|&l| if l > 0.12 { '█' } else if l > 0.01 { '▄' } else { '·' }).collect();
+    eprintln!("5% loss, 20–100 ms delay, {:.0} s: bob heard {timeline}", started.elapsed().as_secs_f64());
+    eprintln!("  tone at level {:.1}% of the time after 3 s; reconnects {reconnects:?}", heard * 100.0);
+    for (target, s) in &stats {
+        eprintln!(
+            "  bob's buffer: target {} ms, received {} decoded {} fec {} plc {} stretched {} late {} dropped {} rebuffers {}",
+            target.as_millis(), s.received, s.decoded, s.recovered, s.concealed, s.stretched, s.late, s.dropped, s.rebuffers
+        );
+    }
+    assert!(reconnects.is_empty(), "a bad network isn't a lost one: {reconnects:?}");
+    assert!(heard > 0.95, "the tone was there only {:.1}% of the time", heard * 100.0);
+    assert_eq!(stats.len(), 1, "one remote track");
+    let s = stats[0].1;
+    assert!(s.recovered > 0, "FEC rebuilt nothing at 5% loss: {s:?}");
+    alice.call.leave().await;
+    bob.call.leave().await;
+}

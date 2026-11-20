@@ -381,6 +381,17 @@ mod tests {
         assert!(o.max_delay <= Duration::from_millis(300), "{:?}", o.max_delay);
     }
 
+    /// The Phase 2 exit bar, as the call test applies it: 20 ms plus up to
+    /// 80 ms (packets reorder) and 5% loss, for half a minute.
+    #[test]
+    fn five_percent_loss_with_80_ms_of_jitter() {
+        let o = simulate(30, 20.0, 80.0, 0.05, 4);
+        eprintln!("5% + 80 ms: {:?}, purity {:.0}, max delay {:?}, stalls {}", o.stats, o.purity, o.max_delay, o.buffering_after_start);
+        assert_eq!(o.buffering_after_start, 0, "it never stalls: {:?}", o.stats);
+        assert!(o.stats.dropped < 15 && o.stats.stretched < 15, "it thrashes: {:?}", o.stats);
+        assert!(o.purity > 30.0, "purity {:.0}", o.purity);
+    }
+
     #[test]
     fn loss_is_rebuilt_or_concealed_and_the_tone_survives() {
         let o = simulate(10, 30.0, 10.0, 0.05, 3);

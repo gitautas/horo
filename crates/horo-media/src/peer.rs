@@ -101,6 +101,47 @@ pub struct PeerConfig {
     /// Where to connect for a TURN host, instead of resolving it. For tests,
     /// where the certificate's name doesn't resolve.
     pub turn_address_override: Option<IpAddr>,
+    /// A bad network, simulated on everything this peer receives. For tests.
+    pub impairment: Option<Impairment>,
+}
+
+/// A simulated bad network: like Linux's `netem`, but in-process and the
+/// same on every OS. Applied to what a peer receives.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Impairment {
+    /// The share of packets lost, 0 to 1.
+    pub loss: f64,
+    /// Added to every packet.
+    pub delay: Duration,
+    /// Up to this much more, uniformly at random, so packets reorder.
+    pub jitter: Duration,
+    /// For the random numbers: the same seed, the same network.
+    pub seed: u64,
+}
+
+/// A packet held back by an [`Impairment`] until `at`.
+struct Delayed {
+    at: Instant,
+    seq: u64,
+    inbound: Inbound,
+}
+
+impl PartialEq for Delayed {
+    fn eq(&self, other: &Self) -> bool {
+        (self.at, self.seq) == (other.at, other.seq)
+    }
+}
+impl Eq for Delayed {}
+impl PartialOrd for Delayed {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Delayed {
+    /// Reversed: the heap's top is the earliest.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (other.at, other.seq).cmp(&(self.at, self.seq))
+    }
 }
 
 impl PeerConfig {
@@ -114,6 +155,7 @@ impl PeerConfig {
             turn_servers: Vec::new(),
             tls_roots: None,
             turn_address_override: None,
+            impairment: None,
         }
     }
 }
@@ -168,7 +210,11 @@ impl Peer {
     /// connection's loop.
     pub async fn start(config: PeerConfig) -> Result<(Peer, mpsc::UnboundedReceiver<PeerEvent>)> {
         let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
-        let mut rtc = Rtc::new(Instant::now());
+        // No reordering in str0m: by default it holds audio back for up to
+        // 15 packets (or a second) waiting for a lost one, then releases a
+        // burst, which the jitter buffer can only take for a stall followed
+        // by too much delay. The jitter buffer orders by RTP time itself.
+        let mut rtc = Rtc::builder().set_reordering_size_audio(0).build(Instant::now());
         let (transports, candidates) = gather(&config, &inbound_tx, 0).await?;
         for candidate in &candidates {
             rtc.add_local_candidate(candidate.clone());
@@ -188,6 +234,10 @@ impl Peer {
             timeout: Instant::now(),
             last_received: None,
             path_alive: true,
+            impairment: config.impairment,
+            rng: config.impairment.map_or(1, |i| i.seed.max(1)),
+            delayed: std::collections::BinaryHeap::new(),
+            delayed_seq: 0,
         };
         // Rule 1: drain after the first mutations too.
         driver.drain()?;
@@ -560,6 +610,10 @@ struct Driver {
     /// When anything last came in, once something has.
     last_received: Option<Instant>,
     path_alive: bool,
+    impairment: Option<Impairment>,
+    rng: u64,
+    delayed: std::collections::BinaryHeap<Delayed>,
+    delayed_seq: u64,
 }
 
 impl Driver {
@@ -575,7 +629,7 @@ impl Driver {
                     }
                     Some(command) => self.command(command).map(|_| true),
                 },
-                Some(inbound) = inbound.recv() => self.receive(inbound).map(|_| true),
+                Some(inbound) = inbound.recv() => self.arrive(inbound).map(|_| true),
                 _ = tokio::time::sleep_until(wake.into()) => self.tick(),
             };
             match step {
@@ -598,7 +652,8 @@ impl Driver {
             _ => None,
         });
         // At least once a second, for the path check in `tick`.
-        relays.fold(self.timeout, Instant::min).min(Instant::now() + Duration::from_secs(1))
+        let wake = relays.fold(self.timeout, Instant::min).min(Instant::now() + Duration::from_secs(1));
+        self.delayed.peek().map_or(wake, |d| wake.min(d.at))
     }
 
     /// Rule 1: poll until str0m has nothing left but a timeout.
@@ -702,6 +757,24 @@ impl Driver {
         Ok(())
     }
 
+    /// A packet in: through the impairment, if there is one.
+    fn arrive(&mut self, inbound: Inbound) -> Result<()> {
+        let Some(impairment) = self.impairment else { return self.receive(inbound) };
+        let mut uniform = || {
+            self.rng ^= self.rng << 13;
+            self.rng ^= self.rng >> 7;
+            self.rng ^= self.rng << 17;
+            (self.rng >> 11) as f64 / (1u64 << 53) as f64
+        };
+        if uniform() < impairment.loss {
+            return Ok(());
+        }
+        let at = Instant::now() + impairment.delay + impairment.jitter.mul_f64(uniform());
+        self.delayed_seq += 1;
+        self.delayed.push(Delayed { at, seq: self.delayed_seq, inbound });
+        Ok(())
+    }
+
     fn receive(&mut self, inbound: Inbound) -> Result<()> {
         let now = Instant::now();
         let Some(Some(transport)) = self.transports.get_mut(inbound.transport) else {
@@ -737,6 +810,10 @@ impl Driver {
     /// `false` once str0m says the connection is over.
     fn tick(&mut self) -> Result<bool> {
         let now = Instant::now();
+        while self.delayed.peek().is_some_and(|d| d.at <= now) {
+            let delayed = self.delayed.pop().expect("peeked");
+            self.receive(delayed.inbound)?;
+        }
         for transport in self.transports.iter_mut().flatten() {
             if let Transport::Relay(relay) = transport
                 && let Err(e) = relay.turn.poll(now).map(|out| relay.turn.outgoing.extend(out))

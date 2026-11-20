@@ -9,5 +9,5 @@ pub mod audio;
 pub mod peer;
 pub mod turn;
 
-pub use peer::{IceConnectionState, Peer, PeerConfig, PeerError, PeerEvent, TurnServer};
+pub use peer::{IceConnectionState, Impairment, Peer, PeerConfig, PeerError, PeerEvent, TurnServer};
 pub use str0m::media::{MediaKind, Mid};
