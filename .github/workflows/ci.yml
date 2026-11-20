@@ -32,6 +32,36 @@ jobs:
 
       - run: npm test
 
+  # The voice engine on the other two desktops: it has to build and pass its
+  # unit tests there (cpal on WASAPI and CoreAudio, libopus and aws-lc built
+  # with each platform's toolchain, sonora, str0m). The tests that need a
+  # LiveKit server run in the Linux job; these runners have no Docker.
+  voice:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> src-tauri/target'
+          key: ci-voice-${{ matrix.os }}
+
+      - run: cargo clippy -p horo-livekit -p horo-media -p horo-devices -p horo-call --all-targets
+
+      - run: cargo test -p horo-livekit -p horo-media -p horo-devices -p horo-call --lib
+
+      # The CLI as a user would build it.
+      - run: cargo build -p horo-call --bin horo-call
+
   # The Linux WebView needs code no other platform compiles (see
   # `src-tauri/src/webrtc.rs`), and until this job existed the only thing that
   # ever built it was a release tag — the worst place to find a typo. Clippy
