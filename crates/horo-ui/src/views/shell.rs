@@ -1,7 +1,7 @@
 //! The signed-in window: the spaces rail, the room list, and the room.
 
 use gpui::{
-    Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
@@ -10,21 +10,47 @@ use gpui_component::{
 };
 use horo_core::dto::{RoomSummary, SyncState};
 
+use matrix_sdk::ruma::OwnedRoomId;
+
 use crate::{
     rooms::{self, View},
     store::{Phase, Store},
     theme::Palette,
-    views::avatar::monogram,
+    views::{avatar::monogram, timeline::Timeline},
 };
 
 pub struct Shell {
     store: Entity<Store>,
+    /// The open room's timeline, and which room it is.
+    timeline: Option<(String, Entity<Timeline>)>,
 }
 
 impl Shell {
     pub fn new(store: Entity<Store>, cx: &mut Context<Self>) -> Shell {
-        cx.observe(&store, |_, _, cx| cx.notify()).detach();
-        Shell { store }
+        cx.observe(&store, |this, _, cx| {
+            this.follow_room(cx);
+            cx.notify()
+        })
+        .detach();
+        let mut shell = Shell { store, timeline: None };
+        shell.follow_room(cx);
+        shell
+    }
+
+    /// Open the selected room's timeline, closing the last one.
+    fn follow_room(&mut self, cx: &mut Context<Self>) {
+        let selected = self.store.read(cx).room.clone();
+        if self.timeline.as_ref().map(|(id, _)| id) == selected.as_ref() {
+            return;
+        }
+        if let Some((_, old)) = self.timeline.take() {
+            old.read(cx).close(cx);
+        }
+        let Some(id) = selected else { return };
+        let Ok(room_id) = OwnedRoomId::try_from(id.as_str()) else { return };
+        let store = self.store.clone();
+        let view = cx.new(|cx| Timeline::new(room_id, &store, cx));
+        self.timeline = Some((id, view));
     }
 
     fn rail(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
@@ -236,9 +262,9 @@ impl Shell {
     fn room_pane(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
         let room = store.room.as_ref().and_then(|id| store.rooms.iter().find(|r| r.id == *id)).cloned();
-        let body = match &room {
-            None => div().m_auto().text_color(palette.text_tertiary).child("pick a room"),
-            Some(_) => div().m_auto().text_color(palette.text_tertiary).child("the timeline comes next"),
+        let body = match (&room, &self.timeline) {
+            (Some(_), Some((_, timeline))) => div().flex_1().min_h_0().child(timeline.clone()),
+            _ => div().m_auto().text_color(palette.text_tertiary).child("pick a room"),
         };
         v_flex()
             .flex_1()

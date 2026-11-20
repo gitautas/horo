@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 horo-core.workspace = true
+matrix-sdk.workspace = true
 # gpui-component 0.10 is built on `gpui-pre`, a republished Zed snapshot
 # (docs/spikes/gpui-desktop.md on the spike branch); both pinned together.
 gpui = { package = "gpui-pre", version = "=0.3.12" }
@@ -16,3 +17,5 @@ gpui-component = "0.10"
 tokio.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
+# Message times in the local timezone.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

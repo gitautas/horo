@@ -7,7 +7,7 @@
 
 use std::time::{Duration, Instant};
 
-use gpui::{Context, SharedString};
+use gpui::{Context, EventEmitter, SharedString};
 use horo_core::{
     Event,
     dto::{Diff, RoomSummary, SessionInfo, SpaceSummary, SyncState},
@@ -44,6 +44,8 @@ pub struct Store {
     pub space: Option<String>,
     pub room: Option<String>,
 }
+
+impl EventEmitter<horo_core::dto::TimelineUpdate> for Store {}
 
 /// Spaces are recomputed from the room list, at most this often.
 const SPACES_EVERY: Duration = Duration::from_secs(2);
@@ -95,6 +97,11 @@ impl Store {
                 self.refresh_spaces(cx);
             }
             Event::SyncStatus(status) => self.sync = Some(status.state),
+            // For whichever timeline view has that room open.
+            Event::Timeline(update) => {
+                cx.emit(update);
+                return;
+            }
             _ => return,
         }
         cx.notify();
@@ -265,34 +272,73 @@ impl Store {
 /// `eyeball_im`'s diffs, applied to a plain list.
 pub fn apply_diffs<T: Clone>(list: &mut Vec<T>, diffs: Vec<Diff<T>>) {
     for diff in diffs {
-        match diff {
-            Diff::Append { values } => list.extend(values),
-            Diff::Clear => list.clear(),
-            Diff::PushFront { value } => list.insert(0, value),
-            Diff::PushBack { value } => list.push(value),
-            Diff::PopFront => {
-                if !list.is_empty() {
-                    list.remove(0);
-                }
-            }
-            Diff::PopBack => {
-                list.pop();
-            }
-            Diff::Insert { index, value } => list.insert(index.min(list.len()), value),
-            Diff::Set { index, value } => {
-                if let Some(slot) = list.get_mut(index) {
-                    *slot = value;
-                }
-            }
-            Diff::Remove { index } => {
-                if index < list.len() {
-                    list.remove(index);
-                }
-            }
-            Diff::Truncate { length } => list.truncate(length),
-            Diff::Reset { values } => *list = values,
-        }
+        apply_diff(list, diff);
     }
+}
+
+/// One diff, applied; returns what changed as a splice (the old range
+/// replaced, and how many items took its place), for a list view to follow.
+/// `None` when the diff fell outside the list and changed nothing.
+pub fn apply_diff<T: Clone>(list: &mut Vec<T>, diff: Diff<T>) -> Option<(std::ops::Range<usize>, usize)> {
+    let len = list.len();
+    Some(match diff {
+        Diff::Append { values } => {
+            let n = values.len();
+            list.extend(values);
+            (len..len, n)
+        }
+        Diff::Clear => {
+            list.clear();
+            (0..len, 0)
+        }
+        Diff::PushFront { value } => {
+            list.insert(0, value);
+            (0..0, 1)
+        }
+        Diff::PushBack { value } => {
+            list.push(value);
+            (len..len, 1)
+        }
+        Diff::PopFront => {
+            if len == 0 {
+                return None;
+            }
+            list.remove(0);
+            (0..1, 0)
+        }
+        Diff::PopBack => {
+            list.pop()?;
+            (len - 1..len, 0)
+        }
+        Diff::Insert { index, value } => {
+            let index = index.min(len);
+            list.insert(index, value);
+            (index..index, 1)
+        }
+        Diff::Set { index, value } => {
+            *list.get_mut(index)? = value;
+            (index..index + 1, 1)
+        }
+        Diff::Remove { index } => {
+            if index >= len {
+                return None;
+            }
+            list.remove(index);
+            (index..index + 1, 0)
+        }
+        Diff::Truncate { length } => {
+            if length >= len {
+                return None;
+            }
+            list.truncate(length);
+            (length..len, 0)
+        }
+        Diff::Reset { values } => {
+            let n = values.len();
+            *list = values;
+            (0..len, n)
+        }
+    })
 }
 
 #[cfg(test)]
