@@ -5,10 +5,13 @@
 
 use gpui::{App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 
+pub mod alerts;
 pub mod backend;
 pub mod media;
+pub mod prefs;
 pub mod rich;
 pub mod rooms;
+pub mod sounds;
 pub mod store;
 pub mod theme;
 pub mod verify;
@@ -20,6 +23,7 @@ pub use backend::Backend;
 pub fn init(backend: Backend, cx: &mut App) {
     gpui_component::init(cx);
     theme::install(cx);
+    alerts::init();
     cx.set_global(backend);
 }
 

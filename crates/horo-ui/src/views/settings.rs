@@ -2,8 +2,8 @@
 //! sections down the left, one at a time on the right, Escape to leave.
 //!
 //! Account (who you are, your profile, signing out), security (devices and
-//! key backup) and about. Voice, notifications, emotes and appearance join
-//! as the app gains the things they set.
+//! key backup), notifications (banners, sounds, volume) and about. Voice,
+//! emotes and appearance join as the app gains the things they set.
 
 use gpui::{
     AnyElement, AppContext, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
@@ -14,6 +14,8 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
+    slider::{Slider, SliderEvent, SliderState},
+    switch::Switch,
     v_flex,
 };
 use horo_core::{
@@ -24,6 +26,8 @@ use horo_core::{
 use crate::{
     backend::Backend,
     media::Media,
+    prefs::Prefs,
+    sounds::{self, CALL_SOUNDS, Kind, MESSAGE_SOUNDS, NONE},
     store::{Phase, SettingsSection, Store},
     theme::Palette,
     views::{avatar::avatar, security::Security},
@@ -44,6 +48,7 @@ pub struct Settings {
     error: Option<SharedString>,
     /// "sign out and erase keys" has been pressed once.
     confirm_wipe: bool,
+    volume: Entity<SliderState>,
 }
 
 impl Settings {
@@ -60,6 +65,19 @@ impl Settings {
         cx.subscribe(&bio, |this, _, _: &InputEvent, cx| this.edited(cx)).detach();
         cx.observe(&store, |_, _, cx| cx.notify()).detach();
 
+        let start = store.read(cx).prefs.notification_volume;
+        let volume = cx.new(|_| SliderState::new().min(0.0).max(1.0).step(0.05).default_value(start));
+        // Saved, and played so you hear it, when the slider is let go.
+        cx.subscribe(&volume, |this, _, event: &SliderEvent, cx| {
+            if let SliderEvent::Release(value) = event {
+                let level = value.start();
+                this.store.update(cx, |s, cx| s.update_prefs(|p| p.notification_volume = level, cx));
+                let id = this.store.read(cx).prefs.message_sound.clone();
+                sounds::play(Kind::Message, &id, level);
+            }
+        })
+        .detach();
+
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         let mut settings = Settings {
@@ -74,6 +92,7 @@ impl Settings {
             saved: false,
             error: None,
             confirm_wipe: false,
+            volume,
         };
         settings.load_profile(window, cx);
         settings
@@ -322,6 +341,90 @@ impl Settings {
             .into_any_element()
     }
 
+    fn notifications(&mut self, prefs: &Prefs, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let toggle = |id: &'static str, title: &'static str, detail: &'static str, on: bool, set: fn(&mut Prefs, bool), cx: &mut Context<Self>| {
+            h_flex()
+                .gap_3()
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .child(div().text_sm().child(title))
+                        .child(div().text_xs().text_color(palette.text_tertiary).child(detail)),
+                )
+                .child(Switch::new(id).checked(on).on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                    let checked = *checked;
+                    this.store.update(cx, |s, cx| s.update_prefs(|p| set(p, checked), cx));
+                })))
+        };
+        let banners = card(palette)
+            .child(toggle("notify-messages", "messages", "uses your account's push rules, so muted rooms stay quiet", prefs.notify_messages, |p, on| p.notify_messages = on, cx))
+            .child(toggle("notify-calls", "calls", "when a call starts in one of your rooms", prefs.notify_calls, |p, on| p.notify_calls = on, cx))
+            .child(toggle(
+                "notify-focused",
+                "notify while i'm here",
+                "off: no banner for the room you're already reading",
+                prefs.notify_when_focused,
+                |p, on| p.notify_when_focused = on,
+                cx,
+            ));
+
+        let picker = |kind: Kind, current: &str, cx: &mut Context<Self>| {
+            let list = match kind {
+                Kind::Message => MESSAGE_SOUNDS,
+                Kind::Call => CALL_SOUNDS,
+            };
+            let ids = list.iter().map(|s| s.id).chain([NONE]);
+            h_flex().flex_wrap().gap_2().children(ids.map(|id| {
+                let selected = id == current;
+                div()
+                    .id(SharedString::from(format!("sound-{kind:?}-{id}")))
+                    .px_3()
+                    .py_1()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(if selected { palette.accent } else { palette.border })
+                    .bg(if selected { Hsla { a: 0.15, ..palette.accent } } else { palette.raised })
+                    .text_sm()
+                    .cursor_pointer()
+                    .child(id)
+                    // Choosing one plays it, so you know what you picked.
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.store.update(cx, |s, cx| {
+                            s.update_prefs(
+                                |p| match kind {
+                                    Kind::Message => p.message_sound = id.to_owned(),
+                                    Kind::Call => p.call_sound = id.to_owned(),
+                                },
+                                cx,
+                            )
+                        });
+                        let volume = this.store.read(cx).prefs.notification_volume;
+                        sounds::play(kind, id, volume);
+                    }))
+            }))
+        };
+        let sounds = card(palette)
+            .child(field(palette, "message sound", Some("played when a message arrives you'd be pinged for.")))
+            .child(picker(Kind::Message, &prefs.message_sound, cx))
+            .child(field(palette, "call sound", Some("played when someone starts a call.")))
+            .child(picker(Kind::Call, &prefs.call_sound, cx))
+            .child(field(palette, "volume", None))
+            .child(
+                h_flex()
+                    .gap_3()
+                    .child(div().flex_1().child(Slider::new(&self.volume)))
+                    .child(div().w(px(40.)).text_sm().text_color(palette.text_secondary).child(format!("{:.0}%", prefs.notification_volume * 100.0))),
+            );
+
+        v_flex()
+            .gap_4()
+            .child(heading(palette, "notifications"))
+            .child(banners)
+            .child(heading(palette, "sounds"))
+            .child(sounds)
+            .into_any_element()
+    }
+
     fn about(&self, palette: &Palette) -> AnyElement {
         v_flex()
             .gap_4()
@@ -392,6 +495,10 @@ impl Render for Settings {
         let body: AnyElement = match (section, &session) {
             (SettingsSection::Account, Some(session)) => self.account(session, &palette, cx),
             (SettingsSection::Security, _) => self.security.clone().map(|s| s.into_any_element()).unwrap_or_else(|| div().into_any_element()),
+            (SettingsSection::Notifications, _) => {
+                let prefs = self.store.read(cx).prefs.clone();
+                self.notifications(&prefs, &palette, cx)
+            }
             (SettingsSection::About, _) => self.about(&palette),
             _ => div().into_any_element(),
         };

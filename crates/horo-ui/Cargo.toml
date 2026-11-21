@@ -19,3 +19,10 @@ tracing.workspace = true
 anyhow.workspace = true
 # Message times in the local timezone.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+serde.workspace = true
+serde_json.workspace = true
+# The speaker the notification sounds play through (and, later, calls).
+horo-rtc = { workspace = true, features = ["media"] }
+# Native banners: Notification Center, the Windows toast, the freedesktop
+# notification service. The same version the Tauri shell's plugin uses.
+notify-rust = "4.18"

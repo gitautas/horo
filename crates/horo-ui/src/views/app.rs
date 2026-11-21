@@ -18,6 +18,13 @@ impl AppView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> AppView {
         let store = cx.new(Store::new);
         cx.observe_in(&store, window, |this, _, window, cx| this.sync_views(window, cx)).detach();
+        // "Don't notify for the room I'm reading" needs to know whether
+        // anyone is reading.
+        cx.observe_window_activation(window, |this, window, cx| {
+            let active = window.is_window_active();
+            this.store.update(cx, |s, _| s.set_window_active(active));
+        })
+        .detach();
         AppView { store, login: None, shell: None }
     }
 

@@ -4333,7 +4333,11 @@ dependencies = [
  "gpui-component",
  "gpui-pre",
  "horo-core",
+ "horo-rtc",
  "matrix-sdk",
+ "notify-rust",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]

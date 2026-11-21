@@ -16,7 +16,10 @@ use horo_core::{
 };
 
 use crate::{
+    alerts::{self, Looking, Watch},
     backend::Backend,
+    prefs::Prefs,
+    sounds::{self, Kind},
     verify::{self, Flow},
 };
 
@@ -58,7 +61,19 @@ pub struct Store {
     pub settings: Option<SettingsSection>,
     /// The picture open full-size over everything.
     pub lightbox: Option<Lightbox>,
+    /// The app's own settings, saved in the data directory.
+    pub prefs: Prefs,
+    /// What the room list looked like, to tell what's new.
+    watch: Watch,
+    /// The window has focus.
+    window_active: bool,
+    /// When each kind of sound last played: a burst of messages is one
+    /// chirp, not ten.
+    sounded: [Option<Instant>; 2],
 }
+
+/// The least time between two sounds of a kind.
+const SOUND_GAP: Duration = Duration::from_millis(800);
 
 /// A picture to show full-size.
 #[derive(Debug, Clone)]
@@ -77,16 +92,18 @@ pub struct Lightbox {
 pub enum SettingsSection {
     Account,
     Security,
+    Notifications,
     About,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 3] = [SettingsSection::Account, SettingsSection::Security, SettingsSection::About];
+    pub const ALL: [SettingsSection; 4] = [SettingsSection::Account, SettingsSection::Security, SettingsSection::Notifications, SettingsSection::About];
 
     pub fn label(self) -> &'static str {
         match self {
             SettingsSection::Account => "account",
             SettingsSection::Security => "security",
+            SettingsSection::Notifications => "notifications",
             SettingsSection::About => "about",
         }
     }
@@ -127,6 +144,10 @@ impl Store {
             verification_error: None,
             settings: None,
             lightbox: None,
+            prefs: Prefs::load(&Backend::global(cx).data_dir),
+            watch: Watch::default(),
+            window_active: true,
+            sounded: [None, None],
         };
         store.pump_events(cx);
         store.restore(cx);
@@ -155,6 +176,7 @@ impl Store {
                     Some(_) => {
                         self.rooms_seq = Some(update.seq);
                         apply_diffs(&mut self.rooms, update.diffs);
+                        self.alert();
                     }
                 }
                 self.refresh_spaces(cx);
@@ -233,6 +255,7 @@ impl Store {
         self.verification_error = None;
         self.settings = None;
         self.lightbox = None;
+        self.watch.reset();
         self.set_phase(Phase::SignedOut, cx);
         cx.spawn(async move |this, cx| {
             if let Ok(Err(e)) = task.await {
@@ -281,6 +304,8 @@ impl Store {
                             apply_diffs(&mut store.rooms, update.diffs);
                         }
                     }
+                    store.watch.reset();
+                    store.alert();
                     store.spaces_fetched = None;
                     store.refresh_spaces(cx);
                     cx.notify();
@@ -338,6 +363,37 @@ impl Store {
 
     pub fn open_room(&mut self, room: String, cx: &mut Context<Self>) {
         self.room = Some(room);
+        cx.notify();
+    }
+
+    /// Banners and a sound for what's new in the room list.
+    fn alert(&mut self) {
+        let looking = Looking { room: self.room.as_deref(), window_active: self.window_active };
+        let outcome = self.watch.inspect(&self.rooms, &self.prefs, looking);
+        for alert in outcome.alerts {
+            alerts::show(alert);
+        }
+        if let Some(kind) = outcome.sound {
+            let slot = &mut self.sounded[kind as usize];
+            if slot.is_none_or(|at| at.elapsed() >= SOUND_GAP) {
+                *slot = Some(Instant::now());
+                let id = match kind {
+                    Kind::Message => &self.prefs.message_sound,
+                    Kind::Call => &self.prefs.call_sound,
+                };
+                sounds::play(kind, id, self.prefs.notification_volume);
+            }
+        }
+    }
+
+    pub fn set_window_active(&mut self, active: bool) {
+        self.window_active = active;
+    }
+
+    /// Change the app's settings and save them.
+    pub fn update_prefs(&mut self, change: impl FnOnce(&mut Prefs), cx: &mut Context<Self>) {
+        change(&mut self.prefs);
+        self.prefs.save(&Backend::global(cx).data_dir);
         cx.notify();
     }
 
