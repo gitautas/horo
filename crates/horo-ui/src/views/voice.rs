@@ -7,9 +7,11 @@
 //! - [`strip`]: everyone in the call, above the room's timeline while it's
 //!   the call's room, with a ring on whoever is speaking.
 //! - [`ringing`]: someone calling you, with answer and decline.
+//!
+//! The room header's call button lives with the header, in `shell`.
 
 use gpui::{
-    AnyElement, App, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, StatefulInteractiveElement, Styled, div,
+    AnyElement, App, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled, div,
     prelude::FluentBuilder, px,
 };
 use gpui_component::{
@@ -256,29 +258,4 @@ pub fn ringing(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option
             )
             .into_any_element(),
     )
-}
-
-/// The room header's call button: join, or leave the call you're in here.
-pub fn header_button(room: &RoomSummary, store: &Entity<Store>, cx: &App) -> AnyElement {
-    let in_this = store.read(cx).call.as_ref().is_some_and(|c| c.room_id == room.id && c.is_live());
-    let others = room.call_participants.len();
-    let (store, room_id) = (store.clone(), room.id.clone());
-    if in_this {
-        return Button::new("header-leave")
-            .danger()
-            .icon(icon("icons/phone-off.svg"))
-            .label("leave call")
-            .on_click(move |_, _, cx| store.update(cx, |s, cx| s.leave_call(cx)))
-            .into_any_element();
-    }
-    let label: SharedString = if room.has_active_call && others > 0 { format!("join call · {others}").into() } else { "call".into() };
-    Button::new("header-call")
-        .ghost()
-        .icon(icon("icons/phone.svg"))
-        .label(label)
-        .on_click(move |_, _, cx| {
-            let room_id = room_id.clone();
-            store.update(cx, |s, cx| s.join_call(room_id, cx))
-        })
-        .into_any_element()
 }

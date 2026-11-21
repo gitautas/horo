@@ -23,12 +23,11 @@ use matrix_sdk::ruma::OwnedRoomId;
 use crate::{
     backend::Backend,
     media::Media,
-    presence,
     rich::{self, Block},
     store::{Store, apply_diff},
-    theme::Palette,
+    theme::{Palette, corner, space, text},
     views::{
-        avatar::{avatar, with_presence},
+        avatar::{accent_for, avatar},
         content::{self, Open},
     },
 };
@@ -502,7 +501,7 @@ fn day_label(ms: u64) -> String {
     match (today - when.date_naive()).num_days() {
         0 => "today".into(),
         1 => "yesterday".into(),
-        _ => when.format("%A, %-d %B %Y").to_string().to_lowercase(),
+        _ => when.format("%A, %-d %B").to_string().to_lowercase(),
     }
 }
 
@@ -510,13 +509,15 @@ fn time_label(ms: u64) -> String {
     local(ms).map(|t| t.format("%H:%M").to_string()).unwrap_or_default()
 }
 
-fn divider(label: String, text: gpui::Hsla, line: gpui::Hsla) -> AnyElement {
+/// A day between messages, as TimelineView.tsx: a line, the day, a line.
+fn divider(label: String, colour: gpui::Hsla, line: gpui::Hsla) -> AnyElement {
     h_flex()
-        .px_4()
-        .py_2()
-        .gap_3()
+        .px(space(22.))
+        .mt(px(18.))
+        .mb(px(10.))
+        .gap(space(12.))
         .child(div().flex_1().h(px(1.)).bg(line))
-        .child(div().text_xs().text_color(text).child(label))
+        .child(div().text_size(text(11.)).font_weight(FontWeight::SEMIBOLD).text_color(colour).child(label))
         .child(div().flex_1().h(px(1.)).bg(line))
         .into_any_element()
 }
@@ -595,40 +596,56 @@ impl Timeline {
         }
     }
 
+    /// One message, as MessageRow.tsx lays it out: a 40px column with the
+    /// face (or, continuing a group, the time on hover), then the sender in
+    /// their accent, the time and any device warning, the reply, the body,
+    /// reactions and the thread.
     fn message(&mut self, event: &EventItemDto, continues: bool, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        let name = event.sender_name.clone().unwrap_or_else(|| event.sender.clone());
+        let name = event.sender_name.clone().unwrap_or_else(|| event.sender.trim_start_matches('@').split(':').next().unwrap_or_default().to_owned());
 
         if is_system(&event.content) {
-            let (text, _) = body_text(&event.content);
+            let (line, _) = body_text(&event.content);
             return h_flex()
                 .w_full()
-                .px_4()
-                .py(px(3.))
-                .gap_2()
-                .text_xs()
-                .text_color(palette.text_tertiary)
-                .child(div().w(px(36.)).flex_none())
-                .child(div().flex_1().min_w_0().child(text))
-                .child(div().flex_none().child(time_label(event.timestamp)))
+                .px(space(22.))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .gap(space(10.))
+                        .py(space(6.))
+                        .pl(px(40.) + space(12.) + space(8.))
+                        .text_size(text(12.))
+                        .text_color(palette.text_tertiary)
+                        .child(div().flex_1().min_w_0().child(line))
+                        .child(div().flex_none().font_family(palette.mono_font.clone()).text_size(text(10.5)).child(time_label(event.timestamp))),
+                )
                 .into_any_element();
         }
 
         let body = v_flex()
             .w_full()
+            .max_w(px(640.))
+            .text_size(px(14.5))
+            .line_height(gpui::relative(1.55))
             .child(self.body(event, palette, cx))
-            .when(event.is_edited, |d| d.child(div().text_xs().text_color(palette.text_tertiary).child("(edited)")));
+            .when(event.is_edited, |d| d.child(div().text_size(text(10.)).text_color(palette.text_tertiary).child("(edited)")));
 
         let reply = event.reply.as_ref().map(|reply| {
             let who = reply.sender_name.clone().or_else(|| reply.sender.clone()).unwrap_or_default();
             h_flex()
-                .gap_1()
-                .pl_2()
+                .mb(px(5.))
+                .gap(space(8.))
+                .px(space(11.))
+                .py(space(5.))
+                .max_w(px(520.))
+                .rounded(corner(12.))
+                .bg(gpui::Hsla { a: 0.04, ..gpui::white() })
                 .border_l_2()
-                .border_color(palette.border_strong)
-                .text_xs()
-                .text_color(palette.text_tertiary)
-                .child(div().font_weight(FontWeight::SEMIBOLD).child(who))
-                .child(div().truncate().child(reply.body.clone().unwrap_or_else(|| "…".into()).replace('\n', " ")))
+                .border_color(palette.accent_tertiary)
+                .text_size(text(12.))
+                .text_color(palette.text_secondary)
+                .child(div().flex_none().font_weight(FontWeight::BOLD).text_color(accent_for(reply.sender.as_deref().unwrap_or_default())).child(who))
+                .child(div().min_w_0().truncate().child(reply.body.clone().unwrap_or_else(|| "…".into()).replace('\n', " ")))
         });
 
         let reactions = (!event.reactions.is_empty()).then(|| {
@@ -651,62 +668,101 @@ impl Timeline {
                     }
                 })
                 .collect();
-            h_flex().flex_wrap().gap_1().pt_1().children(chips)
+            h_flex().flex_wrap().gap(space(6.)).mt(px(7.)).children(chips)
         });
 
         let thread = event.thread_summary.as_ref().map(|t| {
-            div()
-                .pt_1()
-                .text_xs()
-                .text_color(palette.accent)
+            h_flex()
+                .mt(px(8.))
+                .gap(space(8.))
+                .pl(space(8.))
+                .pr(space(12.))
+                .py(space(6.))
+                .rounded_full()
+                .bg(palette.card)
+                .border_1()
+                .border_color(palette.border_subtle)
+                .font_weight(FontWeight::BOLD)
+                .text_size(text(12.5))
+                .text_color(palette.accent_quaternary)
                 .child(format!("{} {} in thread", t.num_replies, if t.num_replies == 1 { "reply" } else { "replies" }))
         });
 
-        let sending = event.send_state.as_ref().is_some_and(|s| !matches!(s, horo_core::dto::SendStateDto::Sent { .. }));
+        let pending = event.send_state.as_ref().is_some_and(|s| matches!(s, horo_core::dto::SendStateDto::NotSentYet { .. }));
+        let failed = event.send_state.as_ref().is_some_and(|s| matches!(s, horo_core::dto::SendStateDto::Failed { .. }));
+
+        let shield = event.shield.as_ref().map(|shield| {
+            let message = shield.message.clone();
+            div()
+                .id(SharedString::from(format!("shield/{}", event_key(event))))
+                .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(message.clone()).build(window, cx))
+                .child(
+                    gpui_component::Icon::new(gpui_component::IconName::TriangleAlert)
+                        .size(px(12.))
+                        .text_color(if shield.colour == horo_core::dto::ShieldColour::Red { palette.danger } else { palette.text_tertiary }),
+                )
+        });
+
+        let header = (!continues).then(|| {
+            let (sender, hint) = (event.sender.clone(), event.sender_avatar.clone());
+            h_flex()
+                .mb(px(3.))
+                .gap(space(8.))
+                .flex_wrap()
+                .child(
+                    div()
+                        .id(SharedString::from(format!("name/{}", event_key(event))))
+                        .font_weight(FontWeight::EXTRA_BOLD)
+                        .text_size(text(14.5))
+                        .text_color(accent_for(&event.sender))
+                        .cursor_pointer()
+                        .hover(|d| d.underline())
+                        .child(name.clone())
+                        .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| this.open_profile(sender.clone(), click.position(), hint.clone(), cx))),
+                )
+                .child(div().font_family(palette.mono_font.clone()).text_size(text(10.5)).text_color(palette.text_tertiary).child(time_label(event.timestamp)))
+                .children(shield)
+        });
 
         let content = v_flex()
             .flex_1()
             .min_w_0()
-            .gap(px(2.))
-            .when(!continues, |c| {
-                c.child(
-                    h_flex()
-                        .gap_2()
-                        .child({
-                            let (sender, hint) = (event.sender.clone(), event.sender_avatar.clone());
-                            div()
-                                .id(SharedString::from(format!("name/{}", event_key(event))))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(palette.text)
-                                .cursor_pointer()
-                                .hover(|d| d.underline())
-                                .child(name.clone())
-                                .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| this.open_profile(sender.clone(), click.position(), hint.clone(), cx)))
-                        })
-                        .child(div().text_xs().text_color(palette.text_tertiary).child(time_label(event.timestamp))),
-                )
-            })
+            .children(header)
             .children(reply)
             .child(body)
             .children(reactions)
             .children(thread)
-            .when(sending, |c| c.opacity(0.6));
+            .when(failed, |c| {
+                c.child(div().mt(px(6.)).text_size(text(11.5)).text_color(palette.danger).child("couldn't send — it'll retry when you're back online"))
+            });
 
-        let face = if continues {
-            div().w(px(36.)).flex_none().into_any_element()
+        let column = if continues {
+            // The time, quietly, when the pointer is on the row.
+            div()
+                .w(px(40.))
+                .flex_none()
+                .flex()
+                .justify_center()
+                .pt(space(4.))
+                .font_family(palette.mono_font.clone())
+                .text_size(text(9.5))
+                .text_color(palette.text_tertiary)
+                .invisible()
+                .group_hover("message", |s| s.visible())
+                .child(time_label(event.timestamp))
+                .into_any_element()
         } else {
-            let shown = {
-                let store = self.store.read(cx);
-                presence::shown(store.presence.get(&event.sender), store.presence_supported)
-            };
-            let picture = avatar(&event.sender, &name, event.sender_avatar.as_deref(), px(36.), cx);
-            let face = with_presence(picture, shown, palette.app, palette);
+            let picture = avatar(&event.sender, &name, event.sender_avatar.as_deref(), px(38.), cx);
             let (sender, hint) = (event.sender.clone(), event.sender_avatar.clone());
             div()
                 .id(SharedString::from(format!("face/{}", event_key(event))))
+                .w(px(40.))
                 .flex_none()
+                .flex()
+                .justify_center()
+                .pt(space(2.))
                 .cursor_pointer()
-                .child(face)
+                .child(picture)
                 .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| this.open_profile(sender.clone(), click.position(), hint.clone(), cx)))
                 .into_any_element()
         };
@@ -714,18 +770,26 @@ impl Timeline {
         let actions = self.actions(event, &name, palette, cx);
 
         h_flex()
-            .group("message")
-            .relative()
             .w_full()
-            .items_start()
-            .px_4()
-            .pt(if continues { px(2.) } else { px(10.) })
-            .gap_3()
-            .hover(|row| row.bg(gpui::Hsla { a: 0.03, ..palette.text }))
-            .when(event.is_highlighted, |row| row.bg(gpui::Hsla { a: 0.08, ..palette.accent }))
-            .children(actions)
-            .child(face)
-            .child(content)
+            .px(space(22.))
+            .pt(space(3.))
+            .child(
+                h_flex()
+                    .group("message")
+                    .relative()
+                    .w_full()
+                    .items_start()
+                    .gap(space(12.))
+                    .px(space(8.))
+                    .py(space(5.))
+                    .rounded(corner(16.))
+                    .when(!event.is_highlighted, |row| row.hover(|row| row.bg(gpui::Hsla { a: 0.035, ..gpui::white() })))
+                    .when(event.is_highlighted, |row| row.bg(gpui::Hsla { a: 0.08, ..palette.accent_secondary }))
+                    .when(pending, |row| row.opacity(0.72))
+                    .children(actions)
+                    .child(column)
+                    .child(content),
+            )
             .into_any_element()
     }
 }
@@ -738,18 +802,25 @@ fn reaction(r: &ReactionDto, palette: &Palette, cx: &mut App) -> AnyElement {
             None => div().size(px(16.)).into_any_element(),
         }
     } else {
-        div().child(r.key.clone()).into_any_element()
+        div().text_size(px(13.)).child(r.key.clone()).into_any_element()
     };
     h_flex()
-        .gap_1()
-        .px(px(6.))
-        .py(px(1.))
+        .gap(space(6.))
+        .px(space(10.))
+        .py(space(3.))
         .rounded_full()
         .border_1()
-        .border_color(if r.mine { palette.accent } else { palette.border })
-        .bg(if r.mine { gpui::Hsla { a: 0.15, ..palette.accent } } else { palette.raised })
-        .text_xs()
+        .font_family(palette.mono_font.clone())
+        .text_size(text(11.5))
+        .when(r.pending, |d| d.opacity(0.55))
+        .map(|d| {
+            if r.mine {
+                d.bg(gpui::Hsla { a: 0.16, ..palette.accent }).border_color(palette.accent).text_color(palette.accent)
+            } else {
+                d.bg(palette.raised).border_color(palette.border_subtle).text_color(palette.text_secondary)
+            }
+        })
         .child(key)
-        .child(div().text_color(palette.text_secondary).child(r.count.to_string()))
+        .child(div().font_weight(FontWeight::BOLD).child(r.count.to_string()))
         .into_any_element()
 }

@@ -1,7 +1,7 @@
 //! The signed-in window: the spaces rail, the room list, and the room.
 
 use gpui::{
-    Hsla, img, StyledImage, FocusHandle, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    AnyElement, Hsla, img, StyledImage, FocusHandle, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
@@ -68,7 +68,11 @@ impl Shell {
         if self.timeline.as_ref().map(|(id, ..)| id) == selected.as_ref() {
             return;
         }
-        let name = selected.as_ref().and_then(|id| store.rooms.iter().find(|r| r.id == *id)).map(|r| r.name.clone()).unwrap_or_default();
+        let (name, encrypted) = selected
+            .as_ref()
+            .and_then(|id| store.rooms.iter().find(|r| r.id == *id))
+            .map(|r| (r.name.clone(), r.is_encrypted))
+            .unwrap_or_default();
         if let Some((_, old, _)) = self.timeline.take() {
             old.read(cx).close(cx);
         }
@@ -77,7 +81,7 @@ impl Shell {
         let store = self.store.clone();
         let timeline = cx.new(|cx| Timeline::new(room_id.clone(), &store, cx));
         let weak = timeline.downgrade();
-        let composer = cx.new(|cx| Composer::new(room_id, &name, weak, window, cx));
+        let composer = cx.new(|cx| Composer::new(room_id, &name, encrypted, weak, window, cx));
         // Reply and edit buttons on a message go to the composer under it.
         cx.subscribe_in(&timeline, window, |this, _, action: &TimelineAction, window, cx| {
             if let Some((_, _, composer)) = &this.timeline {
@@ -222,7 +226,7 @@ impl Shell {
             .relative()
             .flex_none()
             .child(picture)
-            .when(!room.is_direct && !room.is_space, |d| d.child(channel_badge(room.is_video_room, palette)))
+            .when(!room.is_direct && !room.is_space, |d| d.child(channel_badge(room.is_video_room, 16., palette.card, palette)))
             .children(shown.map(|s| presence_dot(s, px(12.), palette.app, palette)))
             .when(room.has_active_call, |d| {
                 d.child(
@@ -483,11 +487,124 @@ impl Shell {
             .children(voice::panel(&self.store, palette, cx))
     }
 
+    /// The top of a room, as ChatPane.tsx: its face, name and lock, the
+    /// person's presence (a DM) or the topic and alias, then the member
+    /// count and the call button.
+    fn room_header(&self, room: &RoomSummary, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let shown = room.dm_user_id.as_ref().and_then(|user| {
+            let store = self.store.read(cx);
+            presence::shown(store.presence.get(user), store.presence_supported).zip(store.presence.get(user).cloned())
+        });
+        let picture = avatar(&room.id, &room.name, room.avatar_url.as_deref(), px(42.), cx);
+        let face = div()
+            .relative()
+            .flex_none()
+            .child(picture)
+            .when(!room.is_direct, |d| d.child(channel_badge(room.is_video_room, 18., palette.app, palette)))
+            .children(shown.as_ref().map(|(s, _)| presence_dot(*s, px(13.), palette.app, palette)));
+
+        let subtitle: Option<AnyElement> = if room.dm_user_id.is_some() {
+            shown.map(|(state, dto)| {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or_default();
+                h_flex()
+                    .mt(px(3.))
+                    .gap(space(6.))
+                    .font_family(palette.mono_font.clone())
+                    .text_size(text(11.5))
+                    .text_color(palette.text_tertiary)
+                    .child(div().size(px(7.)).rounded_full().flex_none().bg(match state {
+                        presence::Shown::Online => palette.online,
+                        presence::Shown::Away => palette.idle,
+                        presence::Shown::Offline => palette.offline,
+                    }))
+                    .child(presence::line(&dto, state, now))
+                    .into_any_element()
+            })
+        } else {
+            (room.topic.is_some() || room.canonical_alias.is_some()).then(|| {
+                h_flex()
+                    .gap(space(6.))
+                    .max_w(px(520.))
+                    .min_w_0()
+                    .children(room.topic.clone().map(|t| div().truncate().text_size(text(12.5)).text_color(palette.text_secondary).child(t.replace('\n', " "))))
+                    .children(room.canonical_alias.clone().map(|a| {
+                        div().flex_none().font_family(palette.mono_font.clone()).text_size(text(11.5)).text_color(palette.text_tertiary).child(a)
+                    }))
+                    .into_any_element()
+            })
+        };
+
+        let in_this_call = self.store.read(cx).call.as_ref().is_some_and(|c| c.room_id == room.id && c.is_live());
+        let highlight = in_this_call || room.has_active_call;
+        let (store, room_id) = (self.store.clone(), room.id.clone());
+        let call_button = div()
+            .id("header-call")
+            .p(space(9.))
+            .rounded(corner(12.))
+            .cursor_pointer()
+            .bg(if in_this_call { palette.danger } else { palette.raised })
+            .tooltip(move |window, cx| {
+                gpui_component::tooltip::Tooltip::new(if in_this_call { "leave the call" } else { "start a voice call" }).build(window, cx)
+            })
+            .child(voice::icon(if in_this_call { "icons/phone-off.svg" } else { "icons/phone-call.svg" }).size(px(17.)).text_color(
+                if in_this_call {
+                    palette.app
+                } else if highlight {
+                    palette.accent
+                } else {
+                    palette.text_secondary
+                },
+            ))
+            .on_click(move |_, _, cx| {
+                let room_id = room_id.clone();
+                store.update(cx, |s, cx| if in_this_call { s.leave_call(cx) } else { s.join_call(room_id, cx) })
+            });
+
+        h_flex()
+            .relative()
+            .flex_none()
+            .gap(space(14.))
+            .px(space(22.))
+            .py(space(14.))
+            .border_b_1()
+            .border_color(palette.border_subtle)
+            .bg(Hsla { a: 0.6, ..palette.card })
+            .child(drag_strip(px(12.)))
+            .child(face)
+            .child(
+                v_flex()
+                    .min_w_0()
+                    .child(
+                        h_flex()
+                            .gap(space(8.))
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .font_family(palette.heading_font.clone())
+                                    .font_weight(FontWeight::EXTRA_BOLD)
+                                    .text_size(heading(19.))
+                                    .child(room.name.clone()),
+                            )
+                            .when(room.is_encrypted, |d| d.child(voice::icon("icons/lock.svg").size(px(14.)).text_color(palette.accent).flex_none())),
+                    )
+                    .children(subtitle),
+            )
+            .child(
+                h_flex()
+                    .ml_auto()
+                    .gap(space(8.))
+                    .child(div().mr(px(4.)).font_family(palette.mono_font.clone()).text_size(text(11.)).text_color(palette.text_tertiary).child(room.member_count.to_string()))
+                    .child(call_button),
+            )
+            .into_any_element()
+    }
+
     fn room_pane(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
         let room = store.room.as_ref().and_then(|id| store.rooms.iter().find(|r| r.id == *id)).cloned();
         let strip = room.as_ref().and_then(|r| voice::strip(&r.id, &self.store, palette, cx));
-        let call_button = room.as_ref().map(|r| voice::header_button(r, &self.store, cx));
+        let header = room.as_ref().map(|r| self.room_header(r, palette, cx));
         let body = match (&room, &self.timeline) {
             (Some(_), Some((_, timeline, composer))) => v_flex()
                 .flex_1()
@@ -501,19 +618,7 @@ impl Shell {
             .flex_1()
             .h_full()
             .bg(palette.app)
-            .children(room.map(|room| {
-                h_flex()
-                    .gap_3()
-                    .px_4()
-                    .h(px(52.))
-                    .flex_none()
-                    .border_b_1()
-                    .border_color(palette.border_subtle)
-                    .child(div().text_color(palette.text).font_weight(FontWeight::SEMIBOLD).child(room.name.clone()))
-                    .children(room.topic.map(|t| div().flex_1().min_w_0().truncate().text_sm().text_color(palette.text_tertiary).child(t)))
-                    .child(div().flex_1())
-                    .children(call_button)
-            }))
+            .children(header)
             .children(verification::banner(&self.store, palette, cx))
             .child(body)
     }
@@ -650,8 +755,7 @@ fn space_tile(
 
 /// What kind of room this is, in the avatar's corner: `#` for text, a
 /// camera for a video (voice) room. DMs get none.
-fn channel_badge(video: bool, palette: &Palette) -> impl IntoElement {
-    let size = 16.;
+fn channel_badge(video: bool, size: f32, ring: Hsla, palette: &Palette) -> impl IntoElement {
     div()
         .absolute()
         .left(px(-4.))
@@ -660,7 +764,7 @@ fn channel_badge(video: bool, palette: &Palette) -> impl IntoElement {
         .rounded_full()
         .bg(if video { palette.accent_tertiary } else { palette.inset })
         .border_2()
-        .border_color(palette.card)
+        .border_color(ring)
         .flex()
         .items_center()
         .justify_center()

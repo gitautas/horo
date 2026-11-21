@@ -10,7 +10,7 @@
 
 use gpui::{
     AppContext, Context, Entity, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    WeakEntity, Window, div, px,
+    WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     h_flex,
@@ -21,8 +21,11 @@ use matrix_sdk::ruma::OwnedRoomId;
 
 use crate::{
     backend::Backend,
-    theme::Palette,
-    views::timeline::{Timeline, TimelineAction},
+    theme::{Palette, corner, space, text},
+    views::{
+        timeline::{Timeline, TimelineAction},
+        voice::icon,
+    },
 };
 
 /// What Enter will do with the text.
@@ -39,11 +42,13 @@ pub struct Composer {
     input: Entity<TextareaState>,
     mode: Mode,
     error: Option<SharedString>,
+    /// Said under the box when it isn't: the one case worth a line.
+    encrypted: bool,
 }
 
 impl Composer {
-    pub fn new(room_id: OwnedRoomId, room_name: &str, timeline: WeakEntity<Timeline>, window: &mut Window, cx: &mut Context<Self>) -> Composer {
-        let placeholder = format!("message {room_name}");
+    pub fn new(room_id: OwnedRoomId, room_name: &str, encrypted: bool, timeline: WeakEntity<Timeline>, window: &mut Window, cx: &mut Context<Self>) -> Composer {
+        let placeholder = format!("say something cute in {room_name}~");
         let input = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx);
             state.set_auto_grow(1, 10, cx);
@@ -58,7 +63,8 @@ impl Composer {
         })
         .detach();
         input.update(cx, |state, cx| state.focus(window, cx));
-        Composer { room_id, timeline, input, mode: Mode::Write, error: None }
+        cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify()).detach();
+        Composer { room_id, timeline, input, mode: Mode::Write, error: None, encrypted }
     }
 
     /// Reply to, or edit, what the timeline says.
@@ -123,6 +129,34 @@ impl Composer {
         }
     }
 
+    /// Pick files and send each as an attachment.
+    fn attach(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(gpui::PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("attach".into()) });
+        let room_id = self.room_id.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else { return };
+            for path in paths {
+                let Ok(task) = this.update(cx, |_, cx| {
+                    let backend = Backend::global(cx);
+                    let (state, room_id, path) = (backend.state.clone(), room_id.clone(), path.to_string_lossy().into_owned());
+                    backend.run(async move { timeline::send_attachment(&*state.core().await?, &room_id, None, &path, None).await })
+                }) else {
+                    return;
+                };
+                let error = match task.await {
+                    Ok(Ok(())) => continue,
+                    Ok(Err(e)) => e.to_string(),
+                    Err(e) => e.to_string(),
+                };
+                let _ = this.update(cx, |composer, cx| {
+                    composer.error = Some(format!("couldn't send {}: {error}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).into());
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let body = self.input.read(cx).value().trim().to_owned();
         if body.is_empty() {
@@ -179,24 +213,29 @@ impl Render for Composer {
         let palette = cx.global::<Palette>().clone();
         let bar = match &self.mode {
             Mode::Write => None,
-            Mode::Reply { who, preview, .. } => Some((palette.accent_secondary, format!("replying to {who}"), preview.clone())),
+            Mode::Reply { who, preview, .. } => Some((palette.accent_tertiary, format!("replying to {who}"), preview.clone())),
             Mode::Edit { .. } => Some((palette.accent, "editing your message".to_owned(), "escape to cancel".to_owned())),
         };
+        let can_send = !self.input.read(cx).value().trim().is_empty();
         div()
             .flex_none()
-            .px_4()
-            .pb_4()
-            .pt_1()
-            .children(self.error.clone().map(|e| div().pb_1().text_xs().text_color(palette.danger).child(e)))
+            .px(space(22.))
+            .pt(space(12.))
+            .pb(space(18.))
+            .children(self.error.clone().map(|e| div().pb_1().text_size(text(12.)).text_color(palette.danger).child(e)))
             .children(bar.map(|(colour, title, detail)| {
                 h_flex()
-                    .mb_1()
-                    .px_3()
-                    .py_1()
-                    .gap_2()
+                    .mb(px(8.))
+                    .gap(space(10.))
+                    .px(space(14.))
+                    .py(space(7.))
+                    .rounded(corner(14.))
+                    .bg(palette.card)
+                    .border_1()
+                    .border_color(palette.border_subtle)
                     .border_l_2()
                     .border_color(colour)
-                    .text_xs()
+                    .text_size(text(12.5))
                     .child(div().flex_none().text_color(colour).child(title))
                     .child(div().flex_1().min_w_0().truncate().text_color(palette.text_tertiary).child(detail))
                     .child(
@@ -205,7 +244,7 @@ impl Render for Composer {
                             .flex_none()
                             .px_1()
                             .cursor_pointer()
-                            .text_color(palette.text_secondary)
+                            .text_color(palette.text_tertiary)
                             .hover(|d| d.text_color(palette.text))
                             .child("✕")
                             .on_click(cx.listener(|this, _, window, cx| this.cancel(window, cx))),
@@ -213,19 +252,65 @@ impl Render for Composer {
             }))
             .child(
                 h_flex()
-                    .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| this.on_key(event, window, cx)))
-                    .capture_action(cx.listener(|this, _: &MoveUp, window, cx| this.recall(true, window, cx)))
-                    .capture_action(cx.listener(|this, _: &MoveDown, window, cx| this.recall(false, window, cx)))
-                    .rounded(palette.radius_lg)
+                    .items_end()
+                    .gap(space(10.))
+                    .px(space(12.))
+                    .py(space(9.))
+                    .rounded(corner(24.))
                     .bg(palette.raised)
                     .border_1()
                     .border_color(match self.mode {
                         Mode::Edit { .. } => palette.accent,
-                        _ => palette.border_subtle,
+                        _ => palette.border,
                     })
-                    .px_2()
-                    .py(px(2.))
-                    .child(Textarea::new(&self.input).appearance(false).flex_1()),
+                    .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| this.on_key(event, window, cx)))
+                    .capture_action(cx.listener(|this, _: &MoveUp, window, cx| this.recall(true, window, cx)))
+                    .capture_action(cx.listener(|this, _: &MoveDown, window, cx| this.recall(false, window, cx)))
+                    .child(
+                        div()
+                            .id("composer-attach")
+                            .size(px(38.))
+                            .flex_none()
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("attach a file").build(window, cx))
+                            .child(icon("icons/circle-plus.svg").size(px(22.)).text_color(palette.text_tertiary))
+                            .on_click(cx.listener(|this, _, window, cx| this.attach(window, cx))),
+                    )
+                    .child(div().flex_1().min_w_0().py(space(4.)).text_size(px(14.5)).child(Textarea::new(&self.input).appearance(false)))
+                    .child(
+                        div()
+                            .id("composer-send")
+                            .size(px(38.))
+                            .flex_none()
+                            .rounded_full()
+                            .bg(palette.accent)
+                            .border_2()
+                            .border_color(palette.app)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(!can_send, |d| d.opacity(0.45))
+                            .when(can_send, |d| d.cursor_pointer())
+                            .child(icon("icons/send.svg").size(px(17.)).text_color(palette.text_on_accent))
+                            .on_click(cx.listener(|this, _, window, cx| this.send(window, cx))),
+                    ),
             )
+            .when(!self.encrypted, |d| {
+                d.child(
+                    h_flex()
+                        .mt(px(8.))
+                        .px(space(6.))
+                        .gap(space(8.))
+                        .font_family(palette.mono_font.clone())
+                        .text_size(text(10.5))
+                        .text_color(palette.text_tertiary)
+                        .child(icon("icons/lock.svg").size(px(11.)).text_color(palette.idle))
+                        .child("not encrypted · your homeserver can read this"),
+                )
+            })
     }
 }
