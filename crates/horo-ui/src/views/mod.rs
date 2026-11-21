@@ -6,6 +6,7 @@ pub mod composer;
 pub mod content;
 pub mod lightbox;
 pub mod login;
+pub mod profile;
 pub mod shell;
 pub mod security;
 pub mod settings;

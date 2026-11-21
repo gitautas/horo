@@ -15,10 +15,12 @@ use matrix_sdk::ruma::OwnedRoomId;
 
 use crate::{
     OpenSettings,
+    presence,
     rooms::{self, View},
     store::{Phase, SettingsSection, Store},
     theme::Palette,
-    views::{avatar::avatar, composer::Composer, settings::Settings, timeline::{Timeline, TimelineAction}, verification, lightbox},
+    views::{avatar::{avatar, with_presence}, composer::Composer, profile::{ProfileCard, same_target},
+        settings::Settings, timeline::{Timeline, TimelineAction}, verification, lightbox},
 };
 
 pub struct Shell {
@@ -27,6 +29,8 @@ pub struct Shell {
     timeline: Option<(String, Entity<Timeline>, Entity<Composer>)>,
     /// Settings, while they're open.
     settings: Option<Entity<Settings>>,
+    /// The profile card, while one is open.
+    profile: Option<Entity<ProfileCard>>,
     /// Holds the window's focus when nothing inside does, so ⌘, still
     /// reaches the shell.
     focus: FocusHandle,
@@ -37,12 +41,13 @@ impl Shell {
         cx.observe_in(&store, window, |this, _, window, cx| {
             this.follow_room(window, cx);
             this.follow_settings(window, cx);
+            this.follow_profile(window, cx);
             cx.notify()
         })
         .detach();
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        let mut shell = Shell { store, timeline: None, settings: None, focus };
+        let mut shell = Shell { store, timeline: None, settings: None, profile: None, focus };
         shell.follow_room(window, cx);
         shell.follow_settings(window, cx);
         shell
@@ -73,6 +78,19 @@ impl Shell {
         })
         .detach();
         self.timeline = Some((id, timeline, composer));
+    }
+
+    /// Build the profile card for whoever the store says, or drop it.
+    fn follow_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.store.read(cx).profile_card.clone() {
+            Some(target) => {
+                if !self.profile.as_ref().is_some_and(|card| same_target(card, &target, cx)) {
+                    let store = self.store.clone();
+                    self.profile = Some(cx.new(|cx| ProfileCard::new(store, target, window, cx)));
+                }
+            }
+            None => self.profile = None,
+        }
     }
 
     fn open_settings(&mut self, cx: &mut Context<Self>) {
@@ -170,7 +188,15 @@ impl Shell {
             .cursor_pointer()
             .when(selected, |row| row.bg(palette.raised))
             .hover(|row| row.bg(palette.raised))
-            .child(avatar(&room.id, &room.name, room.avatar_url.as_deref(), px(32.), !room.is_direct, palette.text_on_accent, cx))
+            .child({
+                // A DM is a person: their dot on the room's face.
+                let shown = room.dm_user_id.as_ref().and_then(|user| {
+                    let store = self.store.read(cx);
+                    presence::shown(store.presence.get(user), store.presence_supported)
+                });
+                let face = avatar(&room.id, &room.name, room.avatar_url.as_deref(), px(32.), !room.is_direct, palette.text_on_accent, cx);
+                with_presence(face, shown, if selected { palette.raised } else { palette.card }, palette)
+            })
             .child(
                 v_flex()
                     .flex_1()
@@ -355,6 +381,7 @@ impl Render for Shell {
             .relative()
             .children(self.settings.clone())
             .children(lightbox::lightbox(&self.store, &palette, cx))
+            .children(self.profile.clone())
             // Above everything, the security panel included: the other
             // device's timeout is running, and a dialog hidden behind
             // another one is a verification that fails.

@@ -9,6 +9,7 @@ pub mod alerts;
 pub mod backend;
 pub mod media;
 pub mod prefs;
+pub mod presence;
 pub mod rich;
 pub mod rooms;
 pub mod sounds;

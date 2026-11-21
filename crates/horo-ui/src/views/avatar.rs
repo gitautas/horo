@@ -4,7 +4,7 @@
 
 use gpui::{AnyElement, App, Div, Hsla, Pixels, div, img, prelude::*, rgb};
 
-use crate::media::Media;
+use crate::{media::Media, presence::Shown, theme::Palette};
 
 /// The four accents the horo theme recolours (gold, clay, heather, sage).
 const COLOURS: [u32; 4] = [0xF2BA25, 0xE2795B, 0xA98FC0, 0x7FBFA9];
@@ -48,6 +48,22 @@ pub fn avatar(id: &str, name: &str, mxc: Option<&str>, size: Pixels, square: boo
         }
         None => monogram(id, name, size, square, ink).into_any_element(),
     }
+}
+
+/// The status dot, cut into an avatar's bottom-right corner (out of `ring`,
+/// the colour behind the avatar). Goes in a `relative` parent.
+pub fn presence_dot(shown: Shown, size: Pixels, ring: Hsla, palette: &Palette) -> Div {
+    let colour = match shown {
+        Shown::Online => palette.online,
+        Shown::Away => palette.idle,
+        Shown::Offline => palette.offline,
+    };
+    div().absolute().right(gpui::px(-2.)).bottom(gpui::px(-2.)).size(size).rounded_full().bg(colour).border_2().border_color(ring)
+}
+
+/// An avatar with its presence dot, when there's one to show.
+pub fn with_presence(face: AnyElement, shown: Option<Shown>, ring: Hsla, palette: &Palette) -> AnyElement {
+    div().relative().flex_none().child(face).children(shown.map(|s| presence_dot(s, gpui::px(12.), ring, palette))).into_any_element()
 }
 
 #[cfg(test)]

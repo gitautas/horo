@@ -1,6 +1,6 @@
 //! The window's root: login or the shell, by where sign-in stands.
 
-use gpui::{AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div, px};
+use gpui::{AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px};
 
 use crate::{
     store::{Phase, Store},
@@ -51,7 +51,16 @@ impl AppView {
 impl Render for AppView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = cx.global::<Palette>().clone();
-        let root = div().size_full().bg(palette.app).text_color(palette.text).font_family(palette.body_font.clone());
+        // Any touch of the window counts as being here, for presence.
+        let root = div()
+            .size_full()
+            .bg(palette.app)
+            .text_color(palette.text)
+            .font_family(palette.body_font.clone())
+            .on_mouse_move(cx.listener(|this, _: &gpui::MouseMoveEvent, _, cx| this.store.update(cx, |s, cx| s.activity(cx))))
+            .capture_any_mouse_down(cx.listener(|this, _: &gpui::MouseDownEvent, _, cx| this.store.update(cx, |s, cx| s.activity(cx))))
+            .capture_key_down(cx.listener(|this, _: &gpui::KeyDownEvent, _, cx| this.store.update(cx, |s, cx| s.activity(cx))))
+            .on_scroll(cx.listener(|this, _: &gpui::ScrollEvent, _, cx| this.store.update(cx, |s, cx| s.activity(cx))));
         if let Some(shell) = &self.shell {
             root.child(shell.clone())
         } else if let Some(login) = &self.login {

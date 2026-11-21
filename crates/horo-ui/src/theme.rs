@@ -54,6 +54,8 @@ pub struct Palette {
     pub border_strong: Hsla,
     pub online: Hsla,
     pub idle: Hsla,
+    /// `--status-offline` (ink-500).
+    pub offline: Hsla,
     pub danger: Hsla,
     pub radius_sm: Pixels,
     pub radius_md: Pixels,
@@ -86,6 +88,7 @@ impl Palette {
             border_strong: mix(fog_100, 22.0),
             online: hex(0x8CC97A),
             idle: hex(0xE8954A),
+            offline: hex(0x6C7470),
             danger: hex(0xE46A5A),
             radius_sm: px(6.),
             radius_md: px(8.),

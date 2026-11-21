@@ -23,11 +23,12 @@ use matrix_sdk::ruma::OwnedRoomId;
 use crate::{
     backend::Backend,
     media::Media,
+    presence,
     rich::{self, Block},
     store::{Store, apply_diff},
     theme::Palette,
     views::{
-        avatar::avatar,
+        avatar::{avatar, with_presence},
         content::{self, Open},
     },
 };
@@ -76,6 +77,8 @@ impl Timeline {
                 let _ = this.update(cx, |timeline, cx| timeline.paginate(cx));
             }
         });
+        // Presence dots change with the store.
+        cx.observe(store, |_, _, cx| cx.notify()).detach();
         cx.subscribe(store, |this, _, update: &TimelineUpdate, cx| {
             if update.room_id == this.room_id.as_str() {
                 this.on_update(update.diffs.clone(), cx);
@@ -128,6 +131,7 @@ impl Timeline {
             self.paginate(cx);
         }
         self.mark_read(cx);
+        self.report_people(cx);
         cx.notify();
     }
 
@@ -178,6 +182,7 @@ impl Timeline {
             }
         }
         self.mark_read(cx);
+        self.report_people(cx);
         cx.notify();
     }
 
@@ -292,6 +297,17 @@ impl Timeline {
             }
         }
         Some(bar.into_any_element())
+    }
+
+    fn open_profile(&mut self, user_id: String, at: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        self.store.update(cx, |s, cx| s.open_profile(user_id, at, cx));
+    }
+
+    /// Tell the store who's in view, so their presence is polled. The
+    /// newest few hundred items' senders are plenty.
+    fn report_people(&self, cx: &mut Context<Self>) {
+        let people = self.items.iter().rev().take(300).filter_map(|i| i.event.as_ref().map(|e| e.sender.clone())).collect();
+        self.store.update(cx, |s, cx| s.set_people_on_screen(people, cx));
     }
 
     fn toggle_reaction(&mut self, event_id: String, key: String, cx: &mut Context<Self>) {
@@ -656,7 +672,17 @@ impl Timeline {
                 c.child(
                     h_flex()
                         .gap_2()
-                        .child(div().font_weight(FontWeight::SEMIBOLD).text_color(palette.text).child(name.clone()))
+                        .child({
+                            let sender = event.sender.clone();
+                            div()
+                                .id(SharedString::from(format!("name/{}", event_key(event))))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(palette.text)
+                                .cursor_pointer()
+                                .hover(|d| d.underline())
+                                .child(name.clone())
+                                .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| this.open_profile(sender.clone(), click.position(), cx)))
+                        })
                         .child(div().text_xs().text_color(palette.text_tertiary).child(time_label(event.timestamp))),
                 )
             })
@@ -669,7 +695,20 @@ impl Timeline {
         let face = if continues {
             div().w(px(36.)).flex_none().into_any_element()
         } else {
-            avatar(&event.sender, &name, event.sender_avatar.as_deref(), px(36.), false, palette.text_on_accent, cx)
+            let shown = {
+                let store = self.store.read(cx);
+                presence::shown(store.presence.get(&event.sender), store.presence_supported)
+            };
+            let picture = avatar(&event.sender, &name, event.sender_avatar.as_deref(), px(36.), false, palette.text_on_accent, cx);
+            let face = with_presence(picture, shown, palette.app, palette);
+            let sender = event.sender.clone();
+            div()
+                .id(SharedString::from(format!("face/{}", event_key(event))))
+                .flex_none()
+                .cursor_pointer()
+                .child(face)
+                .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| this.open_profile(sender.clone(), click.position(), cx)))
+                .into_any_element()
         };
 
         let actions = self.actions(event, &name, palette, cx);

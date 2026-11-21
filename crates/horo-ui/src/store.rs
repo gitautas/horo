@@ -5,13 +5,20 @@
 //! [`Backend`], and horo-core's [`Event`]s, which arrive on a channel and are
 //! folded in on gpui's executor.
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    time::{Duration, Instant},
+};
 
-use gpui::{Context, EventEmitter, SharedString};
+use gpui::{AppContext, Context, EventEmitter, Pixels, Point, SharedString};
 use horo_core::{
     Event,
     dto::{Diff, RoomSummary, SessionInfo, SpaceSummary, SyncState},
-    matrix::{auth, rooms},
+    matrix::{
+        auth,
+        presence::{self as core_presence, OwnPresence, PresenceDto},
+        rooms,
+    },
     verification,
 };
 
@@ -70,6 +77,27 @@ pub struct Store {
     /// When each kind of sound last played: a burst of messages is one
     /// chirp, not ten.
     sounded: [Option<Instant>; 2],
+    /// What the server says about the people we watch.
+    pub presence: HashMap<String, PresenceDto>,
+    /// The server answers presence at all.
+    pub presence_supported: bool,
+    /// Who the core is polling for us now.
+    presence_watched: HashSet<String>,
+    /// People on screen besides DM partners: the open timeline's senders.
+    presence_on_screen: HashSet<String>,
+    /// When the window was last touched, for going away when idle.
+    last_activity: Instant,
+    /// We've told the server we're away.
+    away: bool,
+    /// The profile card open, and where it points.
+    pub profile_card: Option<ProfileTarget>,
+}
+
+/// Someone's profile card, anchored where they were clicked.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileTarget {
+    pub user_id: String,
+    pub at: Point<Pixels>,
 }
 
 /// The least time between two sounds of a kind.
@@ -148,8 +176,16 @@ impl Store {
             watch: Watch::default(),
             window_active: true,
             sounded: [None, None],
+            presence: HashMap::new(),
+            presence_supported: false,
+            presence_watched: HashSet::new(),
+            presence_on_screen: HashSet::new(),
+            last_activity: Instant::now(),
+            away: false,
+            profile_card: None,
         };
         store.pump_events(cx);
+        store.watch_idle(cx);
         store.restore(cx);
         store
     }
@@ -179,9 +215,16 @@ impl Store {
                         self.alert();
                     }
                 }
+                self.watch_presence(cx);
                 self.refresh_spaces(cx);
             }
             Event::SyncStatus(status) => self.sync = Some(status.state),
+            Event::Presence(update) => {
+                self.presence_supported = update.supported;
+                for user in update.users {
+                    self.presence.insert(user.user_id.clone(), user);
+                }
+            }
             Event::VerificationState(state) => self.device_trust = Some(state),
             Event::VerificationRequest(request) => {
                 if !verify::is_live(&self.verification) {
@@ -256,6 +299,10 @@ impl Store {
         self.settings = None;
         self.lightbox = None;
         self.watch.reset();
+        self.presence.clear();
+        self.presence_watched.clear();
+        self.presence_on_screen.clear();
+        self.profile_card = None;
         self.set_phase(Phase::SignedOut, cx);
         cx.spawn(async move |this, cx| {
             if let Ok(Err(e)) = task.await {
@@ -306,6 +353,7 @@ impl Store {
                     }
                     store.watch.reset();
                     store.alert();
+                    store.watch_presence(cx);
                     store.spaces_fetched = None;
                     store.refresh_spaces(cx);
                     cx.notify();
@@ -383,6 +431,94 @@ impl Store {
                 };
                 sounds::play(kind, id, self.prefs.notification_volume);
             }
+        }
+    }
+
+    /// The open timeline's senders, to watch their presence too.
+    pub fn set_people_on_screen(&mut self, people: HashSet<String>, cx: &mut Context<Self>) {
+        if people != self.presence_on_screen {
+            self.presence_on_screen = people;
+            self.watch_presence(cx);
+        }
+    }
+
+    /// Tell the core whose presence to poll: DM partners, people on screen,
+    /// and whoever's card is open. Only when the set changes.
+    fn watch_presence(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.phase, Phase::SignedIn(_)) {
+            return;
+        }
+        let mut wanted: HashSet<String> = self.rooms.iter().filter_map(|r| r.dm_user_id.clone()).collect();
+        wanted.extend(self.presence_on_screen.iter().cloned());
+        wanted.extend(self.profile_card.as_ref().map(|c| c.user_id.clone()));
+        if wanted == self.presence_watched {
+            return;
+        }
+        self.presence_watched = wanted.clone();
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let state = backend.state.clone();
+            async move { core_presence::watch(&*state.core().await?, wanted.into_iter().collect()).await }
+        });
+        cx.background_spawn(async move {
+            if let Ok(Err(e)) = task.await {
+                tracing::debug!("couldn't watch presence: {e}");
+            }
+        })
+        .detach();
+    }
+
+    /// Someone touched the window: back to online if we'd gone away.
+    pub fn activity(&mut self, cx: &mut Context<Self>) {
+        self.last_activity = Instant::now();
+        if self.away {
+            self.away = false;
+            self.publish_own(OwnPresence::Online, cx);
+        }
+    }
+
+    /// Away once the window has sat untouched for a while; the core keeps
+    /// "online" alive itself, so only the changes go out.
+    fn watch_idle(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(30)).await;
+                let Ok(()) = this.update(cx, |store, cx| {
+                    if !store.away && matches!(store.phase, Phase::SignedIn(_)) && crate::presence::idle(store.last_activity) {
+                        store.away = true;
+                        store.publish_own(OwnPresence::Unavailable, cx);
+                    }
+                }) else {
+                    break;
+                };
+            }
+        })
+        .detach();
+    }
+
+    fn publish_own(&mut self, presence: OwnPresence, cx: &mut Context<Self>) {
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let state = backend.state.clone();
+            async move { core_presence::set_own(&*state.core().await?, presence).await }
+        });
+        cx.background_spawn(async move {
+            if let Ok(Err(e)) = task.await {
+                tracing::debug!("couldn't set presence: {e}");
+            }
+        })
+        .detach();
+    }
+
+    pub fn open_profile(&mut self, user_id: String, at: Point<Pixels>, cx: &mut Context<Self>) {
+        self.profile_card = Some(ProfileTarget { user_id, at });
+        self.watch_presence(cx);
+        cx.notify();
+    }
+
+    pub fn close_profile(&mut self, cx: &mut Context<Self>) {
+        if self.profile_card.take().is_some() {
+            cx.notify();
         }
     }
 
