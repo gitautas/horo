@@ -309,46 +309,51 @@ impl Render for Security {
         };
         let verification_error = self.store.read(cx).verification_error.clone();
 
+        let header = h_flex()
+            .px_6()
+            .pt_6()
+            .pb_2()
+            .child(
+                div().flex_1().font_family(palette.heading_font.clone()).text_size(px(28.)).font_weight(FontWeight::SEMIBOLD).child("security"),
+            )
+            .child(
+                Button::new("security-close")
+                    .ghost()
+                    .label("close")
+                    .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.set_security_open(false, cx)))),
+            );
+        // The header stays put while the rest scrolls: a long device list
+        // used to carry the close button away with it.
+        let body = v_flex()
+            .id("security-body")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px_6()
+            .pb_6()
+            .gap_4()
+            .child(heading("your devices"))
+            .child(div().text_sm().text_color(palette.text_secondary).child(
+                "verifying a device proves it's really yours and lets your encrypted history reach it.",
+            ))
+            .child(devices)
+            .children(verification_error.map(|e| div().text_sm().text_color(palette.danger).child(e)))
+            .child(heading("key backup"))
+            .child(backup)
+            .children(self.notice.clone().map(|n| div().text_sm().text_color(palette.online).child(n)))
+            .children(self.error.clone().map(|e| div().text_sm().text_color(palette.danger).child(e)));
+
         scrim(&palette).child(
             v_flex()
-                .id("security")
                 .w(px(560.))
                 .max_h(px(640.))
-                .overflow_y_scroll()
-                .p_6()
-                .gap_4()
                 .rounded(px(20.))
                 .bg(palette.card)
                 .border_1()
                 .border_color(palette.border_strong)
                 .shadow_lg()
-                .child(
-                    h_flex()
-                        .child(
-                            div()
-                                .flex_1()
-                                .font_family(palette.heading_font.clone())
-                                .text_size(px(28.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child("security"),
-                        )
-                        .child(
-                            Button::new("security-close")
-                                .ghost()
-                                .label("close")
-                                .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.set_security_open(false, cx)))),
-                        ),
-                )
-                .child(heading("your devices"))
-                .child(div().text_sm().text_color(palette.text_secondary).child(
-                    "verifying a device proves it's really yours and lets your encrypted history reach it.",
-                ))
-                .child(devices)
-                .children(verification_error.map(|e| div().text_sm().text_color(palette.danger).child(e)))
-                .child(heading("key backup"))
-                .child(backup)
-                .children(self.notice.clone().map(|n| div().text_sm().text_color(palette.online).child(n)))
-                .children(self.error.clone().map(|e| div().text_sm().text_color(palette.danger).child(e))),
+                .child(header)
+                .child(body),
         )
     }
 }
