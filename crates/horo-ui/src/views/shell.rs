@@ -16,7 +16,7 @@ use crate::{
     rooms::{self, View},
     store::{Phase, Store},
     theme::Palette,
-    views::{avatar::monogram, composer::Composer, security::Security, timeline::Timeline, verification},
+    views::{avatar::avatar, composer::Composer, security::Security, timeline::Timeline, verification, lightbox},
 };
 
 pub struct Shell {
@@ -75,6 +75,7 @@ impl Shell {
         let store = self.store.read(cx);
         let open = store.space.clone();
         let home_selected = open.is_none();
+        let spaces = store.spaces.clone();
         let item = |id: SharedString, selected: bool| {
             div()
                 .id(id)
@@ -112,12 +113,13 @@ impl Shell {
                     .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.open_space(None, cx)))),
             )
             .child(div().w(px(32.)).h(px(1.)).bg(palette.border))
-            .children(store.spaces.iter().map(|space| {
+            .children(spaces.into_iter().map(|space| {
                 let id = space.id.clone();
                 let unread = space.notification_count > 0 || space.highlight_count > 0;
+                let picture = avatar(&space.id, &space.name, space.avatar_url.as_deref(), px(42.), true, palette.text_on_accent, cx);
                 item(SharedString::from(format!("space-{}", space.id)), open.as_deref() == Some(&space.id))
                     .relative()
-                    .child(monogram(&space.id, &space.name, px(42.), true, palette.text_on_accent))
+                    .child(picture)
                     .children(unread.then(|| {
                         div().absolute().top(px(0.)).right(px(0.)).size(px(10.)).rounded_full().bg(palette.accent_secondary)
                     }))
@@ -149,7 +151,7 @@ impl Shell {
             .cursor_pointer()
             .when(selected, |row| row.bg(palette.raised))
             .hover(|row| row.bg(palette.raised))
-            .child(monogram(&room.id, &room.name, px(32.), !room.is_direct, palette.text_on_accent))
+            .child(avatar(&room.id, &room.name, room.avatar_url.as_deref(), px(32.), !room.is_direct, palette.text_on_accent, cx))
             .child(
                 v_flex()
                     .flex_1()
@@ -202,6 +204,10 @@ impl Shell {
             _ => String::new(),
         };
         let sync = store.sync;
+        let user_avatar = match &store.phase {
+            Phase::SignedIn(info) => info.avatar_url.clone(),
+            _ => None,
+        };
 
         let visible = rooms::filter(&rooms, &View { space: space.as_ref(), ..Default::default() });
         let groups = rooms::group(visible, &order);
@@ -260,7 +266,7 @@ impl Shell {
                     .p_2()
                     .border_t_1()
                     .border_color(palette.border_subtle)
-                    .child(monogram(&user_id, &user, px(32.), false, palette.text_on_accent))
+                    .child(avatar(&user_id, &user, user_avatar.as_deref(), px(32.), false, palette.text_on_accent, cx))
                     .child(
                         v_flex()
                             .flex_1()
@@ -325,6 +331,7 @@ impl Render for Shell {
             .child(self.room_pane(&palette, cx))
             .relative()
             .children(self.security.clone())
+            .children(lightbox::lightbox(&self.store, &palette, cx))
             // Above everything, the security panel included: the other
             // device's timeout is running, and a dialog hidden behind
             // another one is a verification that fails.

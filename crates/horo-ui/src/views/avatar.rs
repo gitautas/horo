@@ -1,7 +1,10 @@
-//! A round monogram, until avatars load images: the first letter of a name
-//! on one of the theme's accents, picked by the id so it's stable.
+//! Avatars: the picture when there is one and it has loaded, otherwise a
+//! monogram, the first letter of a name on one of the theme's accents,
+//! picked by the id so it's stable.
 
-use gpui::{Div, Hsla, Pixels, div, prelude::*, rgb};
+use gpui::{AnyElement, App, Div, Hsla, Pixels, div, img, prelude::*, rgb};
+
+use crate::media::Media;
 
 /// The four accents the horo theme recolours (gold, clay, heather, sage).
 const COLOURS: [u32; 4] = [0xF2BA25, 0xE2795B, 0xA98FC0, 0x7FBFA9];
@@ -31,6 +34,20 @@ pub fn monogram(id: &str, name: &str, size: Pixels, square: bool, ink: Hsla) -> 
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .child(initial(name));
     if square { tile.rounded(size * 0.3) } else { tile.rounded_full() }
+}
+
+/// `size` across: `mxc`'s picture if it's loaded, the monogram until then
+/// (and for good, when there's no picture or it won't load).
+pub fn avatar(id: &str, name: &str, mxc: Option<&str>, size: Pixels, square: bool, ink: Hsla, cx: &mut App) -> AnyElement {
+    // Twice the size it's drawn at, for Retina screens.
+    let pixels = (f32::from(size) * 2.0).round() as u32;
+    match mxc.and_then(|mxc| Media::image(mxc, Some((pixels, pixels)), cx)) {
+        Some(image) => {
+            let picture = img(image).size(size).flex_none().object_fit(gpui::ObjectFit::Cover);
+            if square { picture.rounded(size * 0.3).into_any_element() } else { picture.rounded_full().into_any_element() }
+        }
+        None => monogram(id, name, size, square, ink).into_any_element(),
+    }
 }
 
 #[cfg(test)]

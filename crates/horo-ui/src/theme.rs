@@ -60,6 +60,8 @@ pub struct Palette {
     pub radius_lg: Pixels,
     pub body_font: SharedString,
     pub heading_font: SharedString,
+    /// Code: the platform's monospace face, as gpui-component finds it.
+    pub mono_font: SharedString,
 }
 
 impl Global for Palette {}
@@ -90,6 +92,7 @@ impl Palette {
             radius_lg: px(10.),
             body_font: BODY_FONT.into(),
             heading_font: HEADING_FONT.into(),
+            mono_font: "Menlo".into(),
         }
     }
 }
@@ -100,7 +103,7 @@ pub fn install(cx: &mut App) {
     if let Err(e) = cx.text_system().add_fonts(FONTS.iter().map(|f| Cow::Borrowed(*f)).collect()) {
         tracing::warn!("couldn't load horo's fonts: {e}");
     }
-    let palette = Palette::horo();
+    let mut palette = Palette::horo();
 
     Theme::change(ThemeMode::Dark, None, cx);
     let theme = Theme::global_mut(cx);
@@ -140,5 +143,6 @@ pub fn install(cx: &mut App) {
     c.scrollbar_thumb = palette.border_strong;
     c.overlay = Hsla { a: 0.78, ..hex(0x1F2322) };
 
+    palette.mono_font = theme.mono_font_family.clone();
     cx.set_global(palette);
 }

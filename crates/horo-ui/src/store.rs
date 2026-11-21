@@ -56,6 +56,20 @@ pub struct Store {
     pub verification_error: Option<SharedString>,
     /// The devices-and-recovery panel is open.
     pub security_open: bool,
+    /// The picture open full-size over everything.
+    pub lightbox: Option<Lightbox>,
+}
+
+/// A picture to show full-size.
+#[derive(Debug, Clone)]
+pub struct Lightbox {
+    /// The original.
+    pub mxc: Option<String>,
+    /// What the timeline already has, shown while the original loads.
+    pub thumbnail: Option<String>,
+    pub width: Option<u64>,
+    pub height: Option<u64>,
+    pub name: String,
 }
 
 /// What the user can do to the verification on screen.
@@ -92,6 +106,7 @@ impl Store {
             verification: None,
             verification_error: None,
             security_open: false,
+            lightbox: None,
         };
         store.pump_events(cx);
         store.restore(cx);
@@ -196,6 +211,7 @@ impl Store {
         self.verification = None;
         self.verification_error = None;
         self.security_open = false;
+        self.lightbox = None;
         self.set_phase(Phase::SignedOut, cx);
         cx.spawn(async move |this, cx| {
             if let Ok(Err(e)) = task.await {
@@ -301,6 +317,16 @@ impl Store {
 
     pub fn open_room(&mut self, room: String, cx: &mut Context<Self>) {
         self.room = Some(room);
+        cx.notify();
+    }
+
+    pub fn open_lightbox(&mut self, lightbox: Lightbox, cx: &mut Context<Self>) {
+        self.lightbox = Some(lightbox);
+        cx.notify();
+    }
+
+    pub fn close_lightbox(&mut self, cx: &mut Context<Self>) {
+        self.lightbox = None;
         cx.notify();
     }
 

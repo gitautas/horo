@@ -6,12 +6,12 @@
 //! renders only what's on screen and follows the same diffs as splices, so
 //! a new message doesn't re-lay-out the whole history.
 
-use std::rc::Rc;
+use std::{collections::HashMap, rc::Rc};
 
 use chrono::{DateTime, Local, TimeZone};
 use gpui::{
     AnyElement, App, Context, Entity, FontWeight, IntoElement, ListAlignment, ListState, ParentElement, Render, SharedString, Styled,
-    WeakEntity, Window, div, list, prelude::FluentBuilder, px,
+    WeakEntity, Window, div, img, list, prelude::FluentBuilder, px, StyledImage,
 };
 use gpui_component::{h_flex, v_flex};
 use horo_core::{
@@ -22,9 +22,14 @@ use matrix_sdk::ruma::OwnedRoomId;
 
 use crate::{
     backend::Backend,
+    media::Media,
+    rich::{self, Block},
     store::{Store, apply_diff},
     theme::Palette,
-    views::avatar::monogram,
+    views::{
+        avatar::avatar,
+        content::{self, Open},
+    },
 };
 
 /// Messages from one sender this close together share a header.
@@ -34,6 +39,9 @@ const PAGINATE_WITHIN: usize = 8;
 
 pub struct Timeline {
     room_id: OwnedRoomId,
+    store: Entity<Store>,
+    /// Parsed `formatted_body`s, by their HTML.
+    rich: HashMap<String, Rc<Vec<Block>>>,
     items: Vec<TimelineItemDto>,
     list: ListState,
     /// The initial items are in; until then diffs wait in `early`.
@@ -64,6 +72,8 @@ impl Timeline {
 
         let timeline = Timeline {
             room_id: room_id.clone(),
+            store: store.clone(),
+            rich: HashMap::new(),
             items: Vec::new(),
             list,
             loaded: false,
@@ -214,7 +224,7 @@ impl Render for Timeline {
             .size_full()
             .child(
                 list(self.list.clone(), move |ix, _, cx| {
-                    this.read_with(cx, |timeline, _| timeline.render_item(ix, &palette_for_rows))
+                    this.update(cx, |timeline, cx| timeline.render_item(ix, &palette_for_rows, cx))
                         .unwrap_or_else(|_| div().into_any_element())
                 })
                 .size_full(),
@@ -224,8 +234,8 @@ impl Render for Timeline {
 }
 
 impl Timeline {
-    fn render_item(&self, ix: usize, palette: &Palette) -> AnyElement {
-        let Some(item) = self.items.get(ix) else { return div().into_any_element() };
+    fn render_item(&mut self, ix: usize, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let Some(item) = self.items.get(ix).cloned() else { return div().into_any_element() };
         let row = match item.kind {
             TimelineRowKind::DateDivider => divider(item.timestamp.map(day_label).unwrap_or_default(), palette.text_tertiary, palette.border_subtle),
             TimelineRowKind::ReadMarker => divider("new".into(), palette.accent_secondary, palette.accent_secondary),
@@ -245,7 +255,7 @@ impl Timeline {
                         .find(|i| i.kind != TimelineRowKind::ReadMarker)
                         .and_then(|prev| prev.event.as_deref())
                         .is_some_and(|prev| continues_group(prev, event));
-                    message(event, continues, palette)
+                    self.message(event, continues, palette, cx)
                 }
                 None => div().into_any_element(),
             },
@@ -307,14 +317,14 @@ fn divider(label: String, text: gpui::Hsla, line: gpui::Hsla) -> AnyElement {
         .into_any_element()
 }
 
-/// What a message body says, as text, until rich text and media land.
+/// A one-line description, for what isn't drawn any richer.
 fn body_text(content: &ContentDto) -> (String, bool) {
     match content {
         ContentDto::Text { body, .. } | ContentDto::Notice { body, .. } => (body.clone(), false),
         ContentDto::Emote { body, .. } => (format!("* {body}"), false),
         ContentDto::Image { body, .. } => (format!("🖼  {body}"), true),
         ContentDto::Video { body, .. } => (format!("🎞  {body}"), true),
-        ContentDto::Audio { body, media } if media.is_voice => ("🎙  voice message".into(), true),
+        ContentDto::Audio { media, .. } if media.is_voice => ("🎙  voice message".into(), true),
         ContentDto::Audio { body, .. } => (format!("🎵  {body}"), true),
         ContentDto::File { body, .. } => (format!("📎  {body}"), true),
         ContentDto::Sticker { body, .. } => (format!("sticker: {body}"), true),
@@ -334,92 +344,151 @@ fn body_text(content: &ContentDto) -> (String, bool) {
     }
 }
 
-fn message(event: &EventItemDto, continues: bool, palette: &Palette) -> AnyElement {
-    let name = event.sender_name.clone().unwrap_or_else(|| event.sender.clone());
-    let (text, muted) = body_text(&event.content);
-
-    if is_system(&event.content) {
-        return h_flex()
-            .w_full()
-            .px_4()
-            .py(px(3.))
-            .gap_2()
-            .text_xs()
-            .text_color(palette.text_tertiary)
-            .child(div().w(px(36.)).flex_none())
-            .child(div().flex_1().min_w_0().child(text))
-            .child(div().flex_none().child(time_label(event.timestamp)))
-            .into_any_element();
-    }
-
-    let body = div()
-        .w_full()
-        .text_color(if muted { palette.text_tertiary } else { palette.text })
-        .when(muted, |d| d.italic())
-        .when(event.is_emoji_only, |d| d.text_size(px(32.)))
-        .child(text)
-        .when(event.is_edited, |d| d.child(div().text_xs().text_color(palette.text_tertiary).child("(edited)")));
-
-    let reply = event.reply.as_ref().map(|reply| {
-        let who = reply.sender_name.clone().or_else(|| reply.sender.clone()).unwrap_or_default();
-        h_flex()
-            .gap_1()
-            .pl_2()
-            .border_l_2()
-            .border_color(palette.border_strong)
-            .text_xs()
-            .text_color(palette.text_tertiary)
-            .child(div().font_weight(FontWeight::SEMIBOLD).child(who))
-            .child(div().truncate().child(reply.body.clone().unwrap_or_else(|| "…".into()).replace('\n', " ")))
-    });
-
-    let reactions = (!event.reactions.is_empty()).then(|| h_flex().flex_wrap().gap_1().pt_1().children(event.reactions.iter().map(|r| reaction(r, palette))));
-
-    let thread = event.thread_summary.as_ref().map(|t| {
-        div()
-            .pt_1()
-            .text_xs()
-            .text_color(palette.accent)
-            .child(format!("{} {} in thread", t.num_replies, if t.num_replies == 1 { "reply" } else { "replies" }))
-    });
-
-    let sending = event.send_state.as_ref().is_some_and(|s| !matches!(s, horo_core::dto::SendStateDto::Sent { .. }));
-
-    let content = v_flex()
-        .flex_1()
-        .min_w_0()
-        .gap(px(2.))
-        .when(!continues, |c| {
-            c.child(
-                h_flex()
-                    .gap_2()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).text_color(palette.text).child(name.clone()))
-                    .child(div().text_xs().text_color(palette.text_tertiary).child(time_label(event.timestamp))),
-            )
-        })
-        .children(reply)
-        .child(body)
-        .children(reactions)
-        .children(thread)
-        .when(sending, |c| c.opacity(0.6));
-
-    h_flex()
-        .w_full()
-        .items_start()
-        .px_4()
-        .pt(if continues { px(2.) } else { px(10.) })
-        .gap_3()
-        .when(event.is_highlighted, |row| row.bg(gpui::Hsla { a: 0.08, ..palette.accent }))
-        .child(if continues {
-            div().w(px(36.)).flex_none()
-        } else {
-            monogram(&event.sender, &name, px(36.), false, palette.text_on_accent)
-        })
-        .child(content)
-        .into_any_element()
+/// A row's stable id, for element ids inside it.
+fn event_key(event: &EventItemDto) -> String {
+    event.event_id.clone().or_else(|| event.transaction_id.clone()).unwrap_or_else(|| format!("{}-{}", event.sender, event.timestamp))
 }
 
-fn reaction(r: &ReactionDto, palette: &Palette) -> impl IntoElement {
+impl Timeline {
+    /// The parsed blocks of `html`, parsed once.
+    fn blocks(&mut self, html: &str) -> Rc<Vec<Block>> {
+        if self.rich.len() > 2000 {
+            self.rich.clear();
+        }
+        self.rich.entry(html.to_owned()).or_insert_with(|| Rc::new(rich::parse(html))).clone()
+    }
+
+    /// The message's body: formatted text, a picture, a card, or a line.
+    fn body(&mut self, event: &EventItemDto, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let id = event_key(event);
+        let store = self.store.clone();
+        match &event.content {
+            ContentDto::Text { formatted: Some(html), .. } | ContentDto::Notice { formatted: Some(html), .. } if !event.is_emoji_only => {
+                let colour = if matches!(event.content, ContentDto::Notice { .. }) { palette.text_secondary } else { palette.text };
+                let blocks = self.blocks(html);
+                content::rich(&id, &blocks, colour, palette)
+            }
+            ContentDto::Emote { formatted: Some(html), .. } => {
+                let blocks = self.blocks(&format!("* {html}"));
+                div().italic().child(content::rich(&id, &blocks, palette.text, palette)).into_any_element()
+            }
+            ContentDto::Image { body, media } => content::picture(&id, body, media, false, &store, palette, cx),
+            ContentDto::Sticker { body, media } => content::picture(&id, body, media, true, &store, palette, cx),
+            ContentDto::Video { body, media } => content::card(&id, "🎞", body, media, Open::Play, palette, cx),
+            ContentDto::Audio { media, .. } if media.is_voice => content::card(&id, "🎙", "voice message", media, Open::Play, palette, cx),
+            ContentDto::Audio { body, media } => content::card(&id, "🎵", body, media, Open::Play, palette, cx),
+            ContentDto::File { body, media } => content::card(&id, "📎", body, media, Open::Save, palette, cx),
+            content => {
+                let (text, muted) = body_text(content);
+                div()
+                    .w_full()
+                    .text_color(if muted { palette.text_tertiary } else { palette.text })
+                    .when(muted, |d| d.italic())
+                    .when(event.is_emoji_only, |d| d.text_size(px(32.)))
+                    .child(text)
+                    .into_any_element()
+            }
+        }
+    }
+
+    fn message(&mut self, event: &EventItemDto, continues: bool, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let name = event.sender_name.clone().unwrap_or_else(|| event.sender.clone());
+
+        if is_system(&event.content) {
+            let (text, _) = body_text(&event.content);
+            return h_flex()
+                .w_full()
+                .px_4()
+                .py(px(3.))
+                .gap_2()
+                .text_xs()
+                .text_color(palette.text_tertiary)
+                .child(div().w(px(36.)).flex_none())
+                .child(div().flex_1().min_w_0().child(text))
+                .child(div().flex_none().child(time_label(event.timestamp)))
+                .into_any_element();
+        }
+
+        let body = v_flex()
+            .w_full()
+            .child(self.body(event, palette, cx))
+            .when(event.is_edited, |d| d.child(div().text_xs().text_color(palette.text_tertiary).child("(edited)")));
+
+        let reply = event.reply.as_ref().map(|reply| {
+            let who = reply.sender_name.clone().or_else(|| reply.sender.clone()).unwrap_or_default();
+            h_flex()
+                .gap_1()
+                .pl_2()
+                .border_l_2()
+                .border_color(palette.border_strong)
+                .text_xs()
+                .text_color(palette.text_tertiary)
+                .child(div().font_weight(FontWeight::SEMIBOLD).child(who))
+                .child(div().truncate().child(reply.body.clone().unwrap_or_else(|| "…".into()).replace('\n', " ")))
+        });
+
+        let reactions = (!event.reactions.is_empty()).then(|| {
+            let chips: Vec<AnyElement> = event.reactions.iter().map(|r| reaction(r, palette, cx)).collect();
+            h_flex().flex_wrap().gap_1().pt_1().children(chips)
+        });
+
+        let thread = event.thread_summary.as_ref().map(|t| {
+            div()
+                .pt_1()
+                .text_xs()
+                .text_color(palette.accent)
+                .child(format!("{} {} in thread", t.num_replies, if t.num_replies == 1 { "reply" } else { "replies" }))
+        });
+
+        let sending = event.send_state.as_ref().is_some_and(|s| !matches!(s, horo_core::dto::SendStateDto::Sent { .. }));
+
+        let content = v_flex()
+            .flex_1()
+            .min_w_0()
+            .gap(px(2.))
+            .when(!continues, |c| {
+                c.child(
+                    h_flex()
+                        .gap_2()
+                        .child(div().font_weight(FontWeight::SEMIBOLD).text_color(palette.text).child(name.clone()))
+                        .child(div().text_xs().text_color(palette.text_tertiary).child(time_label(event.timestamp))),
+                )
+            })
+            .children(reply)
+            .child(body)
+            .children(reactions)
+            .children(thread)
+            .when(sending, |c| c.opacity(0.6));
+
+        let face = if continues {
+            div().w(px(36.)).flex_none().into_any_element()
+        } else {
+            avatar(&event.sender, &name, event.sender_avatar.as_deref(), px(36.), false, palette.text_on_accent, cx)
+        };
+
+        h_flex()
+            .w_full()
+            .items_start()
+            .px_4()
+            .pt(if continues { px(2.) } else { px(10.) })
+            .gap_3()
+            .when(event.is_highlighted, |row| row.bg(gpui::Hsla { a: 0.08, ..palette.accent }))
+            .child(face)
+            .child(content)
+            .into_any_element()
+    }
+}
+
+fn reaction(r: &ReactionDto, palette: &Palette, cx: &mut App) -> AnyElement {
+    // A custom emoji reacts with its picture's mxc URI as the key.
+    let key: AnyElement = if r.key.starts_with("mxc://") {
+        match Media::image(&r.key, Some((40, 40)), cx) {
+            Some(image) => img(image).size(px(16.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
+            None => div().size(px(16.)).into_any_element(),
+        }
+    } else {
+        div().child(r.key.clone()).into_any_element()
+    };
     h_flex()
         .gap_1()
         .px(px(6.))
@@ -429,6 +498,7 @@ fn reaction(r: &ReactionDto, palette: &Palette) -> impl IntoElement {
         .border_color(if r.mine { palette.accent } else { palette.border })
         .bg(if r.mine { gpui::Hsla { a: 0.15, ..palette.accent } } else { palette.raised })
         .text_xs()
-        .child(r.key.clone())
+        .child(key)
         .child(div().text_color(palette.text_secondary).child(r.count.to_string()))
+        .into_any_element()
 }
