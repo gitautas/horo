@@ -22,6 +22,11 @@ pub struct Prefs {
     pub call_sound: String,
     /// 0 to 1.
     pub notification_volume: f32,
+    /// The microphone for calls (a `horo_rtc::devices` id); `None` follows
+    /// the system default.
+    pub audio_input: Option<String>,
+    /// The speaker for calls; `None` follows the system default.
+    pub audio_output: Option<String>,
 }
 
 impl Default for Prefs {
@@ -33,6 +38,8 @@ impl Default for Prefs {
             message_sound: "blip".into(),
             call_sound: "ring".into(),
             notification_volume: 0.7,
+            audio_input: None,
+            audio_output: None,
         }
     }
 }

@@ -12,3 +12,4 @@ pub mod security;
 pub mod settings;
 pub mod timeline;
 pub mod verification;
+pub mod voice;

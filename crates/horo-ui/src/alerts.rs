@@ -38,6 +38,10 @@ pub struct Outcome {
     pub alerts: Vec<Alert>,
     /// One sound for the whole batch; a call outranks a message.
     pub sound: Option<Kind>,
+    /// A DM call that just started: one person calling you, which rings
+    /// until it's dealt with (a group call only chimes; forty ringing
+    /// phones is how a room gets muted).
+    pub ring: Option<String>,
 }
 
 /// Where the user is, for "don't tell me about the room I'm reading".
@@ -45,6 +49,8 @@ pub struct Outcome {
 pub struct Looking<'a> {
     pub room: Option<&'a str>,
     pub window_active: bool,
+    /// The call we're in, which is no news to us.
+    pub in_call: Option<&'a str>,
 }
 
 /// The longest body put in a banner.
@@ -88,10 +94,20 @@ impl Watch {
 
             // A call starting in a room you're in; a voice room's call is the
             // room itself, and people come and go from it all day.
-            if prefs.notify_calls && !room.is_muted && !room.is_video_room && now.call && !before.call {
+            if prefs.notify_calls
+                && !room.is_muted
+                && !room.is_video_room
+                && now.call
+                && !before.call
+                && looking.in_call != Some(room.id.as_str())
+            {
                 let body = if room.is_direct { "calling~" } else { "call starting~" };
                 outcome.alerts.push(Alert { title: room.name.clone(), body: body.into(), room_id: room.id.clone() });
-                ring = true;
+                if room.is_direct {
+                    outcome.ring = Some(room.id.clone());
+                } else {
+                    ring = true;
+                }
             }
         }
         outcome.sound = if ring {
@@ -196,7 +212,7 @@ mod tests {
         }
     }
 
-    const AWAY: Looking = Looking { room: None, window_active: false };
+    const AWAY: Looking = Looking { room: None, window_active: false, in_call: None };
 
     #[test]
     fn the_first_list_is_a_baseline_and_new_messages_after_it_notify() {
@@ -215,7 +231,7 @@ mod tests {
         let mut watch = Watch::default();
         let prefs = Prefs::default();
         watch.inspect(&[room("!a", 0)], &prefs, AWAY);
-        let reading = Looking { room: Some("!a"), window_active: true };
+        let reading = Looking { room: Some("!a"), window_active: true, in_call: None };
         assert!(watch.inspect(&[room("!a", 1)], &prefs, reading).alerts.is_empty());
 
         let mut muted = room("!a", 2);
@@ -244,6 +260,26 @@ mod tests {
         assert_eq!(outcome.alerts[0].body, "hi there");
         assert_eq!(outcome.alerts[1].body, "call starting~");
         assert_eq!(outcome.sound, Some(Kind::Call));
+        assert_eq!(outcome.ring, None);
+    }
+
+    #[test]
+    fn a_dm_call_rings_and_our_own_call_is_no_news() {
+        let prefs = Prefs::default();
+        let mut watch = Watch::default();
+        let mut dm = room("!d", 0);
+        dm.is_direct = true;
+        let ours = room("!o", 0);
+        watch.inspect(&[dm.clone(), ours.clone()], &prefs, AWAY);
+
+        dm.has_active_call = true;
+        let mut ours = ours;
+        ours.has_active_call = true;
+        let in_ours = Looking { in_call: Some("!o"), ..AWAY };
+        let outcome = watch.inspect(&[dm, ours], &prefs, in_ours);
+        assert_eq!(outcome.ring, Some("!d".to_owned()));
+        assert_eq!(outcome.alerts.len(), 1);
+        assert_eq!(outcome.alerts[0].body, "calling~");
     }
 
     #[test]

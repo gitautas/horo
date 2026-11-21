@@ -24,6 +24,7 @@ use horo_core::{
 
 use crate::{
     alerts::{self, Looking, Watch},
+    call::CallView,
     backend::Backend,
     prefs::Prefs,
     sounds::{self, Kind},
@@ -91,7 +92,27 @@ pub struct Store {
     away: bool,
     /// The profile card open, and where it points.
     pub profile_card: Option<ProfileTarget>,
+    /// The call we're in (or joining, or that just failed).
+    pub call: Option<CallView>,
+    /// The engine behind `call`, once connected.
+    pub(crate) call_live: Option<crate::call::Live>,
+    /// A DM calling us, ringing until answered, declined or given up.
+    pub incoming: Option<Incoming>,
 }
+
+/// A call ringing here.
+#[derive(Debug, Clone)]
+pub struct Incoming {
+    pub room_id: String,
+    pub since: Instant,
+}
+
+/// How long a call rings before giving up: RING_TIMEOUT_MS in call.ts, and
+/// the lifetime the ring notification carries, so every client stops
+/// together.
+const RING_FOR: Duration = Duration::from_secs(45);
+/// Between rings.
+const RING_EVERY: Duration = Duration::from_millis(3200);
 
 /// Someone's profile card, anchored where they were clicked.
 #[derive(Debug, Clone, PartialEq)]
@@ -123,17 +144,20 @@ pub struct Lightbox {
 pub enum SettingsSection {
     Account,
     Security,
+    Voice,
     Notifications,
     About,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 4] = [SettingsSection::Account, SettingsSection::Security, SettingsSection::Notifications, SettingsSection::About];
+    pub const ALL: [SettingsSection; 5] =
+        [SettingsSection::Account, SettingsSection::Security, SettingsSection::Voice, SettingsSection::Notifications, SettingsSection::About];
 
     pub fn label(self) -> &'static str {
         match self {
             SettingsSection::Account => "account",
             SettingsSection::Security => "security",
+            SettingsSection::Voice => "voice",
             SettingsSection::Notifications => "notifications",
             SettingsSection::About => "about",
         }
@@ -186,9 +210,24 @@ impl Store {
             last_activity: Instant::now(),
             away: false,
             profile_card: None,
+            call: None,
+            call_live: None,
+            incoming: None,
         };
         store.pump_events(cx);
         store.watch_idle(cx);
+        // Quitting mid-call leaves it properly: otherwise our membership
+        // sits there and others see us in the call for hours.
+        cx.on_app_quit(|store, cx| {
+            let live = store.call_live.take();
+            let task = live.map(|live| Store::hang_up_task(live, cx));
+            async move {
+                if let Some(task) = task {
+                    task.await;
+                }
+            }
+        })
+        .detach();
         store.restore(cx);
         store
     }
@@ -215,7 +254,7 @@ impl Store {
                     Some(_) => {
                         self.rooms_seq = Some(update.seq);
                         apply_diffs(&mut self.rooms, update.diffs);
-                        self.alert();
+                        self.alert(cx);
                     }
                 }
                 self.watch_presence(cx);
@@ -306,6 +345,8 @@ impl Store {
         self.presence_watched.clear();
         self.presence_on_screen.clear();
         self.profile_card = None;
+        self.incoming = None;
+        self.leave_call(cx);
         self.set_phase(Phase::SignedOut, cx);
         cx.spawn(async move |this, cx| {
             if let Ok(Err(e)) = task.await {
@@ -355,7 +396,7 @@ impl Store {
                         }
                     }
                     store.watch.reset();
-                    store.alert();
+                    store.alert(cx);
                     store.watch_presence(cx);
                     store.spaces_fetched = None;
                     store.refresh_spaces(cx);
@@ -418,11 +459,22 @@ impl Store {
     }
 
     /// Banners and a sound for what's new in the room list.
-    fn alert(&mut self) {
-        let looking = Looking { room: self.room.as_deref(), window_active: self.window_active };
+    fn alert(&mut self, cx: &mut Context<Self>) {
+        let in_call = self.call.as_ref().map(|c| c.room_id.clone());
+        let looking = Looking { room: self.room.as_deref(), window_active: self.window_active, in_call: in_call.as_deref() };
         let outcome = self.watch.inspect(&self.rooms, &self.prefs, looking);
         for alert in outcome.alerts {
             alerts::show(alert);
+        }
+        if let Some(room_id) = outcome.ring {
+            self.start_ringing(room_id, cx);
+        }
+        // A call that ended stops ringing, however it ended (they hung up,
+        // or another of your devices answered).
+        if let Some(incoming) = &self.incoming
+            && !self.rooms.iter().any(|r| r.id == incoming.room_id && r.has_active_call)
+        {
+            self.stop_ringing(cx);
         }
         if let Some(kind) = outcome.sound {
             let slot = &mut self.sounded[kind as usize];
@@ -435,6 +487,53 @@ impl Store {
                 sounds::play(kind, id, self.prefs.notification_volume);
             }
         }
+    }
+
+    /// Ring for a DM call until it's answered, declined or given up on.
+    fn start_ringing(&mut self, room_id: String, cx: &mut Context<Self>) {
+        // The first ring wins: a second call mustn't swap the room behind
+        // the answer button.
+        if self.incoming.is_some() {
+            return;
+        }
+        let since = Instant::now();
+        self.incoming = Some(Incoming { room_id: room_id.clone(), since });
+        cx.spawn(async move |this, cx| {
+            loop {
+                let Ok(ringing) = this.update(cx, |store, cx| {
+                    let still = store.incoming.as_ref().is_some_and(|i| i.room_id == room_id && i.since == since);
+                    if still && since.elapsed() >= RING_FOR {
+                        store.stop_ringing(cx);
+                        return false;
+                    }
+                    if still {
+                        sounds::play(Kind::Call, &store.prefs.call_sound, store.prefs.notification_volume);
+                    }
+                    still
+                }) else {
+                    break;
+                };
+                if !ringing {
+                    break;
+                }
+                cx.background_executor().timer(RING_EVERY).await;
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub fn stop_ringing(&mut self, cx: &mut Context<Self>) {
+        if self.incoming.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Answer the ringing call: join it and go to its room.
+    pub fn answer(&mut self, cx: &mut Context<Self>) {
+        let Some(incoming) = self.incoming.take() else { return };
+        self.room = Some(incoming.room_id.clone());
+        self.join_call(incoming.room_id, cx);
     }
 
     /// The open timeline's senders, to watch their presence too.

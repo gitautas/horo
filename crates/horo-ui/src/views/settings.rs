@@ -18,6 +18,7 @@ use gpui_component::{
     switch::Switch,
     v_flex,
 };
+use horo_rtc::devices::DeviceInfo;
 use horo_core::{
     dto::SessionInfo,
     matrix::profile::{self, ProfileDto, ProfileUpdate},
@@ -49,6 +50,8 @@ pub struct Settings {
     /// "sign out and erase keys" has been pressed once.
     confirm_wipe: bool,
     volume: Entity<SliderState>,
+    /// Microphones and speakers, once listed.
+    devices: Option<(Vec<DeviceInfo>, Vec<DeviceInfo>)>,
 }
 
 impl Settings {
@@ -93,7 +96,9 @@ impl Settings {
             error: None,
             confirm_wipe: false,
             volume,
+            devices: None,
         };
+        settings.list_devices(cx);
         settings.load_profile(window, cx);
         settings
     }
@@ -425,6 +430,85 @@ impl Settings {
             .into_any_element()
     }
 
+    /// Ask the system for microphones and speakers, off the UI thread.
+    fn list_devices(&mut self, cx: &mut Context<Self>) {
+        let task = cx.background_spawn(async move { (horo_rtc::devices::inputs().unwrap_or_default(), horo_rtc::devices::outputs().unwrap_or_default()) });
+        cx.spawn(async move |this, cx| {
+            let devices = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.devices = Some(devices);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn voice(&mut self, prefs: &Prefs, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let Some((inputs, outputs)) = self.devices.clone() else {
+            return v_flex()
+                .gap_4()
+                .child(heading(palette, "voice"))
+                .child(card(palette).child(div().text_sm().text_color(palette.text_tertiary).child("looking for devices…")))
+                .into_any_element();
+        };
+        // "system default" first, chosen when nothing is saved or the saved
+        // device isn't plugged in: that's what a call falls back to.
+        let picker = |key: &'static str, list: &[DeviceInfo], saved: &Option<String>, set: fn(&mut Prefs, Option<String>), cx: &mut Context<Self>| {
+            let saved_present = saved.as_ref().filter(|id| list.iter().any(|d| &d.id == *id));
+            let default_name = list.iter().find(|d| d.is_default).map(|d| d.name.clone());
+            let mut rows = vec![(None, match default_name {
+                Some(name) => format!("system default ({name})"),
+                None => "system default".to_owned(),
+            })];
+            rows.extend(list.iter().map(|d| (Some(d.id.clone()), d.name.clone())));
+            v_flex().gap(px(2.)).children(rows.into_iter().enumerate().map(|(i, (id, name))| {
+                let selected = id.as_ref() == saved_present;
+                h_flex()
+                    .id(SharedString::from(format!("{key}-{i}")))
+                    .gap_2()
+                    .px_3()
+                    .py_2()
+                    .rounded(px(10.))
+                    .cursor_pointer()
+                    .when(selected, |d| d.bg(palette.raised))
+                    .hover(|d| d.bg(palette.raised))
+                    .child(div().flex_none().size(px(10.)).rounded_full().border_2().border_color(if selected { palette.accent } else { palette.border_strong }).when(selected, |d| d.bg(palette.accent)))
+                    .child(div().truncate().text_sm().child(name))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let id = id.clone();
+                        this.store.update(cx, |s, cx| s.update_prefs(|p| set(p, id), cx));
+                    }))
+            }))
+        };
+        let in_call = self.store.read(cx).call.is_some();
+        v_flex()
+            .gap_4()
+            .child(heading(palette, "voice"))
+            .child(
+                card(palette)
+                    .child(field(palette, "output device", Some("where you hear everyone else.")))
+                    .child(picker("output", &outputs, &prefs.audio_output, |p, id| p.audio_output = id, cx))
+                    .child(field(palette, "input device", Some("the microphone other people hear.")))
+                    .child(picker("input", &inputs, &prefs.audio_input, |p, id| p.audio_input = id, cx))
+                    .when(inputs.is_empty(), |c| {
+                        c.child(div().text_sm().text_color(palette.idle).child("no microphones found — check that horo has permission in system settings."))
+                    })
+                    .when(in_call, |c| c.child(div().text_xs().text_color(palette.text_tertiary).child("a change applies from your next call.")))
+                    .child(
+                        h_flex()
+                            .child(Button::new("devices-refresh").ghost().label("look again").on_click(cx.listener(|this, _, _, cx| {
+                                this.devices = None;
+                                this.list_devices(cx);
+                                cx.notify();
+                            }))),
+                    ),
+            )
+            .child(div().text_xs().text_color(palette.text_tertiary).child(
+                "echo cancellation and noise suppression are always on: horo's own, the same on every platform. camera and screen sharing come with video.",
+            ))
+            .into_any_element()
+    }
+
     fn about(&self, palette: &Palette) -> AnyElement {
         v_flex()
             .gap_4()
@@ -495,6 +579,10 @@ impl Render for Settings {
         let body: AnyElement = match (section, &session) {
             (SettingsSection::Account, Some(session)) => self.account(session, &palette, cx),
             (SettingsSection::Security, _) => self.security.clone().map(|s| s.into_any_element()).unwrap_or_else(|| div().into_any_element()),
+            (SettingsSection::Voice, _) => {
+                let prefs = self.store.read(cx).prefs.clone();
+                self.voice(&prefs, &palette, cx)
+            }
             (SettingsSection::Notifications, _) => {
                 let prefs = self.store.read(cx).prefs.clone();
                 self.notifications(&prefs, &palette, cx)

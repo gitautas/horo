@@ -96,6 +96,15 @@ impl Backend {
         async move { handle.await.map_err(|e| anyhow::anyhow!("core task failed: {e}")) }
     }
 
+    /// Run `future` on the core's runtime for as long as it takes, or until
+    /// the returned handle aborts it (a call's membership refresh).
+    pub fn spawn<F>(&self, future: F) -> tokio::task::AbortHandle
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.runtime.spawn(future).abort_handle()
+    }
+
     /// The event stream, once: the store takes it.
     pub fn take_events(&self) -> Option<mpsc::UnboundedReceiver<Event>> {
         self.events.lock().ok()?.take()

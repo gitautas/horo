@@ -20,7 +20,7 @@ use crate::{
     store::{Phase, SettingsSection, Store},
     theme::Palette,
     views::{avatar::{avatar, with_presence}, composer::Composer, profile::{ProfileCard, same_target},
-        settings::Settings, timeline::{Timeline, TimelineAction}, verification, lightbox},
+        settings::Settings, timeline::{Timeline, TimelineAction}, verification, lightbox, voice},
 };
 
 pub struct Shell {
@@ -169,6 +169,7 @@ impl Shell {
 
     fn room_row(&self, room: &RoomSummary, selected: bool, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let id = room.id.clone();
+        let voice = room.is_video_room && room.membership == horo_core::dto::RoomMembership::Joined;
         let unread = room.has_unread || room.is_marked_unread;
         let count = room.notification_count.max(room.highlight_count);
         let preview: Option<String> = if room.membership == horo_core::dto::RoomMembership::Invited {
@@ -229,7 +230,14 @@ impl Shell {
             .children((unread && count == 0).then(|| div().flex_none().size(px(8.)).rounded_full().bg(palette.text_secondary)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 let id = id.clone();
-                this.store.update(cx, |s, cx| s.open_room(id, cx))
+                this.store.update(cx, |s, cx| {
+                    s.open_room(id.clone(), cx);
+                    // A voice room is a call you walk into, as in Discord:
+                    // clicking it joins (already in it, nothing changes).
+                    if voice {
+                        s.join_call(id, cx);
+                    }
+                })
             }))
     }
 
@@ -271,6 +279,9 @@ impl Shell {
             for room in rooms {
                 let is_selected = selected.as_deref() == Some(room.id.as_str());
                 list = list.child(self.room_row(room, is_selected, palette, cx));
+                if room.is_video_room {
+                    list = list.children(voice::roster(room, &self.store, palette, cx));
+                }
             }
         }
         if groups.is_empty() {
@@ -305,6 +316,7 @@ impl Shell {
             )
             .children(status.map(|s| div().px_4().text_xs().text_color(palette.idle).child(s)))
             .child(list)
+            .children(voice::panel(&self.store, palette, cx))
             .child(
                 h_flex()
                     .gap_2()
@@ -332,10 +344,15 @@ impl Shell {
     fn room_pane(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
         let room = store.room.as_ref().and_then(|id| store.rooms.iter().find(|r| r.id == *id)).cloned();
+        let strip = room.as_ref().and_then(|r| voice::strip(&r.id, &self.store, palette, cx));
+        let call_button = room.as_ref().map(|r| voice::header_button(r, &self.store, cx));
         let body = match (&room, &self.timeline) {
-            (Some(_), Some((_, timeline, composer))) => {
-                v_flex().flex_1().min_h_0().child(div().flex_1().min_h_0().child(timeline.clone())).child(composer.clone())
-            }
+            (Some(_), Some((_, timeline, composer))) => v_flex()
+                .flex_1()
+                .min_h_0()
+                .children(strip)
+                .child(div().flex_1().min_h_0().child(timeline.clone()))
+                .child(composer.clone()),
             _ => v_flex().m_auto().text_color(palette.text_tertiary).child("pick a room"),
         };
         v_flex()
@@ -352,6 +369,8 @@ impl Shell {
                     .border_color(palette.border_subtle)
                     .child(div().text_color(palette.text).font_weight(FontWeight::SEMIBOLD).child(room.name.clone()))
                     .children(room.topic.map(|t| div().flex_1().min_w_0().truncate().text_sm().text_color(palette.text_tertiary).child(t)))
+                    .child(div().flex_1())
+                    .children(call_button)
             }))
             .children(verification::banner(&self.store, palette, cx))
             .child(body)
@@ -381,6 +400,7 @@ impl Render for Shell {
             .relative()
             .children(self.settings.clone())
             .children(lightbox::lightbox(&self.store, &palette, cx))
+            .children(voice::ringing(&self.store, &palette, cx))
             .children(self.profile.clone())
             // Above everything, the security panel included: the other
             // device's timeout is running, and a dialog hidden behind

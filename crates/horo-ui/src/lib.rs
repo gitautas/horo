@@ -7,6 +7,7 @@ use gpui::{App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions
 
 pub mod alerts;
 pub mod backend;
+pub mod call;
 pub mod media;
 pub mod prefs;
 pub mod presence;
@@ -29,9 +30,36 @@ gpui::actions!(
     ]
 );
 
-/// What the app embeds for gpui to load: gpui-component's icon set.
-pub fn assets() -> gpui_kit_assets::Assets {
-    gpui_kit_assets::Assets
+/// What the app embeds for gpui to load: gpui-component's icon set, and
+/// the few Lucide icons horo uses beyond it (assets/icons, ISC licence).
+pub fn assets() -> Assets {
+    Assets
+}
+
+pub struct Assets;
+
+/// horo's own icons, by the path an `Icon` asks for.
+const OWN_ICONS: &[(&str, &[u8])] = &[
+    ("icons/phone.svg", include_bytes!("../assets/icons/phone.svg")),
+    ("icons/phone-off.svg", include_bytes!("../assets/icons/phone-off.svg")),
+    ("icons/phone-incoming.svg", include_bytes!("../assets/icons/phone-incoming.svg")),
+    ("icons/mic-off.svg", include_bytes!("../assets/icons/mic-off.svg")),
+    ("icons/headphones.svg", include_bytes!("../assets/icons/headphones.svg")),
+];
+
+impl gpui::AssetSource for Assets {
+    fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        match OWN_ICONS.iter().find(|(p, _)| *p == path) {
+            Some((_, bytes)) => Ok(Some(std::borrow::Cow::Borrowed(bytes))),
+            None => gpui_kit_assets::Assets.load(path),
+        }
+    }
+
+    fn list(&self, path: &str) -> gpui::Result<Vec<gpui::SharedString>> {
+        let mut all = gpui_kit_assets::Assets.list(path)?;
+        all.extend(OWN_ICONS.iter().filter(|(p, _)| p.starts_with(path)).map(|(p, _)| gpui::SharedString::from(*p)));
+        Ok(all)
+    }
 }
 
 /// gpui-component, the theme and the core's backend, once per app.
