@@ -2,7 +2,7 @@
 
 Phase 2's exit bar asks for calls that survive a network switch and stay
 usable under 5% loss and 80 ms of jitter. This is where the engine stands
-against both, measured with `crates/horo-call/tests/engine.rs` against the
+against both, measured with `crates/horo-rtc/tests/engine.rs` against the
 local `livekit-server --dev` (v1.9.1) on macOS.
 
 ## Reconnecting

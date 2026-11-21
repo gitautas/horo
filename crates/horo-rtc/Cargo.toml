@@ -1,6 +1,6 @@
 [package]
 name = "horo-rtc"
-description = "horo's calls: MatrixRTC membership and ringing, LiveKit signalling, WebRTC peer connections over str0m, ICE (UDP, TCP, TURN), and the audio path"
+description = "horo's calls: MatrixRTC membership and ringing, LiveKit signalling, WebRTC peer connections over str0m, ICE (UDP, TCP, TURN), the audio path and devices, the call engine, and the horo-call command-line client"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,10 +8,11 @@ authors.workspace = true
 publish = false
 
 [features]
-default = ["media"]
-# Everything below the MatrixRTC membership: LiveKit signalling, peers, TURN
-# and audio. The Tauri shell leaves it off, since its WebView does the media,
-# and so skips building str0m, libopus and sonora.
+default = ["media", "cli"]
+# Everything below the MatrixRTC membership: LiveKit signalling, peers, TURN,
+# audio, devices and the call engine. The Tauri shell leaves it off, since
+# its WebView does the media, and so skips building str0m, libopus, sonora
+# and cpal.
 media = [
   "dep:livekit-protocol",
   "dep:prost",
@@ -29,7 +30,12 @@ media = [
   "dep:webpki-roots",
   "dep:opus",
   "dep:sonora",
+  "dep:cpal",
+  "dep:rubato",
+  "dep:ringbuf",
 ]
+# The horo-call binary: a terminal client for MatrixRTC calls.
+cli = ["media", "tokio/signal", "dep:tracing-subscriber", "dep:rpassword"]
 
 [dependencies]
 # MatrixRTC: membership, LiveKit credentials, ringing.
@@ -73,10 +79,30 @@ opus = { version = "0.4", optional = true }
 # without building libwebrtc.
 sonora = { version = "0.3", optional = true }
 
+# Microphones and speakers. CoreAudio, WASAPI, ALSA (and AAudio, CoreAudio
+# on the phones, behind the same interface; iOS will need its AVAudioSession
+# set up first).
+cpal = { version = "0.18", optional = true }
+# Device rates (44.1 kHz is common) to the codec's 48 kHz and back.
+rubato = { version = "5", optional = true }
+# The only thing the real-time callbacks touch: lock-free, no allocation.
+ringbuf = { version = "0.6", optional = true }
+
+# The command-line client.
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+rpassword = { version = "7", optional = true }
+
 [dev-dependencies]
-horo-devices.workspace = true
 jsonwebtoken = "9"
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+
+[[bin]]
+name = "horo-call"
+required-features = ["cli"]
+
+[[example]]
+name = "interop"
+required-features = ["media"]
 
 [[example]]
 name = "echo_ab"
@@ -92,4 +118,12 @@ required-features = ["media"]
 
 [[test]]
 name = "livekit"
+required-features = ["media"]
+
+[[test]]
+name = "devices"
+required-features = ["media"]
+
+[[test]]
+name = "engine"
 required-features = ["media"]

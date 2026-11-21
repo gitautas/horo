@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use horo_devices::{Capture, FRAME, Playback, inputs, outputs};
+use horo_rtc::devices::{Capture, FRAME, Playback, inputs, outputs};
 
 const RUN: Duration = Duration::from_secs(2);
 

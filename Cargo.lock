@@ -4251,24 +4251,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "horo-call"
-version = "0.11.0"
-dependencies = [
- "horo-core",
- "horo-devices",
- "horo-rtc",
- "jsonwebtoken",
- "matrix-sdk",
- "rpassword",
- "rustls",
- "serde",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "horo-core"
 version = "0.11.0"
 dependencies = [
@@ -4307,24 +4289,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "horo-devices"
-version = "0.11.0"
-dependencies = [
- "cpal",
- "ringbuf",
- "rubato",
- "thiserror 2.0.20",
- "tracing",
-]
-
-[[package]]
 name = "horo-rtc"
 version = "0.11.0"
 dependencies = [
+ "cpal",
  "futures-util",
  "hmac",
  "horo-core",
- "horo-devices",
  "jsonwebtoken",
  "livekit-protocol",
  "matrix-sdk",
@@ -4333,6 +4304,9 @@ dependencies = [
  "prost",
  "rand 0.9.5",
  "reqwest 0.12.28",
+ "ringbuf",
+ "rpassword",
+ "rubato",
  "rustls",
  "serde",
  "serde_json",
@@ -4344,6 +4318,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "tracing",
+ "tracing-subscriber",
  "ts-rs",
  "url",
  "webpki-roots 1.0.9",

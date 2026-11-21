@@ -15,9 +15,8 @@ authors = ["horo"]
 
 [workspace.dependencies]
 horo-core = { path = "crates/horo-core" }
-# Without its `media` feature: the Tauri shell only needs the MatrixRTC part.
+# Without `media` and `cli`: the Tauri shell only needs the MatrixRTC part.
 horo-rtc = { path = "crates/horo-rtc", default-features = false }
-horo-devices = { path = "crates/horo-devices" }
 
 matrix-sdk = { version = "0.18", default-features = false, features = [
   "e2e-encryption",

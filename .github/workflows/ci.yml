@@ -55,12 +55,12 @@ jobs:
           workspaces: '. -> src-tauri/target'
           key: ci-voice-${{ matrix.os }}
 
-      - run: cargo clippy -p horo-rtc -p horo-devices -p horo-call --all-targets
+      - run: cargo clippy -p horo-rtc --all-targets
 
-      - run: cargo test -p horo-rtc -p horo-devices -p horo-call --lib
+      - run: cargo test -p horo-rtc --lib
 
       # The CLI as a user would build it.
-      - run: cargo build -p horo-call --bin horo-call
+      - run: cargo build -p horo-rtc --bin horo-call
 
   # The Linux WebView needs code no other platform compiles (see
   # `src-tauri/src/webrtc.rs`), and until this job existed the only thing that

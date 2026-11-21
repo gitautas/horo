@@ -31,7 +31,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use horo_call::{
+use horo_rtc::call::{
     Call, CallEvent, CallOptions, Joined, TokenSource,
     devices::{self, AudioDevices},
 };
@@ -103,7 +103,7 @@ fn call_flags(args: &[String]) -> CallFlags {
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,horo_call=info".into()))
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,horo_rtc=info".into()))
         .with_writer(std::io::stderr)
         .init();
     horo_core::matrix::session::use_file_storage();
@@ -149,7 +149,7 @@ async fn logout() -> Fallible {
 }
 
 fn list_devices() -> Fallible {
-    for (kind, list) in [("microphones", horo_devices::inputs()?), ("speakers", horo_devices::outputs()?)] {
+    for (kind, list) in [("microphones", horo_rtc::devices::inputs()?), ("speakers", horo_rtc::devices::outputs()?)] {
         println!("{kind}:");
         for d in list {
             println!("  {}{}  ({})", if d.is_default { "* " } else { "  " }, d.name, d.id);

@@ -4,7 +4,7 @@
 //!
 //! ```sh
 //! scripts/test-livekit/start.sh
-//! HORO_TEST_LIVEKIT=ws://127.0.0.1:7880 cargo test -p horo-call --test engine
+//! HORO_TEST_LIVEKIT=ws://127.0.0.1:7880 cargo test -p horo-rtc --test engine
 //! ```
 
 use std::{
@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use horo_call::{Call, CallEvent, CallOptions, Joined, Network};
+use horo_rtc::call::{Call, CallEvent, CallOptions, Joined, Network};
 use horo_rtc::{
     PeerConfig,
     audio::{FRAME, SAMPLE_RATE},

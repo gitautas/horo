@@ -10,7 +10,7 @@
 //!
 //! Backends come from cpal (CoreAudio, WASAPI, ALSA). Echo cancellation
 //! isn't done here but in software on the frames, the same on every
-//! platform (`horo_rtc::audio::echo`).
+//! platform ([`crate::audio::echo`]).
 
 use std::{
     sync::{
@@ -32,12 +32,10 @@ use ringbuf::{
 };
 
 mod convert;
+// The audio path's shape, which the devices convert to and from.
+pub use crate::audio::{FRAME, SAMPLE_RATE};
 pub use convert::{FromFrames, ToFrames};
 
-
-pub const SAMPLE_RATE: u32 = 48_000;
-/// One 20 ms frame at 48 kHz.
-pub const FRAME: usize = 960;
 /// How often the conversion threads wake.
 const POLL: Duration = Duration::from_millis(5);
 

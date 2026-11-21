@@ -3,7 +3,7 @@
 
 use rubato::{Fft, FixedSync, Resampler, audioadapter_buffers::direct::InterleavedSlice};
 
-use crate::{FRAME, SAMPLE_RATE};
+use super::{FRAME, SAMPLE_RATE};
 
 /// Device-rate mono samples in, 20 ms frames at 48 kHz out.
 pub struct ToFrames {

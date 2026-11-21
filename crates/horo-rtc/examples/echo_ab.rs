@@ -25,7 +25,7 @@ use std::{
     time::Duration,
 };
 
-use horo_devices::{Capture, FRAME, Playback, SAMPLE_RATE};
+use horo_rtc::devices::{Capture, FRAME, Playback, SAMPLE_RATE};
 use horo_rtc::audio::echo::{EchoCanceller, Processing};
 
 /// A 300 Hz → 3 kHz sweep every half second: speech-band and not

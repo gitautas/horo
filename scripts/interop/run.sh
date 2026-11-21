@@ -25,4 +25,4 @@ server=$!
 browser_token="$(python3 -I "$here/token.py" browser "$room")"
 echo "open: http://localhost:8765/index.html?url=$url&hz=660&token=$browser_token"
 read -r -p "press Start in the page, then Enter here "
-cargo run -q -p horo-call --example interop -- "$url" "$(python3 -I "$here/token.py" horo "$room")" 440 660 "$seconds"
+cargo run -q -p horo-rtc --example interop -- "$url" "$(python3 -I "$here/token.py" horo "$room")" 440 660 "$seconds"

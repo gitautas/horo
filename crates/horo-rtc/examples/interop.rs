@@ -2,7 +2,7 @@
 //! check (scripts/interop has the browser half and run.sh to drive both).
 //!
 //! ```sh
-//! cargo run -p horo-call --example interop -- <livekit-url> <token> [send-hz] [listen-hz] [seconds]
+//! cargo run -p horo-rtc --example interop -- <livekit-url> <token> [send-hz] [listen-hz] [seconds]
 //! ```
 //!
 //! Publishes a sine of `send-hz` (default 440) and listens for `listen-hz`
@@ -12,7 +12,7 @@
 
 use std::time::{Duration, Instant};
 
-use horo_call::{Call, CallEvent, CallOptions, Joined};
+use horo_rtc::call::{Call, CallEvent, CallOptions, Joined};
 use horo_rtc::audio::{FRAME, SAMPLE_RATE};
 
 fn power_at(samples: &[f32], hz: f64) -> f64 {

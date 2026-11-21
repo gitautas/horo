@@ -52,14 +52,16 @@ horo/                     (cargo workspace)
 │  │                      notification from rtc.rs, OpenID → JWT exchange),
 │  │                      `livekit` (signal client: WSS + protobuf, join,
 │  │                      publish, subscribe, simulcast layers, reconnect/
-│  │                      resume), and the media engine behind the `media`
-│  │                      feature: `peer` (str0m peer connections, ICE),
-│  │                      `turn`, `audio` (jitter buffer, Opus, AEC/NS, noise
-│  │                      gate, level meter), later RTP pacing, VP8/H.264,
-│  │                      stats. Started as horo-rtc, horo-livekit and
-│  │                      horo-media; merged once they settled.
-│  ├─ horo-devices/       Per-platform capture/playback: audio I/O, camera,
-│  │                      screen capture, audio session/routing, permissions.
+│  │                      resume), and behind the `media` feature: `peer`
+│  │                      (str0m peer connections, ICE), `turn`, `audio`
+│  │                      (jitter buffer, Opus, AEC/NS, noise gate, level
+│  │                      meter), `devices` (per-platform capture/playback:
+│  │                      audio I/O now; camera, screen capture, audio
+│  │                      session/routing, permissions later), `call` (the
+│  │                      engine), later RTP pacing, VP8/H.264, stats. The
+│  │                      `horo-call` CLI is its binary. Started as six
+│  │                      crates (horo-rtc, -livekit, -media, -devices, -call);
+│  │                      merged once they settled.
 │  ├─ horo-platform/      Notifications, keychain, file dialogs, opener,
 │  │                      haptics, updater, deep links, background/lifecycle.
 │  └─ horo-ui/            gpui views, theme, components, assets, i18n hooks.
@@ -190,7 +192,7 @@ Every React surface, mapped to a gpui view. Rough size is lines of TSX today.
 | Room settings & info | `RoomSettings`, `RoomInfo` 497 | |
 | Packs | `PackSettings` 648 | |
 | Verification | `VerificationModal` 398 | Emoji SAS, QR. |
-| Settings | `SettingsView` 1489, `MicSettings`, `CameraBackdrop`, `settingsUi` | Mic meter and camera preview now fed by `horo-devices`. |
+| Settings | `SettingsView` 1489, `MicSettings`, `CameraBackdrop`, `settingsUi` | Mic meter and camera preview now fed by `horo_rtc::devices`. |
 | Calls | `CallStage` 561, `CallBar`, `VoicePanel`, `IncomingCallModal`, `call.ts` 655 | Tile grid with speaking rings, screen-share focus, device switching. |
 | System | `UpdateNotice`, `notify.ts`, `sounds.ts`, `ContextMenu`, `ErrorBoundary` | Native notifications, sound playback through the same audio output, native context menus where the platform has them. |
 

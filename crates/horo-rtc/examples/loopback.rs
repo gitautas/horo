@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use horo_devices::{Capture, FRAME, Playback};
+use horo_rtc::devices::{Capture, FRAME, Playback};
 use horo_rtc::audio::{
     codec::Encoder,
     gate::{GateReading, NoiseGate},

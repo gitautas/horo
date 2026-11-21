@@ -2,10 +2,10 @@
 
 use std::time::Duration;
 
-use horo_devices::{Capture, FRAME, Playback};
-use horo_rtc::audio::echo::{EchoCanceller, EchoStats, Processing};
+use crate::devices::{Capture, FRAME, Playback};
+use crate::audio::echo::{EchoCanceller, EchoStats, Processing};
 
-use crate::{Microphone, Result, Speaker};
+use super::{Microphone, Result, Speaker};
 
 /// Where a frame handed to the loudspeaker comes back from the microphone,
 /// as a starting point: the playback queue (40 ms) plus both devices'
@@ -16,7 +16,7 @@ const ECHO_DELAY_HINT: Duration = Duration::from_millis(100);
 /// Which hardware a call uses.
 #[derive(Debug, Clone)]
 pub struct AudioDevices {
-    /// A device id from `horo_devices::inputs()`; `None`, the default.
+    /// A device id from `crate::devices::inputs()`; `None`, the default.
     pub input: Option<String>,
     pub output: Option<String>,
     /// Remove the loudspeaker's sound from the microphone (horo's software

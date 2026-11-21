@@ -9,6 +9,13 @@
 //! - [`turn`]: the sans-I/O TURN client behind the relayed candidates.
 //! - [`audio`]: Opus, echo cancellation, the jitter buffer, the mixer and the
 //!   noise gate.
+//! - [`devices`]: microphones and loudspeakers through cpal, converted to the
+//!   audio path's 48 kHz mono 20 ms frames.
+//! - [`call`]: the call engine, which puts the rest together into one
+//!   participant in a LiveKit room, reconnecting as networks come and go.
+//!
+//! The `horo-call` binary (`cli` feature) is a terminal client for MatrixRTC
+//! calls built on all of it.
 //!
 //! Everything but [`matrixrtc`] sits behind the `media` feature (on by
 //! default). The Tauri shell turns it off: its WebView does the media.
@@ -17,6 +24,10 @@ pub mod matrixrtc;
 
 #[cfg(feature = "media")]
 pub mod audio;
+#[cfg(feature = "media")]
+pub mod call;
+#[cfg(feature = "media")]
+pub mod devices;
 #[cfg(feature = "media")]
 pub mod livekit;
 #[cfg(feature = "media")]
