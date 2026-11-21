@@ -16,7 +16,7 @@ use crate::{
     rooms::{self, View},
     store::{Phase, Store},
     theme::Palette,
-    views::{avatar::avatar, composer::Composer, security::Security, timeline::Timeline, verification, lightbox},
+    views::{avatar::avatar, composer::Composer, security::Security, timeline::{Timeline, TimelineAction}, verification, lightbox},
 };
 
 pub struct Shell {
@@ -56,7 +56,15 @@ impl Shell {
         let Ok(room_id) = OwnedRoomId::try_from(id.as_str()) else { return };
         let store = self.store.clone();
         let timeline = cx.new(|cx| Timeline::new(room_id.clone(), &store, cx));
-        let composer = cx.new(|cx| Composer::new(room_id, &name, window, cx));
+        let weak = timeline.downgrade();
+        let composer = cx.new(|cx| Composer::new(room_id, &name, weak, window, cx));
+        // Reply and edit buttons on a message go to the composer under it.
+        cx.subscribe_in(&timeline, window, |this, _, action: &TimelineAction, window, cx| {
+            if let Some((_, _, composer)) = &this.timeline {
+                composer.update(cx, |c, cx| c.take(action, window, cx));
+            }
+        })
+        .detach();
         self.timeline = Some((id, timeline, composer));
     }
 

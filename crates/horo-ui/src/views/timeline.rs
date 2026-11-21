@@ -10,7 +10,7 @@ use std::{collections::HashMap, rc::Rc};
 
 use chrono::{DateTime, Local, TimeZone};
 use gpui::{
-    AnyElement, App, Context, Entity, FontWeight, IntoElement, ListAlignment, ListState, ParentElement, Render, SharedString, Styled,
+    AnyElement, App, Context, Entity, EventEmitter, InteractiveElement, StatefulInteractiveElement, FontWeight, IntoElement, ListAlignment, ListState, ParentElement, Render, SharedString, Styled,
     WeakEntity, Window, div, img, list, prelude::FluentBuilder, px, StyledImage,
 };
 use gpui_component::{h_flex, v_flex};
@@ -52,7 +52,20 @@ pub struct Timeline {
     error: Option<SharedString>,
     /// A read marker is due to go out shortly.
     marking_read: bool,
+    /// The message whose delete button is asking "sure?".
+    confirm_delete: Option<String>,
+    /// The last action on a message that failed.
+    notice: Option<SharedString>,
 }
+
+/// What the timeline asks of the composer under it.
+#[derive(Debug, Clone)]
+pub enum TimelineAction {
+    Reply { event_id: String, who: String, preview: String },
+    Edit { event_id: String, body: String },
+}
+
+impl EventEmitter<TimelineAction> for Timeline {}
 
 impl Timeline {
     pub fn new(room_id: OwnedRoomId, store: &Entity<Store>, cx: &mut Context<Self>) -> Timeline {
@@ -82,6 +95,8 @@ impl Timeline {
             at_start: false,
             error: None,
             marking_read: false,
+            confirm_delete: None,
+            notice: None,
         };
 
         let backend = Backend::global(cx);
@@ -209,14 +224,165 @@ fn range_after(end: usize, len: usize) -> bool {
     end > 0 && end <= len
 }
 
+impl Timeline {
+    /// The bar that shows over a message on hover: reply, edit, delete.
+    fn actions(&self, event: &EventItemDto, name: &str, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let id = event.event_id.clone()?;
+        let confirming = self.confirm_delete.as_deref() == Some(id.as_str());
+        let button = |key: &str, label: &str, colour| {
+            div()
+                .id(SharedString::from(format!("{key}/{id}")))
+                .px_2()
+                .py(px(2.))
+                .rounded(palette.radius_sm)
+                .text_xs()
+                .text_color(colour)
+                .cursor_pointer()
+                .hover(|b| b.bg(palette.inset))
+                .child(label.to_owned())
+        };
+        let mut bar = h_flex()
+            .absolute()
+            .top(px(-8.))
+            .right_4()
+            .p(px(2.))
+            .gap(px(2.))
+            .rounded(palette.radius_md)
+            .bg(palette.raised)
+            .border_1()
+            .border_color(palette.border)
+            .shadow_sm();
+        bar = if confirming { bar.visible() } else { bar.invisible().group_hover("message", |s| s.visible()) };
+        let any = event.can_reply || (event.is_editable && editable_body(&event.content).is_some()) || (event.is_own && !matches!(event.content, ContentDto::Redacted));
+        if !any {
+            return None;
+        }
+
+        if event.can_reply && !confirming {
+            let (event_id, who) = (id.clone(), name.to_owned());
+            let preview = reply_preview(&event.content);
+            bar = bar.child(button("reply", "reply", palette.text_secondary).on_click(cx.listener(move |_, _, _, cx| {
+                cx.emit(TimelineAction::Reply { event_id: event_id.clone(), who: who.clone(), preview: preview.clone() })
+            })));
+        }
+        if event.is_editable && !confirming
+            && let Some(body) = editable_body(&event.content)
+        {
+            let event_id = id.clone();
+            bar = bar.child(button("edit", "edit", palette.text_secondary).on_click(cx.listener(move |_, _, _, cx| {
+                cx.emit(TimelineAction::Edit { event_id: event_id.clone(), body: body.clone() })
+            })));
+        }
+        if event.is_own && !matches!(event.content, ContentDto::Redacted) {
+            if confirming {
+                let event_id = id.clone();
+                bar = bar
+                    .child(div().px_2().text_xs().text_color(palette.text_secondary).child("delete it?"))
+                    .child(button("delete-yes", "delete", palette.danger).on_click(cx.listener(move |this, _, _, cx| this.redact(event_id.clone(), cx))))
+                    .child(button("delete-no", "keep", palette.text_secondary).on_click(cx.listener(|this, _, _, cx| {
+                        this.confirm_delete = None;
+                        cx.notify();
+                    })));
+            } else {
+                let event_id = id.clone();
+                bar = bar.child(button("delete", "delete", palette.danger).on_click(cx.listener(move |this, _, _, cx| {
+                    this.confirm_delete = Some(event_id.clone());
+                    cx.notify();
+                })));
+            }
+        }
+        Some(bar.into_any_element())
+    }
+
+    fn toggle_reaction(&mut self, event_id: String, key: String, cx: &mut Context<Self>) {
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let (state, room_id) = (backend.state.clone(), self.room_id.clone());
+            async move { timeline::toggle_reaction(&*state.core().await?, &room_id, None, &event_id, &key).await }
+        });
+        cx.spawn(async move |this, cx| {
+            let error = match task.await {
+                Ok(Ok(_)) => return,
+                Ok(Err(e)) => e.to_string(),
+                Err(e) => e.to_string(),
+            };
+            let _ = this.update(cx, |t, cx| t.failed_action(format!("couldn't react: {error}"), cx));
+        })
+        .detach();
+    }
+
+    fn redact(&mut self, event_id: String, cx: &mut Context<Self>) {
+        self.confirm_delete = None;
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let (state, room_id) = (backend.state.clone(), self.room_id.clone());
+            async move { timeline::redact(&*state.core().await?, &room_id, None, &event_id, None).await }
+        });
+        cx.spawn(async move |this, cx| {
+            let error = match task.await {
+                Ok(Ok(())) => return,
+                Ok(Err(e)) => e.to_string(),
+                Err(e) => e.to_string(),
+            };
+            let _ = this.update(cx, |t, cx| t.failed_action(format!("couldn't delete: {error}"), cx));
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// An action failed: say so where the user is looking.
+    fn failed_action(&mut self, error: String, cx: &mut Context<Self>) {
+        tracing::warn!("{error}");
+        self.notice = Some(error.into());
+        cx.notify();
+    }
+
+    /// The newest message of ours that can still be edited, for the up arrow.
+    pub fn last_editable(&self) -> Option<(String, String)> {
+        self.items.iter().rev().filter_map(|i| i.event.as_deref()).find_map(|e| {
+            if !e.is_editable {
+                return None;
+            }
+            Some((e.event_id.clone()?, editable_body(&e.content)?))
+        })
+    }
+
+    /// The newest message from someone else, for the down arrow.
+    pub fn last_replyable(&self) -> Option<TimelineAction> {
+        self.items.iter().rev().filter_map(|i| i.event.as_deref()).find_map(|e| {
+            if e.is_own || !e.can_reply || is_system(&e.content) {
+                return None;
+            }
+            Some(TimelineAction::Reply {
+                event_id: e.event_id.clone()?,
+                who: e.sender_name.clone().unwrap_or_else(|| e.sender.clone()),
+                preview: reply_preview(&e.content),
+            })
+        })
+    }
+}
+
+/// The text an edit starts from: the plain body of a text-like message.
+fn editable_body(content: &ContentDto) -> Option<String> {
+    match content {
+        ContentDto::Text { body, .. } | ContentDto::Emote { body, .. } | ContentDto::Notice { body, .. } => Some(body.clone()),
+        _ => None,
+    }
+}
+
+/// One line saying what's being replied to.
+fn reply_preview(content: &ContentDto) -> String {
+    body_text(content).0.replace('\n', " ")
+}
+
 impl Render for Timeline {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = Rc::new(cx.global::<Palette>().clone());
         if let Some(error) = &self.error {
-            return div().m_auto().text_color(palette.danger).child(error.clone()).into_any_element();
+            return div().size_full().flex().items_center().justify_center().text_color(palette.danger).child(error.clone()).into_any_element();
         }
         if !self.loaded {
-            return div().m_auto().text_color(palette.text_tertiary).child("loading…").into_any_element();
+            return div().size_full().flex().items_center().justify_center().text_color(palette.text_tertiary).child("loading…").into_any_element();
         }
         let this: WeakEntity<Self> = cx.weak_entity();
         let palette_for_rows = palette.clone();
@@ -227,8 +393,30 @@ impl Render for Timeline {
                     this.update(cx, |timeline, cx| timeline.render_item(ix, &palette_for_rows, cx))
                         .unwrap_or_else(|_| div().into_any_element())
                 })
-                .size_full(),
+                .flex_1()
+                .min_h_0()
+                .w_full(),
             )
+            .children(self.notice.clone().map(|notice| {
+                h_flex()
+                    .id("timeline-notice")
+                    .mx_4()
+                    .mt_1()
+                    .px_3()
+                    .py_1()
+                    .rounded(palette.radius_md)
+                    .bg(gpui::Hsla { a: 0.12, ..palette.danger })
+                    .text_xs()
+                    .text_color(palette.danger)
+                    .cursor_pointer()
+                    .child(notice)
+                    .child(div().flex_1())
+                    .child("dismiss")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.notice = None;
+                        cx.notify();
+                    }))
+            }))
             .into_any_element()
     }
 }
@@ -428,7 +616,25 @@ impl Timeline {
         });
 
         let reactions = (!event.reactions.is_empty()).then(|| {
-            let chips: Vec<AnyElement> = event.reactions.iter().map(|r| reaction(r, palette, cx)).collect();
+            let chips: Vec<AnyElement> = event
+                .reactions
+                .iter()
+                .map(|r| {
+                    let chip = reaction(r, palette, cx);
+                    match &event.event_id {
+                        Some(id) => {
+                            let (id, key) = (id.clone(), r.key.clone());
+                            div()
+                                .id(SharedString::from(format!("react/{id}/{key}")))
+                                .cursor_pointer()
+                                .child(chip)
+                                .on_click(cx.listener(move |this, _, _, cx| this.toggle_reaction(id.clone(), key.clone(), cx)))
+                                .into_any_element()
+                        }
+                        None => chip,
+                    }
+                })
+                .collect();
             h_flex().flex_wrap().gap_1().pt_1().children(chips)
         });
 
@@ -466,13 +672,19 @@ impl Timeline {
             avatar(&event.sender, &name, event.sender_avatar.as_deref(), px(36.), false, palette.text_on_accent, cx)
         };
 
+        let actions = self.actions(event, &name, palette, cx);
+
         h_flex()
+            .group("message")
+            .relative()
             .w_full()
             .items_start()
             .px_4()
             .pt(if continues { px(2.) } else { px(10.) })
             .gap_3()
+            .hover(|row| row.bg(gpui::Hsla { a: 0.03, ..palette.text }))
             .when(event.is_highlighted, |row| row.bg(gpui::Hsla { a: 0.08, ..palette.accent }))
+            .children(actions)
             .child(face)
             .child(content)
             .into_any_element()
