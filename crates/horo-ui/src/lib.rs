@@ -19,12 +19,40 @@ pub mod views;
 
 pub use backend::Backend;
 
+gpui::actions!(
+    horo,
+    [
+        /// Open settings (⌘, on macOS, Ctrl+, elsewhere).
+        OpenSettings,
+        Quit,
+    ]
+);
+
+/// What the app embeds for gpui to load: gpui-component's icon set.
+pub fn assets() -> gpui_kit_assets::Assets {
+    gpui_kit_assets::Assets
+}
+
 /// gpui-component, the theme and the core's backend, once per app.
 pub fn init(backend: Backend, cx: &mut App) {
     gpui_component::init(cx);
     theme::install(cx);
     alerts::init();
     cx.set_global(backend);
+    // ⌘ on macOS, Ctrl elsewhere. (This gpui has no `secondary-`: it
+    // panics on it at startup.)
+    #[cfg(target_os = "macos")]
+    let (settings, quit) = ("cmd-,", "cmd-q");
+    #[cfg(not(target_os = "macos"))]
+    let (settings, quit) = ("ctrl-,", "ctrl-q");
+    cx.bind_keys([gpui::KeyBinding::new(settings, OpenSettings, None), gpui::KeyBinding::new(quit, Quit, None)]);
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    // The app menu, where a Mac keeps Settings… and its shortcut.
+    cx.set_menus(vec![gpui::Menu {
+        name: "horo".into(),
+        items: vec![gpui::MenuItem::action("Settings…", OpenSettings), gpui::MenuItem::separator(), gpui::MenuItem::action("Quit horo", Quit)],
+        disabled: false,
+    }]);
 }
 
 /// The main window.

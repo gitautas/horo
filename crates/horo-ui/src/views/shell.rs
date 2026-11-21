@@ -1,10 +1,11 @@
 //! The signed-in window: the spaces rail, the room list, and the room.
 
 use gpui::{
-    AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    FocusHandle, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
+    IconName,
     button::{Button, ButtonVariants},
     h_flex, v_flex,
 };
@@ -13,6 +14,7 @@ use horo_core::dto::{RoomSummary, SyncState};
 use matrix_sdk::ruma::OwnedRoomId;
 
 use crate::{
+    OpenSettings,
     rooms::{self, View},
     store::{Phase, SettingsSection, Store},
     theme::Palette,
@@ -25,6 +27,9 @@ pub struct Shell {
     timeline: Option<(String, Entity<Timeline>, Entity<Composer>)>,
     /// Settings, while they're open.
     settings: Option<Entity<Settings>>,
+    /// Holds the window's focus when nothing inside does, so ⌘, still
+    /// reaches the shell.
+    focus: FocusHandle,
 }
 
 impl Shell {
@@ -35,7 +40,9 @@ impl Shell {
             cx.notify()
         })
         .detach();
-        let mut shell = Shell { store, timeline: None, settings: None };
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
+        let mut shell = Shell { store, timeline: None, settings: None, focus };
         shell.follow_room(window, cx);
         shell.follow_settings(window, cx);
         shell
@@ -66,6 +73,10 @@ impl Shell {
         })
         .detach();
         self.timeline = Some((id, timeline, composer));
+    }
+
+    fn open_settings(&mut self, cx: &mut Context<Self>) {
+        self.store.update(cx, |s, cx| s.show_settings(Some(SettingsSection::Account), cx));
     }
 
     /// Build settings when they open; drop them when they close.
@@ -285,8 +296,9 @@ impl Shell {
                     .child(
                         Button::new("settings")
                             .ghost()
-                            .label("settings")
-                            .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.show_settings(Some(SettingsSection::Account), cx)))),
+                            .icon(IconName::Settings)
+                            .tooltip(if cfg!(target_os = "macos") { "settings (⌘,)" } else { "settings (ctrl+,)" })
+                            .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
                     ),
             )
     }
@@ -324,6 +336,15 @@ impl Render for Shell {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = cx.global::<Palette>().clone();
         h_flex()
+            .id("shell")
+            .track_focus(&self.focus)
+            // ⌘, from anywhere in the window, the menu included. Already
+            // open, it stays where it is.
+            .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
+                if this.store.read(cx).settings.is_none() {
+                    this.open_settings(cx);
+                }
+            }))
             .size_full()
             .bg(palette.app)
             .text_color(palette.text)

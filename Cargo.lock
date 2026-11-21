@@ -4331,6 +4331,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "gpui-component",
+ "gpui-kit-assets",
  "gpui-pre",
  "horo-core",
  "horo-rtc",

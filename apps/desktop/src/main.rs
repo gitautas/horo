@@ -16,7 +16,7 @@ fn main() {
     horo_core::matrix::session::use_file_storage();
 
     let backend = horo_ui::Backend::new(horo_ui::Backend::default_data_dir()).expect("a tokio runtime");
-    gpui_platform::application().run(|cx| {
+    gpui_platform::application().with_assets(horo_ui::assets()).run(|cx| {
         horo_ui::init(backend, cx);
         if let Err(e) = horo_ui::open_window(cx) {
             eprintln!("horo: couldn't open a window: {e}");
