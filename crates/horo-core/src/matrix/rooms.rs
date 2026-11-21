@@ -158,18 +158,27 @@ pub async fn summarise(room: &Room) -> Result<RoomSummary> {
     let highlight_count = counts.highlight_count;
     let is_marked_unread = room.is_marked_unread();
 
-    let name = match room.cached_display_name() {
-        Some(name) => name.to_string(),
-        None => room
+    // `is_direct` hits the store, and a store hiccup shouldn't sink the whole
+    // summary — a room that's wrongly grouped is better than a missing room.
+    let is_direct = room.is_direct().await.unwrap_or(false);
+    let dm_partner = is_direct.then(|| crate::matrix::presence::dm_partner(room)).flatten();
+
+    // A DM is named after the person in it. The SDK's cached name is
+    // computed from the room's heroes, and a store that synced before it
+    // knew them keeps calling the room "2 people" long after it does.
+    let partner_name = match &dm_partner {
+        Some(user) => room.get_member_no_sync(user).await.ok().flatten().and_then(|m| m.display_name().map(str::to_owned)),
+        None => None,
+    };
+    let name = match (partner_name, room.cached_display_name()) {
+        (Some(name), _) if room.name().is_none() => name,
+        (_, Some(name)) => name.to_string(),
+        (_, None) => room
             .display_name()
             .await
             .map(|n| n.to_string())
             .unwrap_or_else(|_| room.room_id().to_string()),
     };
-
-    // `is_direct` hits the store, and a store hiccup shouldn't sink the whole
-    // summary — a room that's wrongly grouped is better than a missing room.
-    let is_direct = room.is_direct().await.unwrap_or(false);
 
     let notify_mode = room.cached_user_defined_notification_mode().map(NotifyMode::from);
     let muted = notify_mode == Some(NotifyMode::Mute);
@@ -185,10 +194,7 @@ pub async fn summarise(room: &Room) -> Result<RoomSummary> {
         canonical_alias: room.canonical_alias().map(|a| a.to_string()),
         avatar_url: room.avatar_url().map(|u| u.to_string()),
         is_direct,
-        dm_user_id: is_direct
-            .then(|| crate::matrix::presence::dm_partner(room))
-            .flatten()
-            .map(|u| u.to_string()),
+        dm_user_id: dm_partner.map(|u| u.to_string()),
         is_encrypted: room.encryption_state().is_encrypted(),
         is_space: room.is_space(),
         is_utility: is_utility_room_type(room_type),

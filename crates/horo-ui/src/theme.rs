@@ -11,7 +11,9 @@ use std::borrow::Cow;
 use gpui::{App, Global, Hsla, Pixels, SharedString, px, rgb};
 use gpui_component::{Theme, ThemeMode};
 
-pub const BODY_FONT: &str = "Sora";
+/// The family name inside Sora-Variable.ttf (not "Sora": the woff2 the
+/// WebView loads is named by CSS, this file names itself).
+pub const BODY_FONT: &str = "Sora Variable";
 pub const HEADING_FONT: &str = "Crimson Pro";
 
 /// Converted from the WebView build's woff2 files (gpui loads TrueType).
@@ -49,6 +51,9 @@ pub struct Palette {
     pub accent: Hsla,
     pub accent_hover: Hsla,
     pub accent_secondary: Hsla,
+    /// `--accent-tertiary` (heather) and `--accent-quaternary` (sage).
+    pub accent_tertiary: Hsla,
+    pub accent_quaternary: Hsla,
     pub border_subtle: Hsla,
     pub border: Hsla,
     pub border_strong: Hsla,
@@ -83,6 +88,8 @@ impl Palette {
             accent: hex(0xF2BA25),
             accent_hover: hex(0xF5C94F),
             accent_secondary: hex(0xE2795B),
+            accent_tertiary: hex(0xA98FC0),
+            accent_quaternary: hex(0x7FBFA9),
             border_subtle: mix(fog_100, 8.0),
             border: mix(fog_100, 14.0),
             border_strong: mix(fog_100, 22.0),
@@ -98,6 +105,32 @@ impl Palette {
             mono_font: "Menlo".into(),
         }
     }
+}
+
+/// The horo theme's scales (src/styles/themes/horo.css), so sizes can be
+/// written as the React components write them: `text(13.)` is
+/// `textSize(13)`, `space(10.)` is `space(10)`, and so on.
+pub const TEXT_SCALE: f32 = 0.94;
+pub const HEADING_SCALE: f32 = 1.12;
+pub const LABEL_SCALE: f32 = 1.45;
+pub const DENSITY: f32 = 0.78;
+pub const RADIUS_SCALE: f32 = 0.45;
+
+pub fn text(size: f32) -> Pixels {
+    px(size * TEXT_SCALE)
+}
+pub fn heading(size: f32) -> Pixels {
+    px(size * TEXT_SCALE * HEADING_SCALE)
+}
+/// Section labels: the heading face, a size up.
+pub fn label(size: f32) -> Pixels {
+    px(size * TEXT_SCALE * LABEL_SCALE)
+}
+pub fn space(size: f32) -> Pixels {
+    px(size * DENSITY)
+}
+pub fn corner(size: f32) -> Pixels {
+    px(size * RADIUS_SCALE)
 }
 
 /// Load the fonts, make the palette global, and dress gpui-component in it.

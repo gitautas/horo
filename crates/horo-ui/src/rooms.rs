@@ -76,6 +76,23 @@ pub fn filter<'r>(rooms: &'r [RoomSummary], view: &View) -> Vec<&'r RoomSummary>
     visible
 }
 
+/// The room list's stamp, as `formatStamp`: the time today, "yest", the
+/// weekday this week, then the date ("21 oct").
+pub fn stamp(timestamp_ms: u64, now: chrono::DateTime<chrono::Local>) -> String {
+    use chrono::{Local, TimeZone};
+    if timestamp_ms == 0 {
+        return String::new();
+    }
+    let Some(then) = Local.timestamp_millis_opt(timestamp_ms as i64).single() else { return String::new() };
+    let days = (now.date_naive() - then.date_naive()).num_days();
+    match days {
+        d if d <= 0 => then.format("%H:%M").to_string(),
+        1 => "yest".into(),
+        d if d < 7 => then.format("%a").to_string().to_lowercase(),
+        _ => then.format("%-d %b").to_string().to_lowercase(),
+    }
+}
+
 /// A section of the sidebar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
@@ -159,6 +176,18 @@ mod tests {
 
     fn ids(rooms: &[&RoomSummary]) -> Vec<String> {
         rooms.iter().map(|r| r.id.clone()).collect()
+    }
+
+    #[test]
+    fn stamps_read_like_the_webview_builds() {
+        use chrono::{Local, TimeZone};
+        let now = Local.with_ymd_and_hms(2026, 11, 22, 15, 0, 0).unwrap();
+        let at = |y, m, d, h, min| Local.with_ymd_and_hms(y, m, d, h, min, 0).unwrap().timestamp_millis() as u64;
+        assert_eq!(stamp(at(2026, 11, 22, 9, 5), now), "09:05");
+        assert_eq!(stamp(at(2026, 11, 21, 23, 0), now), "yest");
+        assert_eq!(stamp(at(2026, 11, 19, 12, 0), now), "thu");
+        assert_eq!(stamp(at(2026, 10, 21, 12, 0), now), "21 oct");
+        assert_eq!(stamp(0, now), "");
     }
 
     #[test]

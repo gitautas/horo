@@ -699,7 +699,7 @@ impl Timeline {
                 let store = self.store.read(cx);
                 presence::shown(store.presence.get(&event.sender), store.presence_supported)
             };
-            let picture = avatar(&event.sender, &name, event.sender_avatar.as_deref(), px(36.), false, palette.text_on_accent, cx);
+            let picture = avatar(&event.sender, &name, event.sender_avatar.as_deref(), px(36.), cx);
             let face = with_presence(picture, shown, palette.app, palette);
             let (sender, hint) = (event.sender.clone(), event.sender_avatar.clone());
             div()

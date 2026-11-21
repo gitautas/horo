@@ -1,13 +1,14 @@
 //! The signed-in window: the spaces rail, the room list, and the room.
 
 use gpui::{
-    FocusHandle, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    Hsla, img, StyledImage, FocusHandle, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    IconName,
-    button::{Button, ButtonVariants},
-    h_flex, v_flex,
+    Icon, IconName,
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    v_flex,
 };
 use horo_core::dto::{RoomSummary, SyncState};
 
@@ -16,10 +17,11 @@ use matrix_sdk::ruma::OwnedRoomId;
 use crate::{
     OpenSettings,
     presence,
-    rooms::{self, View},
+    media::Media,
+    rooms::{self, Filter, View},
     store::{Phase, SettingsSection, Store},
-    theme::Palette,
-    views::{avatar::{avatar, with_presence}, composer::Composer, profile::{ProfileCard, same_target},
+    theme::{Palette, corner, heading, label, space, text},
+    views::{avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target},
         settings::Settings, timeline::{Timeline, TimelineAction}, verification, lightbox, voice},
 };
 
@@ -34,6 +36,10 @@ pub struct Shell {
     /// Holds the window's focus when nothing inside does, so ⌘, still
     /// reaches the shell.
     focus: FocusHandle,
+    /// The room list's search box and filter.
+    search: Entity<InputState>,
+    filter: Filter,
+    filters_open: bool,
 }
 
 impl Shell {
@@ -47,7 +53,9 @@ impl Shell {
         .detach();
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        let mut shell = Shell { store, timeline: None, settings: None, profile: None, focus };
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("find a room or friend~"));
+        cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
+        let mut shell = Shell { store, timeline: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false };
         shell.follow_room(window, cx);
         shell.follow_settings(window, cx);
         shell
@@ -108,126 +116,201 @@ impl Shell {
         }
     }
 
+    /// The spaces rail, as SpacesRail.tsx: the wordmark, "all", the
+    /// spaces, and settings and you at the foot.
     fn rail(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
         let open = store.space.clone();
-        let home_selected = open.is_none();
         let spaces = store.spaces.clone();
-        let item = |id: SharedString, selected: bool| {
-            div()
-                .id(id)
-                .p(px(3.))
-                .rounded(px(14.))
-                .border_2()
-                .border_color(if selected { palette.accent } else { gpui::transparent_black() })
-                .cursor_pointer()
+        let me = match &store.phase {
+            Phase::SignedIn(info) => Some(info.clone()),
+            _ => None,
         };
+        let away = store.is_away();
+
+        let all = space_tile("space-all", "all", None, open.is_none(), palette.accent, 0, palette, cx)
+            .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.open_space(None, cx))));
+        let mut tiles = Vec::new();
+        for space in spaces {
+            let id = space.id.clone();
+            let badge = space.notification_count;
+            let tile = space_tile(
+                SharedString::from(format!("space-{}", space.id)),
+                &initials(&space.name),
+                space.avatar_url.as_deref(),
+                open.as_deref() == Some(&space.id),
+                accent_for(&space.id),
+                badge,
+                palette,
+                cx,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let id = id.clone();
+                this.store.update(cx, |s, cx| s.open_space(Some(id), cx))
+            }));
+            tiles.push(tile);
+        }
+
+        let me_face = me.map(|info| {
+            let name = info.display_name.clone().unwrap_or_else(|| info.user_id.clone());
+            let face = avatar(&info.user_id, &name, info.avatar_url.as_deref(), px(38.), cx);
+            let shown = if away { presence::Shown::Away } else { presence::Shown::Online };
+            with_presence(face, Some(shown), palette.card, palette)
+        });
+
         v_flex()
             .id("rail")
-            .w(px(68.))
+            .relative()
+            .w(px(76.))
             .h_full()
             .flex_none()
             .items_center()
-            .gap_2()
-            .py_3()
-            .bg(palette.app)
-            .overflow_y_scroll()
+            .gap(space(14.))
+            .pt(px(44.))
+            .pb(px(16.))
+            .bg(palette.card)
+            .border_r_1()
+            .border_color(palette.border_subtle)
+            // The window's title bar is gone; its top is where you drag it.
+            .child(drag_strip(px(40.)))
+            .child(img(logo()).w(px(18. * 830.3 / 295.9)).h(px(18.)).flex_none())
+            .child(div().w(px(26.)).h(px(2.)).rounded_full().bg(palette.border).flex_none())
+            .child(all)
             .child(
-                item("home".into(), home_selected)
+                v_flex()
+                    .id("rail-spaces")
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .items_center()
+                    .gap(space(12.))
+                    .overflow_y_scroll()
+                    .children(tiles),
+            )
+            .child(
+                v_flex()
+                    .items_center()
+                    .gap(space(12.))
                     .child(
                         div()
-                            .size(px(42.))
-                            .rounded(px(12.))
-                            .bg(palette.raised)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .font_family(palette.heading_font.clone())
-                            .text_size(px(22.))
-                            .text_color(palette.accent)
-                            .child("h"),
+                            .id("rail-settings")
+                            .cursor_pointer()
+                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new(if cfg!(target_os = "macos") { "settings (⌘,)" } else { "settings (ctrl+,)" }).build(window, cx))
+                            .child(Icon::new(IconName::Settings).size(px(20.)).text_color(palette.text_tertiary))
+                            .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
                     )
-                    .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.open_space(None, cx)))),
+                    .children(me_face),
             )
-            .child(div().w(px(32.)).h(px(1.)).bg(palette.border))
-            .children(spaces.into_iter().map(|space| {
-                let id = space.id.clone();
-                let unread = space.notification_count > 0 || space.highlight_count > 0;
-                let picture = avatar(&space.id, &space.name, space.avatar_url.as_deref(), px(42.), true, palette.text_on_accent, cx);
-                item(SharedString::from(format!("space-{}", space.id)), open.as_deref() == Some(&space.id))
-                    .relative()
-                    .child(picture)
-                    .children(unread.then(|| {
-                        div().absolute().top(px(0.)).right(px(0.)).size(px(10.)).rounded_full().bg(palette.accent_secondary)
-                    }))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let id = id.clone();
-                        this.store.update(cx, |s, cx| s.open_space(Some(id), cx))
-                    }))
-            }))
     }
 
+    /// A room in the list, as RoomRow in RoomList.tsx.
     fn room_row(&self, room: &RoomSummary, selected: bool, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let id = room.id.clone();
         let voice = room.is_video_room && room.membership == horo_core::dto::RoomMembership::Joined;
-        let unread = room.has_unread || room.is_marked_unread;
-        let count = room.notification_count.max(room.highlight_count);
-        let preview: Option<String> = if room.membership == horo_core::dto::RoomMembership::Invited {
-            Some("invited you".into())
-        } else {
-            room.latest.as_ref().map(|l| {
-                let who = l.sender_name.clone().unwrap_or_else(|| l.sender.clone());
-                if room.is_direct { l.body.clone() } else { format!("{who}: {}", l.body) }
-            })
-        };
+        let accent = accent_for(&room.id);
+        let preview = preview_for(room);
+        let stamp = rooms::stamp(room.latest.as_ref().map_or(0, |l| l.timestamp), chrono::Local::now());
+
+        // The face, with what kind of room it is in one corner and the
+        // person's dot (or a live call, the more urgent) in the other.
+        let shown = room.dm_user_id.as_ref().filter(|_| !room.has_active_call).and_then(|user| {
+            let store = self.store.read(cx);
+            presence::shown(store.presence.get(user), store.presence_supported)
+        });
+        let picture = avatar(&room.id, &room.name, room.avatar_url.as_deref(), px(36.), cx);
+        let face = div()
+            .relative()
+            .flex_none()
+            .child(picture)
+            .when(!room.is_direct && !room.is_space, |d| d.child(channel_badge(room.is_video_room, palette)))
+            .children(shown.map(|s| presence_dot(s, px(12.), palette.app, palette)))
+            .when(room.has_active_call, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .right(px(-3.))
+                        .bottom(px(-3.))
+                        .size(px(14.))
+                        .rounded_full()
+                        .bg(palette.online)
+                        .border_2()
+                        .border_color(palette.card)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(voice::icon("icons/phone-call.svg").size(px(7.)).text_color(palette.app)),
+                )
+            });
+
+        let name = h_flex()
+            .gap(space(5.))
+            .min_w_0()
+            .child(
+                div()
+                    .truncate()
+                    .font_weight(FontWeight::BOLD)
+                    .text_size(text(14.5))
+                    .text_color(if room.has_unread { palette.text } else { palette.text_secondary })
+                    .child(room.name.clone()),
+            )
+            .when(room.is_encrypted, |d| d.child(voice::icon("icons/shield-check.svg").size(px(12.)).text_color(palette.accent).flex_none()))
+            .when(room.is_muted, |d| d.child(voice::icon("icons/bell-off.svg").size(px(12.)).text_color(palette.text_tertiary).flex_none()));
+
+        let badge = room.has_unread.then(|| {
+            let count = room.notification_count;
+            div()
+                .min_w(px(19.))
+                .h(px(19.))
+                .px(space(6.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(text(9.5))
+                .font_weight(FontWeight::EXTRA_BOLD)
+                .text_color(palette.text_on_accent)
+                .bg(if room.highlight_count > 0 { palette.accent_secondary } else { palette.accent })
+                .child(match count {
+                    0 => "·".to_owned(),
+                    n if n > 99 => "99+".to_owned(),
+                    n => n.to_string(),
+                })
+        });
+
         h_flex()
             .id(SharedString::from(format!("room-{}", room.id)))
-            .gap_2()
-            .px_2()
-            .py(px(6.))
-            .rounded(palette.radius_md)
+            .gap(space(10.))
+            .px(space(10.))
+            .py(space(9.))
+            .mb(px(2.))
+            .rounded(corner(16.))
             .cursor_pointer()
-            .when(selected, |row| row.bg(palette.raised))
-            .hover(|row| row.bg(palette.raised))
-            .child({
-                // A DM is a person: their dot on the room's face.
-                let shown = room.dm_user_id.as_ref().and_then(|user| {
-                    let store = self.store.read(cx);
-                    presence::shown(store.presence.get(user), store.presence_supported)
-                });
-                let face = avatar(&room.id, &room.name, room.avatar_url.as_deref(), px(32.), !room.is_direct, palette.text_on_accent, cx);
-                with_presence(face, shown, if selected { palette.raised } else { palette.card }, palette)
+            .when(selected, |row| {
+                row.bg(Hsla { a: 0.07, ..gpui::white() }).shadow(vec![gpui::BoxShadow {
+                    color: accent,
+                    offset: gpui::point(px(3.), px(0.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(0.),
+                    inset: true,
+                }])
             })
+            .when(!selected, |row| row.hover(|row| row.bg(Hsla { a: 0.05, ..gpui::white() })))
+            .child(face)
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .child(
-                        div()
-                            .truncate()
-                            .text_color(if unread || selected { palette.text } else { palette.text_secondary })
-                            .when(unread, |d| d.font_weight(FontWeight::SEMIBOLD))
-                            .child(room.name.clone()),
-                    )
-                    .children(preview.map(|p| div().truncate().text_xs().text_color(palette.text_tertiary).child(p.replace('\n', " ")))),
+                    .child(name)
+                    .child(div().mt(px(1.)).truncate().text_size(text(12.)).text_color(palette.text_tertiary).child(preview.replace('\n', " "))),
             )
-            .children((count > 0).then(|| {
-                div()
+            .child(
+                v_flex()
                     .flex_none()
-                    .px(px(6.))
-                    .min_w(px(18.))
-                    .h(px(18.))
-                    .rounded_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_xs()
-                    .font_weight(FontWeight::BOLD)
-                    .bg(if room.highlight_count > 0 { palette.accent_secondary } else { palette.accent })
-                    .text_color(palette.text_on_accent)
-                    .child(count.to_string())
-            }))
-            .children((unread && count == 0).then(|| div().flex_none().size(px(8.)).rounded_full().bg(palette.text_secondary)))
+                    .items_end()
+                    .gap(space(4.))
+                    .child(div().font_family(palette.mono_font.clone()).text_size(text(10.)).text_color(palette.text_tertiary).child(stamp))
+                    .children(badge),
+            )
             .on_click(cx.listener(move |this, _, _, cx| {
                 let id = id.clone();
                 this.store.update(cx, |s, cx| {
@@ -241,40 +324,37 @@ impl Shell {
             }))
     }
 
+    /// The room list, as RoomList.tsx: the space's name, how much is
+    /// unread, search and filters, then the sections.
     fn room_list(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
-        let space = store.current_space().cloned();
+        let open_space = store.current_space().cloned();
         let selected = store.room.clone();
-        let title = space.as_ref().map_or_else(|| "home".to_owned(), |s| s.name.clone());
-        let order = space.as_ref().map(|s| s.children.clone()).unwrap_or_default();
+        let title = open_space.as_ref().map_or_else(|| "everything".to_owned(), |s| s.name.to_lowercase());
+        let order = open_space.as_ref().map(|s| s.children.clone()).unwrap_or_default();
         let rooms = store.rooms.clone();
-        let user = match &store.phase {
-            Phase::SignedIn(info) => info.display_name.clone().unwrap_or_else(|| info.user_id.clone()),
-            _ => String::new(),
-        };
-        let user_id = match &store.phase {
-            Phase::SignedIn(info) => info.user_id.clone(),
-            _ => String::new(),
-        };
         let sync = store.sync;
-        let user_avatar = match &store.phase {
-            Phase::SignedIn(info) => info.avatar_url.clone(),
-            _ => None,
-        };
 
-        let visible = rooms::filter(&rooms, &View { space: space.as_ref(), ..Default::default() });
+        let search = self.search.read(cx).value().to_string();
+        let visible = rooms::filter(&rooms, &View { space: open_space.as_ref(), filter: self.filter, search: &search, ..Default::default() });
+        let unread_total: u64 = visible.iter().map(|r| r.notification_count).sum();
         let groups = rooms::group(visible, &order);
-        let mut list = v_flex().id("room-list").flex_1().min_h_0().overflow_y_scroll().px_2().pb_2().gap(px(2.));
+
+        let mut list = v_flex().id("room-list").flex_1().min_h_0().overflow_y_scroll().px(space(10.)).pb(space(16.));
         for (section, rooms) in &groups {
             list = list.child(
-                div()
-                    .pt_3()
-                    .pb_1()
-                    .px_2()
+                h_flex()
+                    .gap(space(8.))
+                    .px(space(8.))
+                    .pt(space(14.))
+                    .pb(space(6.))
                     .font_family(palette.heading_font.clone())
-                    .text_size(px(15.))
+                    .text_size(label(9.5))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(palette.text_tertiary)
-                    .child(section.title()),
+                    .child(section.title())
+                    .child(div().flex_1().h(px(1.)).bg(palette.border_subtle))
+                    .child(rooms.len().to_string()),
             );
             for room in rooms {
                 let is_selected = selected.as_deref() == Some(room.id.as_str());
@@ -285,7 +365,18 @@ impl Shell {
             }
         }
         if groups.is_empty() {
-            list = list.child(div().p_4().text_sm().text_color(palette.text_tertiary).child(if rooms.is_empty() { "loading rooms…" } else { "nothing here yet" }));
+            let empty = if !search.trim().is_empty() {
+                "nothing matches that~".to_owned()
+            } else if self.filter != Filter::All {
+                format!("no {} rooms right now", filter_name(self.filter))
+            } else if rooms.is_empty() {
+                "loading rooms…".to_owned()
+            } else if open_space.is_some() {
+                "nothing here yet — this space has no rooms you've joined".to_owned()
+            } else {
+                "no rooms yet~".to_owned()
+            };
+            list = list.child(div().px(space(16.)).py(space(40.)).text_center().text_size(text(13.)).text_color(palette.text_tertiary).child(empty));
         }
 
         let status = match sync {
@@ -294,51 +385,102 @@ impl Shell {
             Some(SyncState::Error) => Some("connection trouble"),
             Some(SyncState::Idle | SyncState::Terminated) => Some("connecting…"),
         };
+        let caught_up = match status {
+            Some(status) => status.to_owned(),
+            None if unread_total > 0 => format!("{unread_total} unread"),
+            None => "all caught up".to_owned(),
+        };
+
+        let filtered = self.filter != Filter::All;
+        let search_box = h_flex()
+            .mt(px(12.))
+            .gap(space(8.))
+            .px(space(14.))
+            .py(space(6.))
+            .rounded_full()
+            .bg(palette.inset)
+            .border_1()
+            .border_color(palette.border_subtle)
+            .child(Icon::new(IconName::Search).size(px(14.)).text_color(palette.text_tertiary))
+            .child(div().flex_1().text_size(text(13.)).child(Input::new(&self.search).appearance(false)))
+            .child(
+                div()
+                    .id("room-filters")
+                    .relative()
+                    .cursor_pointer()
+                    .child(voice::icon("icons/funnel.svg").size(px(15.)).text_color(if filtered || self.filters_open { palette.accent } else { palette.text_tertiary }))
+                    .when(filtered && !self.filters_open, |d| {
+                        d.child(div().absolute().top(px(-2.)).right(px(-2.)).size(px(6.)).rounded_full().bg(palette.accent))
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.filters_open = !this.filters_open;
+                        cx.notify();
+                    })),
+            );
+        let chips = self.filters_open.then(|| {
+            h_flex().gap(space(6.)).mt(px(12.)).children([Filter::All, Filter::Unread, Filter::Dms, Filter::Muted].into_iter().map(|f| {
+                let on = self.filter == f;
+                div()
+                    .id(SharedString::from(format!("filter-{}", filter_name(f))))
+                    .px(space(11.))
+                    .py(space(6.))
+                    .rounded(corner(12.))
+                    .cursor_pointer()
+                    .text_size(text(9.5))
+                    .font_weight(FontWeight::EXTRA_BOLD)
+                    .border_1()
+                    .map(|d| if on { d.bg(palette.accent).text_color(palette.text_on_accent).border_color(palette.app) } else { d.bg(palette.raised).text_color(palette.text_tertiary).border_color(palette.border_subtle) })
+                    .child(filter_name(f).to_uppercase())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.filter = f;
+                        cx.notify();
+                    }))
+            }))
+        });
 
         v_flex()
-            .w(px(272.))
+            .relative()
+            .w(px(298.))
             .h_full()
             .flex_none()
             .bg(palette.card)
             .border_r_1()
             .border_color(palette.border_subtle)
+            .child(drag_strip(px(18.)))
             .child(
-                div()
-                    .px_4()
-                    .pt_4()
-                    .pb_2()
-                    .font_family(palette.heading_font.clone())
-                    .text_size(px(24.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(palette.text)
-                    .truncate()
-                    .child(title),
+                v_flex()
+                    .px(space(18.))
+                    .pt(space(18.))
+                    .pb(space(12.))
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .items_end()
+                            .gap(space(8.))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .font_family(palette.heading_font.clone())
+                                    .font_weight(FontWeight::EXTRA_BOLD)
+                                    .text_size(heading(22.))
+                                    .text_color(palette.text)
+                                    .child(format!("{title}~")),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .pb(px(4.))
+                                    .font_family(palette.mono_font.clone())
+                                    .text_size(text(11.))
+                                    .text_color(if status.is_some() { palette.idle } else { palette.text_tertiary })
+                                    .child(caught_up),
+                            ),
+                    )
+                    .child(search_box)
+                    .children(chips),
             )
-            .children(status.map(|s| div().px_4().text_xs().text_color(palette.idle).child(s)))
             .child(list)
             .children(voice::panel(&self.store, palette, cx))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .p_2()
-                    .border_t_1()
-                    .border_color(palette.border_subtle)
-                    .child(avatar(&user_id, &user, user_avatar.as_deref(), px(32.), false, palette.text_on_accent, cx))
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .child(div().truncate().text_sm().text_color(palette.text).child(user.clone()))
-                            .child(div().truncate().text_xs().text_color(palette.text_tertiary).child(user_id.clone())),
-                    )
-                    .child(
-                        Button::new("settings")
-                            .ghost()
-                            .icon(IconName::Settings)
-                            .tooltip(if cfg!(target_os = "macos") { "settings (⌘,)" } else { "settings (ctrl+,)" })
-                            .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
-                    ),
-            )
     }
 
     fn room_pane(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
@@ -406,5 +548,154 @@ impl Render for Shell {
             // device's timeout is running, and a dialog hidden behind
             // another one is a verification that fails.
             .children(verification::dialog(&self.store, &palette, cx))
+    }
+}
+
+/// An empty strip at the top of a column that drags the window, since the
+/// title bar is hidden; a double click zooms, as a title bar's would.
+fn drag_strip(height: gpui::Pixels) -> impl IntoElement {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .h(height)
+        .on_mouse_down(gpui::MouseButton::Left, |event: &gpui::MouseDownEvent, window, _| {
+            if event.click_count >= 2 {
+                window.titlebar_double_click();
+            } else {
+                window.start_window_move();
+            }
+        })
+}
+
+fn logo() -> std::sync::Arc<gpui::Image> {
+    static LOGO: std::sync::OnceLock<std::sync::Arc<gpui::Image>> = std::sync::OnceLock::new();
+    LOGO.get_or_init(|| std::sync::Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Svg, crate::LOGO.to_vec()))).clone()
+}
+
+/// A tile in the rail: a space's picture, or its initials on its accent
+/// when it's the open one (on the raised surface otherwise).
+#[allow(clippy::too_many_arguments)]
+fn space_tile(
+    id: impl Into<gpui::ElementId>,
+    label_text: &str,
+    mxc: Option<&str>,
+    active: bool,
+    accent: Hsla,
+    badge: u64,
+    palette: &Palette,
+    cx: &mut gpui::App,
+) -> gpui::Stateful<gpui::Div> {
+    let picture = mxc.and_then(|mxc| Media::image(mxc, Some((92, 92)), cx));
+    let tile = div()
+        .size(px(46.))
+        .rounded(corner(16.))
+        .overflow_hidden()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(text(13.))
+        .font_weight(FontWeight::EXTRA_BOLD)
+        .map(|d| {
+            if active {
+                d.bg(if picture.is_some() { gpui::transparent_black() } else { accent })
+                    .text_color(palette.text_on_accent)
+                    .border_2()
+                    .border_color(palette.app)
+                    .shadow(vec![gpui::BoxShadow {
+                        color: Hsla { h: 0., s: 0., l: 0., a: 0.28 },
+                        offset: gpui::point(px(0.), px(2.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }])
+            } else {
+                d.bg(palette.raised).text_color(palette.text_secondary).border_1().border_color(palette.border_subtle)
+            }
+        })
+        .map(|d| match picture {
+            Some(image) => d.child(img(image).size_full().object_fit(gpui::ObjectFit::Cover)),
+            None => d.child(label_text.to_uppercase()),
+        });
+    div()
+        .id(id)
+        .relative()
+        .flex_none()
+        .cursor_pointer()
+        .child(tile)
+        .when(badge > 0, |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .top(px(-4.))
+                    .right(px(-4.))
+                    .min_w(px(18.))
+                    .h(px(18.))
+                    .px(space(5.))
+                    .rounded_full()
+                    .bg(palette.accent_secondary)
+                    .text_color(palette.text_on_accent)
+                    .border_2()
+                    .border_color(palette.card)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(text(9.))
+                    .font_weight(FontWeight::EXTRA_BOLD)
+                    .child(if badge > 99 { "99+".to_owned() } else { badge.to_string() }),
+            )
+        })
+}
+
+/// What kind of room this is, in the avatar's corner: `#` for text, a
+/// camera for a video (voice) room. DMs get none.
+fn channel_badge(video: bool, palette: &Palette) -> impl IntoElement {
+    let size = 16.;
+    div()
+        .absolute()
+        .left(px(-4.))
+        .bottom(px(-4.))
+        .size(px(size))
+        .rounded_full()
+        .bg(if video { palette.accent_tertiary } else { palette.inset })
+        .border_2()
+        .border_color(palette.card)
+        .flex()
+        .items_center()
+        .justify_center()
+        .map(|d| {
+            if video {
+                d.child(voice::icon("icons/video.svg").size(px(size * 0.5)).text_color(palette.app))
+            } else {
+                d.child(div().text_size(px(size * 0.62)).font_weight(FontWeight::EXTRA_BOLD).text_color(palette.text_secondary).child("#"))
+            }
+        })
+}
+
+/// The preview line, as `previewFor`.
+fn preview_for(room: &RoomSummary) -> String {
+    if room.membership == horo_core::dto::RoomMembership::Invited {
+        return "invited you~".into();
+    }
+    match &room.latest {
+        None => room.topic.clone().unwrap_or_else(|| "no messages yet".into()),
+        Some(latest) => {
+            if room.is_direct {
+                latest.body.clone()
+            } else {
+                let who = latest.sender_name.clone().unwrap_or_else(|| latest.sender.trim_start_matches('@').split(':').next().unwrap_or_default().to_owned());
+                format!("{who}: {}", latest.body)
+            }
+        }
+    }
+}
+
+fn filter_name(filter: Filter) -> &'static str {
+    match filter {
+        Filter::All => "all",
+        Filter::Unread => "unread",
+        Filter::Dms => "dms",
+        Filter::Muted => "muted",
     }
 }

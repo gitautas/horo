@@ -228,7 +228,7 @@ impl Settings {
 
     fn account(&mut self, session: &SessionInfo, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let name = session.display_name.clone().unwrap_or_else(|| session.user_id.clone());
-        let face = avatar(&session.user_id, &name, session.avatar_url.as_deref(), px(64.), true, palette.text_on_accent, cx);
+        let face = avatar(&session.user_id, &name, session.avatar_url.as_deref(), px(64.), cx);
 
         let identity = card(palette).child(
             h_flex()

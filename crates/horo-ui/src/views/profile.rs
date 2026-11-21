@@ -149,7 +149,7 @@ impl ProfileCard {
             presence::shown(store.presence.get(&user), store.presence_supported)
         };
         let mxc = profile.as_ref().and_then(|p| p.avatar_url.clone()).or_else(|| self.target.avatar_hint.clone());
-        let picture = avatar(&user, name, mxc.as_deref(), px(FACE), true, palette.text_on_accent, cx);
+        let picture = avatar(&user, name, mxc.as_deref(), px(FACE), cx);
         let face = div()
             .relative()
             .p(px(3.))
@@ -222,7 +222,7 @@ impl Render for ProfileCard {
         let mut rooms = Vec::new();
         for room in shared.iter().take(8) {
             let id = room.id.clone();
-            let face = avatar(&room.id, &room.name, room.avatar_url.as_deref(), px(20.), !room.is_direct, palette.text_on_accent, cx);
+            let face = avatar(&room.id, &room.name, room.avatar_url.as_deref(), px(20.), cx);
             rooms.push(
                 h_flex()
                     .id(SharedString::from(format!("shared-{}", room.id)))

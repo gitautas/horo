@@ -1,52 +1,90 @@
-//! Avatars: the picture when there is one and it has loaded, otherwise a
-//! monogram, the first letter of a name on one of the theme's accents,
-//! picked by the id so it's stable.
+//! Avatars as ui.tsx's `Avatar` draws them: a rounded square with an ink
+//! border, the picture once it has loaded, otherwise a two-letter monogram
+//! on one of the theme's four accents, picked by the id (the same hash as
+//! `accentFor`, so a room is the same colour in both apps).
 
 use gpui::{AnyElement, App, Div, Hsla, Pixels, div, img, prelude::*, rgb};
 
 use crate::{media::Media, presence::Shown, theme::Palette};
 
-/// The four accents the horo theme recolours (gold, clay, heather, sage).
-const COLOURS: [u32; 4] = [0xF2BA25, 0xE2795B, 0xA98FC0, 0x7FBFA9];
+/// `--accent-primary` … `--accent-quaternary` in the horo theme: gold,
+/// clay, heather, sage. NEON's order in src/lib/display.ts.
+const ACCENTS: [u32; 4] = [0xF2BA25, 0xE2795B, 0xA98FC0, 0x7FBFA9];
 
-fn colour_for(id: &str) -> Hsla {
-    let hash = id.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
-    rgb(COLOURS[hash as usize % COLOURS.len()]).into()
+/// The horo theme's `--radius-scale`: corners are drawn at this fraction.
+pub const RADIUS_SCALE: f32 = 0.45;
+
+/// FNV-1a over UTF-16 code units, as `hash` in src/lib/display.ts.
+fn hash(input: &str) -> u32 {
+    input.encode_utf16().fold(2_166_136_261u32, |h, unit| (h ^ unit as u32).wrapping_mul(16_777_619))
 }
 
-/// The letter to show for `name`: its first alphanumeric character, so
-/// `#rust` and `@alice:example.org` read as R and A.
-pub fn initial(name: &str) -> String {
-    name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "?".into())
+pub fn accent_for(id: &str) -> Hsla {
+    rgb(ACCENTS[hash(id) as usize % ACCENTS.len()]).into()
 }
 
-/// `size` across, a circle (or a rounded square with `square`).
-pub fn monogram(id: &str, name: &str, size: Pixels, square: bool, ink: Hsla) -> Div {
-    let tile = div()
+/// Two characters for a tile, as `initialsFor`: the first letters of the
+/// first two words ("tekno flyers" → "tf"), else the first two of one word,
+/// sigils and the server dropped, emoji and symbols ignored.
+pub fn initials(name: &str) -> String {
+    let cleaned = name.trim_start_matches(['@', '#', '!', '+']);
+    let cleaned = cleaned.split(':').next().unwrap_or(cleaned).trim();
+    if cleaned.is_empty() {
+        return "??".into();
+    }
+    let words: Vec<Vec<char>> = cleaned
+        .split(|c: char| c.is_whitespace() || matches!(c, '_' | '-' | '.'))
+        .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect::<Vec<_>>())
+        .filter(|w| !w.is_empty())
+        .collect();
+    match words.as_slice() {
+        [first, second, ..] => [first[0], second[0]].iter().collect::<String>().to_lowercase(),
+        [only] => only.iter().take(2).collect::<String>().to_lowercase(),
+        [] => cleaned.chars().next().map(String::from).unwrap_or_else(|| "??".into()),
+    }
+}
+
+/// The corner for a tile `size` across: `round(size * 0.36)`, scaled.
+fn corner(size: Pixels) -> Pixels {
+    gpui::px((f32::from(size) * 0.36).round() * RADIUS_SCALE)
+}
+
+/// The monogram tile.
+pub fn monogram(id: &str, name: &str, size: Pixels, ink: Hsla, border: Hsla) -> Div {
+    div()
         .size(size)
         .flex()
         .flex_none()
         .items_center()
         .justify_center()
-        .bg(colour_for(id))
+        .rounded(corner(size))
+        .border_2()
+        .border_color(border)
+        .bg(accent_for(id))
         .text_color(ink)
-        .text_size(size * 0.45)
-        .font_weight(gpui::FontWeight::SEMIBOLD)
-        .child(initial(name));
-    if square { tile.rounded(size * 0.3) } else { tile.rounded_full() }
+        .text_size(gpui::px((f32::from(size) * 0.37).round().max(10.)))
+        .font_weight(gpui::FontWeight::EXTRA_BOLD)
+        .child(initials(name))
 }
 
 /// `size` across: `mxc`'s picture if it's loaded, the monogram until then
 /// (and for good, when there's no picture or it won't load).
-pub fn avatar(id: &str, name: &str, mxc: Option<&str>, size: Pixels, square: bool, ink: Hsla, cx: &mut App) -> AnyElement {
+pub fn avatar(id: &str, name: &str, mxc: Option<&str>, size: Pixels, cx: &mut App) -> AnyElement {
+    let palette = cx.global::<Palette>().clone();
     // Twice the size it's drawn at, for Retina screens.
     let pixels = (f32::from(size) * 2.0).round() as u32;
     match mxc.and_then(|mxc| Media::image(mxc, Some((pixels, pixels)), cx)) {
-        Some(image) => {
-            let picture = img(image).size(size).flex_none().object_fit(gpui::ObjectFit::Cover);
-            if square { picture.rounded(size * 0.3).into_any_element() } else { picture.rounded_full().into_any_element() }
-        }
-        None => monogram(id, name, size, square, ink).into_any_element(),
+        Some(image) => div()
+            .size(size)
+            .flex_none()
+            .rounded(corner(size))
+            .border_2()
+            .border_color(palette.app)
+            .bg(palette.card)
+            .overflow_hidden()
+            .child(img(image).size_full().object_fit(gpui::ObjectFit::Cover))
+            .into_any_element(),
+        None => monogram(id, name, size, palette.text_on_accent, palette.app).into_any_element(),
     }
 }
 
@@ -71,15 +109,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initials_skip_sigils() {
-        assert_eq!(initial("#rust"), "R");
-        assert_eq!(initial("@alice:example.org"), "A");
-        assert_eq!(initial("ąžuolas"), "Ą");
-        assert_eq!(initial("…"), "?");
+    fn initials_as_the_webview_build_makes_them() {
+        assert_eq!(initials("tekno flyers"), "tf");
+        assert_eq!(initials("Empty Room"), "er");
+        assert_eq!(initials("m.uwu.lt Admin Room"), "mu");
+        assert_eq!(initials("@kii:uwu.gg"), "ki");
+        assert_eq!(initials("skitchy 🍁"), "sk");
+        assert_eq!(initials("tundra"), "tu");
+        assert_eq!(initials("🍁"), "🍁");
     }
 
     #[test]
-    fn the_colour_is_stable_per_id() {
-        assert_eq!(colour_for("!a:x"), colour_for("!a:x"));
+    fn the_hash_is_display_ts_fnv1a() {
+        // FNV-1a of "a": 0xe40c292c.
+        assert_eq!(hash("a"), 0xe40c292c);
+        assert_eq!(hash(""), 2_166_136_261);
     }
 }

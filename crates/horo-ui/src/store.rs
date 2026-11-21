@@ -624,6 +624,11 @@ impl Store {
         }
     }
 
+    /// We've told the server we're away (idle).
+    pub fn is_away(&self) -> bool {
+        self.away
+    }
+
     pub fn set_window_active(&mut self, active: bool) {
         self.window_active = active;
     }

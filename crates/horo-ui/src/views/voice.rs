@@ -155,7 +155,7 @@ pub fn roster(room: &RoomSummary, store: &Entity<Store>, palette: &Palette, cx: 
     }
     let mut rows = Vec::new();
     for person in people {
-        let face = avatar(&person.user_id, &person.name, None, px(20.), false, palette.text_on_accent, cx);
+        let face = avatar(&person.user_id, &person.name, None, px(20.), cx);
         rows.push(
             h_flex()
                 .gap_2()
@@ -175,7 +175,7 @@ pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut A
     let connecting = call.status == CallStatus::Connecting;
     let mut tiles = Vec::new();
     for person in people(&call) {
-        let face = avatar(&person.user_id, &person.name, None, px(56.), false, palette.text_on_accent, cx);
+        let face = avatar(&person.user_id, &person.name, None, px(56.), cx);
         tiles.push(
             v_flex()
                 .w(px(96.))
@@ -217,7 +217,7 @@ pub fn ringing(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option
     let incoming = state.incoming.clone()?;
     let room = state.rooms.iter().find(|r| r.id == incoming.room_id).cloned();
     let name = room.as_ref().map(|r| r.name.clone()).unwrap_or_else(|| incoming.room_id.clone());
-    let picture = avatar(&incoming.room_id, &name, room.as_ref().and_then(|r| r.avatar_url.as_deref()), px(72.), false, palette.text_on_accent, cx);
+    let picture = avatar(&incoming.room_id, &name, room.as_ref().and_then(|r| r.avatar_url.as_deref()), px(72.), cx);
     let (answer, decline) = (store.clone(), store.clone());
     Some(
         scrim(palette)

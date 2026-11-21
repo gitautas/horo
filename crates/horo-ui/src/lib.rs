@@ -39,13 +39,18 @@ pub fn assets() -> Assets {
 pub struct Assets;
 
 /// horo's own icons, by the path an `Icon` asks for.
-const OWN_ICONS: &[(&str, &[u8])] = &[
-    ("icons/phone.svg", include_bytes!("../assets/icons/phone.svg")),
-    ("icons/phone-off.svg", include_bytes!("../assets/icons/phone-off.svg")),
-    ("icons/phone-incoming.svg", include_bytes!("../assets/icons/phone-incoming.svg")),
-    ("icons/mic-off.svg", include_bytes!("../assets/icons/mic-off.svg")),
-    ("icons/headphones.svg", include_bytes!("../assets/icons/headphones.svg")),
+macro_rules! own_icons {
+    ($($name:literal),* $(,)?) => {
+        &[$((concat!("icons/", $name, ".svg"), include_bytes!(concat!("../assets/icons/", $name, ".svg")))),*]
+    };
+}
+const OWN_ICONS: &[(&str, &[u8])] = own_icons![
+    "phone", "phone-off", "phone-incoming", "phone-call", "mic-off", "headphones", "compass", "shield-check", "bell-off",
+    "video", "lock", "funnel", "circle-plus", "smile", "send",
 ];
+
+/// The horo wordmark, drawn in the rail.
+pub const LOGO: &[u8] = include_bytes!("../assets/logo.svg");
 
 impl gpui::AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {
@@ -89,7 +94,14 @@ pub fn open_window(cx: &mut App) -> anyhow::Result<()> {
     let bounds = Bounds::centered(None, size(px(1180.), px(780.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
-        titlebar: Some(TitlebarOptions { title: Some("horo".into()), ..Default::default() }),
+        // No title bar: the traffic lights sit over the spaces rail, as the
+        // Tauri build's overlay title bar has them, and the columns' tops
+        // drag the window.
+        titlebar: Some(TitlebarOptions {
+            title: Some("horo".into()),
+            appears_transparent: true,
+            traffic_light_position: Some(gpui::point(px(14.), px(14.))),
+        }),
         window_min_size: Some(size(px(720.), px(480.))),
         ..Default::default()
     };
