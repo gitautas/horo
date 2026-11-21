@@ -1,13 +1,38 @@
 [package]
 name = "horo-rtc"
-description = "MatrixRTC call signalling for horo: membership, LiveKit credentials, ringing"
+description = "horo's calls: MatrixRTC membership and ringing, LiveKit signalling, WebRTC peer connections over str0m, ICE (UDP, TCP, TURN), and the audio path"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 publish = false
 
+[features]
+default = ["media"]
+# Everything below the MatrixRTC membership: LiveKit signalling, peers, TURN
+# and audio. The Tauri shell leaves it off, since its WebView does the media,
+# and so skips building str0m, libopus and sonora.
+media = [
+  "dep:livekit-protocol",
+  "dep:prost",
+  "dep:tokio",
+  "dep:tokio-tungstenite",
+  "dep:futures-util",
+  "dep:thiserror",
+  "dep:str0m",
+  "dep:rand",
+  "dep:hmac",
+  "dep:sha1",
+  "dep:md-5",
+  "dep:rustls",
+  "dep:tokio-rustls",
+  "dep:webpki-roots",
+  "dep:opus",
+  "dep:sonora",
+]
+
 [dependencies]
+# MatrixRTC: membership, LiveKit credentials, ringing.
 horo-core.workspace = true
 matrix-sdk.workspace = true
 serde.workspace = true
@@ -16,3 +41,55 @@ ts-rs.workspace = true
 tracing.workspace = true
 url.workspace = true
 reqwest.workspace = true
+
+# LiveKit signalling: the protocol's message types, generated from its
+# protobufs, over a WebSocket.
+livekit-protocol = { version = "0.8", optional = true }
+prost = { version = "0.14", optional = true }
+tokio = { workspace = true, features = ["net", "io-util"], optional = true }
+# webpki roots rather than the OS store: the same behaviour on every
+# platform, phones included, where rustls-native-certs has gaps.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"], optional = true }
+futures-util = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+
+# Sans-I/O WebRTC. aws-lc-rs is the crypto horo already uses for rustls, so
+# there is no OpenSSL to build for iOS/Android (Phase 0).
+str0m = { version = "0.25", default-features = false, features = ["aws-lc-rs"], optional = true }
+rand = { version = "0.9", optional = true }
+# TURN's long-term credentials.
+hmac = { version = "0.12", optional = true }
+sha1 = { version = "0.10", optional = true }
+md-5 = { version = "0.10", optional = true }
+# TURN over TLS.
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std"], optional = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs"], optional = true }
+webpki-roots = { version = "1", optional = true }
+
+# Speech codec: libopus, bundled and built with cmake.
+opus = { version = "0.4", optional = true }
+# Echo cancellation, noise suppression and gain control: WebRTC's audio
+# processing (AEC3) ported to Rust, so every platform gets the same one
+# without building libwebrtc.
+sonora = { version = "0.3", optional = true }
+
+[dev-dependencies]
+horo-devices.workspace = true
+jsonwebtoken = "9"
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+
+[[example]]
+name = "echo_ab"
+required-features = ["media"]
+
+[[example]]
+name = "loopback"
+required-features = ["media"]
+
+[[test]]
+name = "call"
+required-features = ["media"]
+
+[[test]]
+name = "livekit"
+required-features = ["media"]

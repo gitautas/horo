@@ -1,5 +1,5 @@
 //! A call through a real LiveKit server, on horo's own crates end to end:
-//! `horo-livekit` for signalling, `horo-media` peers for the media.
+//! [`horo_rtc::livekit`] for signalling, [`horo_rtc::peer`] for the media.
 //!
 //! Alice publishes a 440 Hz tone, Opus-encoded; Bob subscribes and has to
 //! hear exactly that tone. Run once per way of reaching the SFU.
@@ -7,7 +7,7 @@
 //! ```sh
 //! scripts/test-livekit/start.sh              # direct: UDP and ICE-TCP
 //! eval "$(scripts/test-livekit/start-turn.sh)"  # relayed: TURN/UDP, TURN/TLS
-//! HORO_TEST_LIVEKIT=ws://127.0.0.1:7880 cargo test -p horo-media --test call
+//! HORO_TEST_LIVEKIT=ws://127.0.0.1:7880 cargo test -p horo-rtc --test call
 //! ```
 
 use std::{
@@ -15,8 +15,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use horo_livekit::{AddTrack, SignalEvent, Target, connect, proto};
-use horo_media::{Peer, PeerConfig, PeerEvent, TurnServer};
+use horo_rtc::livekit::{AddTrack, SignalEvent, Target, connect, proto};
+use horo_rtc::{Peer, PeerConfig, PeerEvent, TurnServer};
 
 const KEY: &str = "devkey";
 /// `livekit-server --dev`'s secret.

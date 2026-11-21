@@ -1,7 +1,7 @@
 //! LiveKit signalling: the WebSocket half of joining a LiveKit room.
 //!
 //! [`connect`] opens the signal connection with a room-scoped access token
-//! (from `horo-rtc`'s OpenID → JWT exchange) and waits for the server's
+//! (from [`crate::matrixrtc`]'s OpenID → JWT exchange) and waits for the server's
 //! join response. From then on a background task owns the socket:
 //! - requests go out through the [`SignalClient`] handle;
 //! - everything the server says comes back as [`SignalEvent`]s;
@@ -9,7 +9,7 @@
 //!   [`SignalEvent::Closed`] if the server stops answering.
 //!
 //! Media is not here. The SDP and ICE candidates in these messages belong to
-//! the peer connections in `horo-media`; this crate only carries them.
+//! the peer connections in [`crate::peer`]; this module only carries them.
 //!
 //! LiveKit uses two peer connections per participant: the *publisher*, which
 //! this client offers, and the *subscriber*, which the server offers. Every

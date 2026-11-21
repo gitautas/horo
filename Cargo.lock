@@ -4256,8 +4256,6 @@ version = "0.11.0"
 dependencies = [
  "horo-core",
  "horo-devices",
- "horo-livekit",
- "horo-media",
  "horo-rtc",
  "jsonwebtoken",
  "matrix-sdk",
@@ -4320,58 +4318,35 @@ dependencies = [
 ]
 
 [[package]]
-name = "horo-livekit"
+name = "horo-rtc"
 version = "0.11.0"
 dependencies = [
  "futures-util",
+ "hmac",
+ "horo-core",
+ "horo-devices",
  "jsonwebtoken",
  "livekit-protocol",
+ "matrix-sdk",
+ "md-5",
+ "opus",
  "prost",
+ "rand 0.9.5",
+ "reqwest 0.12.28",
  "rustls",
  "serde",
  "serde_json",
- "thiserror 2.0.20",
- "tokio",
- "tokio-tungstenite",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "horo-media"
-version = "0.11.0"
-dependencies = [
- "hmac",
- "horo-devices",
- "horo-livekit",
- "jsonwebtoken",
- "md-5",
- "opus",
- "rand 0.9.5",
- "rustls",
- "serde",
  "sha1 0.10.7",
  "sonora",
  "str0m",
  "thiserror 2.0.20",
  "tokio",
  "tokio-rustls",
- "tracing",
- "webpki-roots 1.0.9",
-]
-
-[[package]]
-name = "horo-rtc"
-version = "0.11.0"
-dependencies = [
- "horo-core",
- "matrix-sdk",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
+ "tokio-tungstenite",
  "tracing",
  "ts-rs",
  "url",
+ "webpki-roots 1.0.9",
 ]
 
 [[package]]

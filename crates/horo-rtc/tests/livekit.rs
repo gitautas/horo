@@ -1,8 +1,8 @@
-//! horo-livekit against a real LiveKit server.
+//! LiveKit signalling against a real LiveKit server.
 //!
 //! ```sh
 //! scripts/test-livekit/start.sh
-//! HORO_TEST_LIVEKIT=ws://127.0.0.1:7880 cargo test -p horo-livekit --test livekit
+//! HORO_TEST_LIVEKIT=ws://127.0.0.1:7880 cargo test -p horo-rtc --test livekit
 //! ```
 //!
 //! Without `HORO_TEST_LIVEKIT` these pass without doing anything; in CI a
@@ -10,7 +10,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use horo_livekit::{AddTrack, Error, SignalEvent, connect, proto};
+use horo_rtc::livekit::{AddTrack, Error, SignalEvent, connect, proto};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 /// `livekit-server --dev`'s credentials.

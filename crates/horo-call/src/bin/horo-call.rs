@@ -84,7 +84,7 @@ struct CallFlags {
 }
 
 fn call_flags(args: &[String]) -> CallFlags {
-    let mut flags = CallFlags { devices: AudioDevices::default(), gate: horo_media::audio::gate::GATE_OFF_DB, muted: false, seconds: None };
+    let mut flags = CallFlags { devices: AudioDevices::default(), gate: horo_rtc::audio::gate::GATE_OFF_DB, muted: false, seconds: None };
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -266,7 +266,7 @@ async fn talk(url: &str, token: &str, refresh_token: Option<TokenSource>, flags:
     };
     tokio::pin!(until_deadline);
     let mut speaking: Vec<String> = Vec::new();
-    let mut loudest = horo_media::audio::gate::FLOOR_DB;
+    let mut loudest = horo_rtc::audio::gate::FLOOR_DB;
     let mut meter = tokio::time::interval(Duration::from_secs(1));
 
     let ended = loop {
@@ -299,7 +299,7 @@ async fn talk(url: &str, token: &str, refresh_token: Option<TokenSource>, flags:
                     ));
                     eprintln!("mic {loudest:>6.1} dBFS{}{}", if call.is_muted() { " (muted)" } else { "" }, echo.unwrap_or_default());
                 }
-                loudest = horo_media::audio::gate::FLOOR_DB;
+                loudest = horo_rtc::audio::gate::FLOOR_DB;
             }
             Some(key) = keys.recv() => match key.as_str() {
                 "m" => {

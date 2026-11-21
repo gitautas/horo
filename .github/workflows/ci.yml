@@ -55,9 +55,9 @@ jobs:
           workspaces: '. -> src-tauri/target'
           key: ci-voice-${{ matrix.os }}
 
-      - run: cargo clippy -p horo-livekit -p horo-media -p horo-devices -p horo-call --all-targets
+      - run: cargo clippy -p horo-rtc -p horo-devices -p horo-call --all-targets
 
-      - run: cargo test -p horo-livekit -p horo-media -p horo-devices -p horo-call --lib
+      - run: cargo test -p horo-rtc -p horo-devices -p horo-call --lib
 
       # The CLI as a user would build it.
       - run: cargo build -p horo-call --bin horo-call
@@ -103,12 +103,12 @@ jobs:
       - name: Start test homeserver
         run: scripts/test-homeserver/start.sh
 
-      # horo-livekit's signal client against a real SFU
-      # (crates/horo-livekit/tests/livekit.rs).
+      # horo-rtc's LiveKit signal client against a real SFU
+      # (crates/horo-rtc/tests/livekit.rs).
       - name: Start test LiveKit server
         run: scripts/test-livekit/start.sh
 
-      # A second LiveKit with its TURN server on, for horo-media's relayed
+      # A second LiveKit with its TURN server on, for horo-rtc's relayed
       # calls. It prints the env the tests read; GITHUB_ENV wants one per line.
       - name: Start test LiveKit server with TURN
         # `shell: bash` adds pipefail, so a failed start isn't hidden by the pipe.

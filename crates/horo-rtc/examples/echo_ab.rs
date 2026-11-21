@@ -3,7 +3,7 @@
 //! cpal devices: the path every desktop OS can take.
 //!
 //! ```sh
-//! cargo run -p horo-media --example echo_ab -- [delay-ms] [ns|agc|both|none]
+//! cargo run -p horo-rtc --example echo_ab -- [delay-ms] [ns|agc|both|none]
 //! ```
 //!
 //! **Plays a chirp out loud** for about eight seconds. Use the built-in
@@ -26,7 +26,7 @@ use std::{
 };
 
 use horo_devices::{Capture, FRAME, Playback, SAMPLE_RATE};
-use horo_media::audio::echo::{EchoCanceller, Processing};
+use horo_rtc::audio::echo::{EchoCanceller, Processing};
 
 /// A 300 Hz → 3 kHz sweep every half second: speech-band and not
 /// stationary, so noise suppression can't take credit for it.

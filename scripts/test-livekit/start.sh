@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Start a disposable LiveKit server for horo-livekit's integration tests:
+# Start a disposable LiveKit server for horo-rtc's LiveKit integration tests:
 #
 #   scripts/test-livekit/start.sh
-#   HORO_TEST_LIVEKIT=ws://127.0.0.1:7880 cargo test -p horo-livekit --test livekit
+#   HORO_TEST_LIVEKIT=ws://127.0.0.1:7880 cargo test -p horo-rtc --test livekit
 #
 # `--dev` mode: API key `devkey`, secret `secret`, no TURN. `stop.sh` removes it.
 set -euo pipefail

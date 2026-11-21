@@ -1,8 +1,8 @@
 //! Hear yourself through horo's whole audio path, with a network in between.
 //!
 //! ```sh
-//! cargo run -p horo-media --example loopback -- [seconds] [delay-ms] [jitter-ms] [loss-%] [gate-dB]
-//! cargo run -p horo-media --example loopback -- 30 400 60 5 -50
+//! cargo run -p horo-rtc --example loopback -- [seconds] [delay-ms] [jitter-ms] [loss-%] [gate-dB]
+//! cargo run -p horo-rtc --example loopback -- 30 400 60 5 -50
 //! ```
 //!
 //! Microphone → noise gate → Opus → a simulated network (delay, jitter,
@@ -19,7 +19,7 @@ use std::{
 };
 
 use horo_devices::{Capture, FRAME, Playback};
-use horo_media::audio::{
+use horo_rtc::audio::{
     codec::Encoder,
     gate::{GateReading, NoiseGate},
     jitter::JitterBuffer,

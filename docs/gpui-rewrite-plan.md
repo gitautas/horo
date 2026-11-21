@@ -48,13 +48,16 @@ horo/                     (cargo workspace)
 │  │                      Moved from src-tauri/src/matrix + verification.rs.
 │  │                      No UI, no tauri. Exposes typed async APIs + eyeball
 │  │                      observables instead of commands + JSON events.
-│  ├─ horo-rtc/           MatrixRTC membership/notification (from rtc.rs),
-│  │                      OpenID → JWT exchange, call state machine.
-│  ├─ horo-livekit/       LiveKit signal client: WSS + protobuf, join, publish,
-│  │                      subscribe, simulcast layers, reconnect/resume.
-│  ├─ horo-media/         MediaEngine: str0m peer connections, ICE/TURN, RTP
-│  │                      pacing, jitter buffer, Opus, VP8/H.264, AEC/NS,
-│  │                      noise gate, level meter, stats.
+│  ├─ horo-rtc/           Calls, one crate in modules: `matrixrtc` (membership/
+│  │                      notification from rtc.rs, OpenID → JWT exchange),
+│  │                      `livekit` (signal client: WSS + protobuf, join,
+│  │                      publish, subscribe, simulcast layers, reconnect/
+│  │                      resume), and the media engine behind the `media`
+│  │                      feature: `peer` (str0m peer connections, ICE),
+│  │                      `turn`, `audio` (jitter buffer, Opus, AEC/NS, noise
+│  │                      gate, level meter), later RTP pacing, VP8/H.264,
+│  │                      stats. Started as horo-rtc, horo-livekit and
+│  │                      horo-media; merged once they settled.
 │  ├─ horo-devices/       Per-platform capture/playback: audio I/O, camera,
 │  │                      screen capture, audio session/routing, permissions.
 │  ├─ horo-platform/      Notifications, keychain, file dialogs, opener,
@@ -82,7 +85,7 @@ textures elsewhere.
 
 ## 4. The custom RTC stack in detail
 
-### 4.1 Signalling (`horo-rtc`, `horo-livekit`)
+### 4.1 Signalling (`horo_rtc::matrixrtc`, `horo_rtc::livekit`)
 
 Keep what `rtc.rs` does today, unchanged in behaviour:
 `org.matrix.msc3401.call.member` state with refresh, OpenID token →
@@ -102,7 +105,7 @@ New: a LiveKit client written against the signal protocol.
 - Test against a local `livekit-server --dev` in CI, plus an Element Call
   interop checklist run by hand before each release.
 
-### 4.2 Transport (`horo-media`)
+### 4.2 Transport (`horo_rtc::peer`, `horo_rtc::turn`)
 
 - str0m for ICE-lite-against-SFU, DTLS-SRTP, RTCP, SCTP data channel (LiveKit
   uses data channels for reliable/lossy data packets).
@@ -128,7 +131,7 @@ RTP → jitter buffer → Opus dec (+PLC/FEC) → mix N speakers → resample �
   iOS so we can own `AVAudioSession` (category `playAndRecord`, mode
   `voiceChat`, Bluetooth/route changes, interruptions from phone calls).
 - Voice processing: `sonora` everywhere, on the 48 kHz frames between the
-  devices and the engine (`horo_media::audio::echo`). On iOS the session's
+  devices and the engine (`horo_rtc::audio::echo`). On iOS the session's
   mode must not be `voiceChat`, which would stack Apple's processing on top.
 - Jitter buffer: adaptive, per remote track, with Opus in-band FEC and PLC.
   This is the piece that decides call quality; budget time for it and for
@@ -252,7 +255,7 @@ can't fix, take the §4.6 fallback.
 
 ### Phase 2 — Desktop voice engine (5–6 weeks)
 
-- `horo-livekit` signal client, `horo-media` audio path, TURN client,
+- `horo_rtc::livekit` signal client, `horo_rtc::audio` path, TURN client,
   jitter buffer, echo cancellation (sonora), noise gate, device selection.
 - A headless CLI (`horo-call`) that joins a MatrixRTC call from the terminal:
   the test harness for everything after this.

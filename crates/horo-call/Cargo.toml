@@ -8,8 +8,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-horo-livekit.workspace = true
-horo-media.workspace = true
+horo-rtc = { workspace = true, features = ["media"] }
 horo-devices.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 thiserror.workspace = true
@@ -17,7 +16,6 @@ tracing.workspace = true
 
 # The command-line client: Matrix sign-in and the MatrixRTC membership.
 horo-core.workspace = true
-horo-rtc.workspace = true
 matrix-sdk.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rpassword = "7"

@@ -1,7 +1,7 @@
 # One workspace for every Rust crate in the app.
 #
-# `horo-core` is the Matrix layer and `horo-rtc` the MatrixRTC signalling; both
-# are UI-agnostic. `src-tauri` is the current shell, a thin adapter over them.
+# `horo-core` is the Matrix layer and `horo-rtc` the calls (MatrixRTC, LiveKit,
+# media); both are UI-agnostic. `src-tauri` is the current shell, a thin adapter over them.
 # See docs/gpui-rewrite-plan.md for where this is going.
 [workspace]
 resolver = "3"
@@ -15,10 +15,9 @@ authors = ["horo"]
 
 [workspace.dependencies]
 horo-core = { path = "crates/horo-core" }
-horo-rtc = { path = "crates/horo-rtc" }
-horo-livekit = { path = "crates/horo-livekit" }
+# Without its `media` feature: the Tauri shell only needs the MatrixRTC part.
+horo-rtc = { path = "crates/horo-rtc", default-features = false }
 horo-devices = { path = "crates/horo-devices" }
-horo-media = { path = "crates/horo-media" }
 
 matrix-sdk = { version = "0.18", default-features = false, features = [
   "e2e-encryption",

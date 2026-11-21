@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# A disposable LiveKit with its embedded TURN server on, for horo-media's
-# relayed-call tests (crates/horo-media/tests/call.rs):
+# A disposable LiveKit with its embedded TURN server on, for horo-rtc's
+# relayed-call tests (crates/horo-rtc/tests/call.rs):
 #
 #   eval "$(scripts/test-livekit/start-turn.sh)"
-#   cargo test -p horo-media --test call
+#   cargo test -p horo-rtc --test call
 #
 # It prints the environment those tests read. Alongside start.sh's server:
 # signalling on 7980, TURN/UDP on 3478, TURN/TLS on 443 (what LiveKit

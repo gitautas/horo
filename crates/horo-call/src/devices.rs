@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use horo_devices::{Capture, FRAME, Playback};
-use horo_media::audio::echo::{EchoCanceller, EchoStats, Processing};
+use horo_rtc::audio::echo::{EchoCanceller, EchoStats, Processing};
 
 use crate::{Microphone, Result, Speaker};
 

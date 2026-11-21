@@ -14,7 +14,7 @@ use std::{
 };
 
 use horo_call::{Call, CallEvent, CallOptions, Joined, Network};
-use horo_media::{
+use horo_rtc::{
     PeerConfig,
     audio::{FRAME, SAMPLE_RATE},
 };
@@ -359,7 +359,7 @@ async fn a_session_beyond_resuming_rejoins() {
 /// waits 20 ms plus up to `jitter` (so packets reorder), each with its own
 /// random sequence.
 fn impaired(loss: f64, jitter: Duration, seed: u64) -> CallOptions {
-    use horo_media::Impairment;
+    use horo_rtc::Impairment;
     let network: Network = Arc::new(move |name, _| {
         // Each peer connection its own sequence, stable across runs.
         let salt = name.bytes().fold(seed, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));

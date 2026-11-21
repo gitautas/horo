@@ -10,7 +10,7 @@
 //!
 //! Backends come from cpal (CoreAudio, WASAPI, ALSA). Echo cancellation
 //! isn't done here but in software on the frames, the same on every
-//! platform (`horo_media::audio::echo`).
+//! platform (`horo_rtc::audio::echo`).
 
 use std::{
     sync::{

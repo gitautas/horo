@@ -13,7 +13,7 @@
 use std::time::{Duration, Instant};
 
 use horo_call::{Call, CallEvent, CallOptions, Joined};
-use horo_media::audio::{FRAME, SAMPLE_RATE};
+use horo_rtc::audio::{FRAME, SAMPLE_RATE};
 
 fn power_at(samples: &[f32], hz: f64) -> f64 {
     let w = std::f64::consts::TAU * hz / SAMPLE_RATE as f64;

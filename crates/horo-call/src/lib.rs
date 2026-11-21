@@ -1,8 +1,8 @@
 //! horo's call engine: one participant in a LiveKit room, built from horo's
 //! own pieces.
 //!
-//! [`Call::connect`] joins with `horo-livekit`, opens the two peer
-//! connections LiveKit wants (`horo-media`), publishes a microphone track
+//! [`Call::connect`] joins with `horo_rtc::livekit`, opens the two peer
+//! connections LiveKit wants (`horo_rtc::peer`), publishes a microphone track
 //! and subscribes to everyone else's. What it hands back is UI- and
 //! device-agnostic:
 //!
@@ -27,8 +27,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use horo_livekit::{AddTrack, SignalClient, SignalEvent, Target, proto, proto::ReconnectReason};
-use horo_media::{
+use horo_rtc::livekit::{AddTrack, SignalClient, SignalEvent, Target, proto, proto::ReconnectReason};
+use horo_rtc::{
     IceConnectionState, MediaKind, Mid, Peer, PeerConfig, PeerEvent, TurnServer,
     peer::PATH_TIMEOUT,
     audio::{
@@ -53,11 +53,11 @@ const IDLE: Duration = Duration::from_secs(1);
 #[derive(Debug, thiserror::Error)]
 pub enum CallError {
     #[error("signalling: {0}")]
-    Signal(#[from] horo_livekit::Error),
+    Signal(#[from] horo_rtc::livekit::Error),
     #[error("media: {0}")]
-    Peer(#[from] horo_media::PeerError),
+    Peer(#[from] horo_rtc::PeerError),
     #[error("codec: {0}")]
-    Codec(#[from] horo_media::audio::codec::CodecError),
+    Codec(#[from] horo_rtc::audio::codec::CodecError),
     #[error("devices: {0}")]
     Devices(#[from] horo_devices::DeviceError),
 }
@@ -184,7 +184,7 @@ fn turn_servers(servers: &[proto::IceServer]) -> Vec<TurnServer> {
 
 /// Join from scratch: signalling, both peers, the microphone track offered.
 async fn open_link(url: &str, token: &str, network: &Network, muted: bool) -> Result<(Link, proto::JoinResponse, Vec<TurnServer>)> {
-    let (signal, join, signal_events) = horo_livekit::connect(url, token, true).await?;
+    let (signal, join, signal_events) = horo_rtc::livekit::connect(url, token, true).await?;
     let identity = join.participant.as_ref().map(|p| p.identity.clone()).unwrap_or_default();
     let turn = turn_servers(&join.ice_servers);
     let (publisher, pub_events) = Peer::start(network(&format!("{identity}/pub"), &turn)).await?;
@@ -234,13 +234,13 @@ impl Call {
             sub_ice: IceConnectionState::New,
             ice_down_since: None,
             recovery: None,
-            route: horo_media::peer::default_route_address(),
+            route: horo_rtc::peer::default_route_address(),
             route_checked: Instant::now(),
         };
         engine.joined(&join);
         let task = tokio::spawn(engine.run(packets, commands_rx));
 
-        let mut gate = NoiseGate::new(horo_media::audio::SAMPLE_RATE);
+        let mut gate = NoiseGate::new(horo_rtc::audio::SAMPLE_RATE);
         gate.set_threshold(options.gate_threshold);
         let microphone = Microphone { gate, encoder: Encoder::new()?, rtp: 0, packets: packets_tx, muted: muted.clone(), events: events_tx, echo: None };
         let speaker = Speaker { remotes, frames: Vec::new(), echo: None };
@@ -496,7 +496,7 @@ impl Engine {
         match outcome {
             Ok(()) => {}
             // The server won't resume this session: straight to a fresh join.
-            Err(CallError::Signal(horo_livekit::Error::Left(_) | horo_livekit::Error::Refused { .. })) if !rejoin => {
+            Err(CallError::Signal(horo_rtc::livekit::Error::Left(_) | horo_rtc::livekit::Error::Refused { .. })) if !rejoin => {
                 tracing::info!("{}: the session can't be resumed; rejoining", self.identity);
                 if let Some(recovery) = &mut self.recovery {
                     recovery.rejoin = true;
@@ -516,7 +516,7 @@ impl Engine {
     /// Same session, new path: signalling reconnects as this participant,
     /// both peers gather afresh and restart ICE.
     async fn resume(&mut self, reason: ReconnectReason) -> Result<()> {
-        let (signal, response, signal_events) = horo_livekit::resume(&self.url, &self.token, &self.own_sid, reason, self.ping).await?;
+        let (signal, response, signal_events) = horo_rtc::livekit::resume(&self.url, &self.token, &self.own_sid, reason, self.ping).await?;
         if let Some(response) = response
             && !response.ice_servers.is_empty()
         {
@@ -573,7 +573,7 @@ impl Engine {
             None => {
                 if now.duration_since(self.route_checked) >= ROUTE_CHECK {
                     self.route_checked = now;
-                    let route = horo_media::peer::default_route_address();
+                    let route = horo_rtc::peer::default_route_address();
                     if route != self.route {
                         let why = format!("the network changed ({:?} → {:?})", self.route, route);
                         self.route = route;
