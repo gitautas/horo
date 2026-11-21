@@ -16,24 +16,28 @@ use crate::{
     rooms::{self, View},
     store::{Phase, Store},
     theme::Palette,
-    views::{avatar::monogram, composer::Composer, timeline::Timeline},
+    views::{avatar::monogram, composer::Composer, security::Security, timeline::Timeline, verification},
 };
 
 pub struct Shell {
     store: Entity<Store>,
     /// The open room: which, its timeline and its composer.
     timeline: Option<(String, Entity<Timeline>, Entity<Composer>)>,
+    /// The devices-and-recovery panel, while it's open.
+    security: Option<Entity<Security>>,
 }
 
 impl Shell {
     pub fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Shell {
         cx.observe_in(&store, window, |this, _, window, cx| {
             this.follow_room(window, cx);
+            this.follow_security(window, cx);
             cx.notify()
         })
         .detach();
-        let mut shell = Shell { store, timeline: None };
+        let mut shell = Shell { store, timeline: None, security: None };
         shell.follow_room(window, cx);
+        shell.follow_security(window, cx);
         shell
     }
 
@@ -54,6 +58,17 @@ impl Shell {
         let timeline = cx.new(|cx| Timeline::new(room_id.clone(), &store, cx));
         let composer = cx.new(|cx| Composer::new(room_id, &name, window, cx));
         self.timeline = Some((id, timeline, composer));
+    }
+
+    /// Build the security panel when it opens; drop it when it closes.
+    fn follow_security(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let open = self.store.read(cx).security_open;
+        if open && self.security.is_none() {
+            let store = self.store.clone();
+            self.security = Some(cx.new(|cx| Security::new(store, window, cx)));
+        } else if !open {
+            self.security = None;
+        }
     }
 
     fn rail(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
@@ -254,6 +269,12 @@ impl Shell {
                             .child(div().truncate().text_xs().text_color(palette.text_tertiary).child(user_id.clone())),
                     )
                     .child(
+                        Button::new("security")
+                            .ghost()
+                            .label("security")
+                            .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.set_security_open(true, cx)))),
+                    )
+                    .child(
                         Button::new("sign-out")
                             .ghost()
                             .label("sign out")
@@ -286,6 +307,7 @@ impl Shell {
                     .child(div().text_color(palette.text).font_weight(FontWeight::SEMIBOLD).child(room.name.clone()))
                     .children(room.topic.map(|t| div().flex_1().min_w_0().truncate().text_sm().text_color(palette.text_tertiary).child(t)))
             }))
+            .children(verification::banner(&self.store, palette, cx))
             .child(body)
     }
 }
@@ -301,5 +323,11 @@ impl Render for Shell {
             .child(self.rail(&palette, cx))
             .child(self.room_list(&palette, cx))
             .child(self.room_pane(&palette, cx))
+            .relative()
+            .children(self.security.clone())
+            // Above everything, the security panel included: the other
+            // device's timeout is running, and a dialog hidden behind
+            // another one is a verification that fails.
+            .children(verification::dialog(&self.store, &palette, cx))
     }
 }

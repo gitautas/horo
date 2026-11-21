@@ -9,6 +9,7 @@ pub mod backend;
 pub mod rooms;
 pub mod store;
 pub mod theme;
+pub mod verify;
 pub mod views;
 
 pub use backend::Backend;

@@ -12,9 +12,13 @@ use horo_core::{
     Event,
     dto::{Diff, RoomSummary, SessionInfo, SpaceSummary, SyncState},
     matrix::{auth, rooms},
+    verification,
 };
 
-use crate::backend::Backend;
+use crate::{
+    backend::Backend,
+    verify::{self, Flow},
+};
 
 /// Where sign-in stands.
 #[derive(Debug, Clone)]
@@ -43,6 +47,26 @@ pub struct Store {
     /// The space open in the rail; `None` is home.
     pub space: Option<String>,
     pub room: Option<String>,
+    /// This device's cross-signing trust as the core reports it:
+    /// `verified`, `unverified` or `unknown`.
+    pub device_trust: Option<String>,
+    /// The verification the dialog shows.
+    pub verification: Option<Flow>,
+    /// The last verification action that failed.
+    pub verification_error: Option<SharedString>,
+    /// The devices-and-recovery panel is open.
+    pub security_open: bool,
+}
+
+/// What the user can do to the verification on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyAction {
+    Accept,
+    /// The emoji match.
+    Confirm,
+    /// They don't: a security signal, sent as a mismatch, not a cancel.
+    Mismatch,
+    Cancel,
 }
 
 impl EventEmitter<horo_core::dto::TimelineUpdate> for Store {}
@@ -64,6 +88,10 @@ impl Store {
             sync: None,
             space: None,
             room: None,
+            device_trust: None,
+            verification: None,
+            verification_error: None,
+            security_open: false,
         };
         store.pump_events(cx);
         store.restore(cx);
@@ -97,6 +125,15 @@ impl Store {
                 self.refresh_spaces(cx);
             }
             Event::SyncStatus(status) => self.sync = Some(status.state),
+            Event::VerificationState(state) => self.device_trust = Some(state),
+            Event::VerificationRequest(request) => {
+                if !verify::is_live(&self.verification) {
+                    self.verification_error = None;
+                }
+                verify::offer(&mut self.verification, request);
+            }
+            Event::VerificationRequestUpdate(request) => verify::update_request(&mut self.verification, request),
+            Event::SasUpdate(sas) => verify::update_sas(&mut self.verification, sas),
             // For whichever timeline view has that room open.
             Event::Timeline(update) => {
                 cx.emit(update);
@@ -155,6 +192,10 @@ impl Store {
         self.spaces.clear();
         self.room = None;
         self.space = None;
+        self.device_trust = None;
+        self.verification = None;
+        self.verification_error = None;
+        self.security_open = false;
         self.set_phase(Phase::SignedOut, cx);
         cx.spawn(async move |this, cx| {
             if let Ok(Err(e)) = task.await {
@@ -261,6 +302,79 @@ impl Store {
     pub fn open_room(&mut self, room: String, cx: &mut Context<Self>) {
         self.room = Some(room);
         cx.notify();
+    }
+
+    pub fn set_security_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.security_open = open;
+        cx.notify();
+    }
+
+    /// The user closes the dialog (a finished flow, or "later" on the banner).
+    pub fn close_verification(&mut self, cx: &mut Context<Self>) {
+        self.verification = None;
+        self.verification_error = None;
+        cx.notify();
+    }
+
+    /// Accept, confirm, deny or cancel the verification on screen.
+    pub fn act_on_verification(&mut self, action: VerifyAction, cx: &mut Context<Self>) {
+        let Some(flow) = &self.verification else { return };
+        let (user, flow_id) = (flow.request.other_user_id.clone(), flow.request.flow_id.clone());
+        self.verification_error = None;
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let state = backend.state.clone();
+            async move {
+                let core = state.core().await?;
+                match action {
+                    VerifyAction::Accept => verification::accept(&core, &user, &flow_id).await,
+                    VerifyAction::Confirm => verification::confirm(&core, &user, &flow_id).await,
+                    VerifyAction::Mismatch => verification::mismatch(&core, &user, &flow_id).await,
+                    VerifyAction::Cancel => verification::cancel(&core, &user, &flow_id).await,
+                }
+            }
+        });
+        // "later" on an incoming request: decline it and get out of the way.
+        if action == VerifyAction::Cancel {
+            self.verification = None;
+        }
+        self.report_verification(task, cx);
+        cx.notify();
+    }
+
+    /// Ask to verify this device: `None` asks our other devices, `Some`
+    /// one of them in particular. The request comes back as an event and
+    /// opens the dialog.
+    pub fn start_verification(&mut self, device_id: Option<String>, cx: &mut Context<Self>) {
+        self.verification_error = None;
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let (host, state) = (backend.host.clone(), backend.state.clone());
+            async move {
+                let core = state.core().await?;
+                match device_id {
+                    Some(id) => verification::verify_device(&host, &core, &id).await,
+                    None => verification::request(&host, &core, None).await,
+                }
+            }
+        });
+        self.report_verification(task, cx);
+    }
+
+    fn report_verification(&mut self, task: impl std::future::Future<Output = anyhow::Result<horo_core::Result<()>>> + 'static, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let error = match task.await {
+                Ok(Ok(())) => return,
+                Ok(Err(e)) => e.to_string(),
+                Err(e) => e.to_string(),
+            };
+            tracing::warn!("verification: {error}");
+            let _ = this.update(cx, |store, cx| {
+                store.verification_error = Some(error.into());
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn current_space(&self) -> Option<&SpaceSummary> {
