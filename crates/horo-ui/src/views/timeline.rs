@@ -299,8 +299,8 @@ impl Timeline {
         Some(bar.into_any_element())
     }
 
-    fn open_profile(&mut self, user_id: String, at: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
-        self.store.update(cx, |s, cx| s.open_profile(user_id, at, cx));
+    fn open_profile(&mut self, user_id: String, at: gpui::Point<gpui::Pixels>, avatar: Option<String>, cx: &mut Context<Self>) {
+        self.store.update(cx, |s, cx| s.open_profile(user_id, at, avatar, cx));
     }
 
     /// Tell the store who's in view, so their presence is polled. The
@@ -673,7 +673,7 @@ impl Timeline {
                     h_flex()
                         .gap_2()
                         .child({
-                            let sender = event.sender.clone();
+                            let (sender, hint) = (event.sender.clone(), event.sender_avatar.clone());
                             div()
                                 .id(SharedString::from(format!("name/{}", event_key(event))))
                                 .font_weight(FontWeight::SEMIBOLD)
@@ -681,7 +681,7 @@ impl Timeline {
                                 .cursor_pointer()
                                 .hover(|d| d.underline())
                                 .child(name.clone())
-                                .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| this.open_profile(sender.clone(), click.position(), cx)))
+                                .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| this.open_profile(sender.clone(), click.position(), hint.clone(), cx)))
                         })
                         .child(div().text_xs().text_color(palette.text_tertiary).child(time_label(event.timestamp))),
                 )
@@ -701,13 +701,13 @@ impl Timeline {
             };
             let picture = avatar(&event.sender, &name, event.sender_avatar.as_deref(), px(36.), false, palette.text_on_accent, cx);
             let face = with_presence(picture, shown, palette.app, palette);
-            let sender = event.sender.clone();
+            let (sender, hint) = (event.sender.clone(), event.sender_avatar.clone());
             div()
                 .id(SharedString::from(format!("face/{}", event_key(event))))
                 .flex_none()
                 .cursor_pointer()
                 .child(face)
-                .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| this.open_profile(sender.clone(), click.position(), cx)))
+                .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| this.open_profile(sender.clone(), click.position(), hint.clone(), cx)))
                 .into_any_element()
         };
 

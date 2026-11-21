@@ -98,6 +98,9 @@ pub struct Store {
 pub struct ProfileTarget {
     pub user_id: String,
     pub at: Point<Pixels>,
+    /// The face that was clicked (often a room's own avatar for them),
+    /// shown when their global profile has none.
+    pub avatar_hint: Option<String>,
 }
 
 /// The least time between two sounds of a kind.
@@ -510,8 +513,8 @@ impl Store {
         .detach();
     }
 
-    pub fn open_profile(&mut self, user_id: String, at: Point<Pixels>, cx: &mut Context<Self>) {
-        self.profile_card = Some(ProfileTarget { user_id, at });
+    pub fn open_profile(&mut self, user_id: String, at: Point<Pixels>, avatar_hint: Option<String>, cx: &mut Context<Self>) {
+        self.profile_card = Some(ProfileTarget { user_id, at, avatar_hint });
         self.watch_presence(cx);
         cx.notify();
     }

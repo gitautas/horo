@@ -148,7 +148,8 @@ impl ProfileCard {
             let store = self.store.read(cx);
             presence::shown(store.presence.get(&user), store.presence_supported)
         };
-        let picture = avatar(&user, name, profile.as_ref().and_then(|p| p.avatar_url.as_deref()), px(FACE), true, palette.text_on_accent, cx);
+        let mxc = profile.as_ref().and_then(|p| p.avatar_url.clone()).or_else(|| self.target.avatar_hint.clone());
+        let picture = avatar(&user, name, mxc.as_deref(), px(FACE), true, palette.text_on_accent, cx);
         let face = div()
             .relative()
             .p(px(3.))
