@@ -14,30 +14,30 @@ use matrix_sdk::ruma::OwnedRoomId;
 
 use crate::{
     rooms::{self, View},
-    store::{Phase, Store},
+    store::{Phase, SettingsSection, Store},
     theme::Palette,
-    views::{avatar::avatar, composer::Composer, security::Security, timeline::{Timeline, TimelineAction}, verification, lightbox},
+    views::{avatar::avatar, composer::Composer, settings::Settings, timeline::{Timeline, TimelineAction}, verification, lightbox},
 };
 
 pub struct Shell {
     store: Entity<Store>,
     /// The open room: which, its timeline and its composer.
     timeline: Option<(String, Entity<Timeline>, Entity<Composer>)>,
-    /// The devices-and-recovery panel, while it's open.
-    security: Option<Entity<Security>>,
+    /// Settings, while they're open.
+    settings: Option<Entity<Settings>>,
 }
 
 impl Shell {
     pub fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Shell {
         cx.observe_in(&store, window, |this, _, window, cx| {
             this.follow_room(window, cx);
-            this.follow_security(window, cx);
+            this.follow_settings(window, cx);
             cx.notify()
         })
         .detach();
-        let mut shell = Shell { store, timeline: None, security: None };
+        let mut shell = Shell { store, timeline: None, settings: None };
         shell.follow_room(window, cx);
-        shell.follow_security(window, cx);
+        shell.follow_settings(window, cx);
         shell
     }
 
@@ -68,14 +68,14 @@ impl Shell {
         self.timeline = Some((id, timeline, composer));
     }
 
-    /// Build the security panel when it opens; drop it when it closes.
-    fn follow_security(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let open = self.store.read(cx).security_open;
-        if open && self.security.is_none() {
+    /// Build settings when they open; drop them when they close.
+    fn follow_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let open = self.store.read(cx).settings.is_some();
+        if open && self.settings.is_none() {
             let store = self.store.clone();
-            self.security = Some(cx.new(|cx| Security::new(store, window, cx)));
+            self.settings = Some(cx.new(|cx| Settings::new(store, window, cx)));
         } else if !open {
-            self.security = None;
+            self.settings = None;
         }
     }
 
@@ -283,16 +283,10 @@ impl Shell {
                             .child(div().truncate().text_xs().text_color(palette.text_tertiary).child(user_id.clone())),
                     )
                     .child(
-                        Button::new("security")
+                        Button::new("settings")
                             .ghost()
-                            .label("security")
-                            .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.set_security_open(true, cx)))),
-                    )
-                    .child(
-                        Button::new("sign-out")
-                            .ghost()
-                            .label("sign out")
-                            .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.sign_out(cx)))),
+                            .label("settings")
+                            .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.show_settings(Some(SettingsSection::Account), cx)))),
                     ),
             )
     }
@@ -338,7 +332,7 @@ impl Render for Shell {
             .child(self.room_list(&palette, cx))
             .child(self.room_pane(&palette, cx))
             .relative()
-            .children(self.security.clone())
+            .children(self.settings.clone())
             .children(lightbox::lightbox(&self.store, &palette, cx))
             // Above everything, the security panel included: the other
             // device's timeout is running, and a dialog hidden behind

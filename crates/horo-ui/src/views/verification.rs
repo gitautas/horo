@@ -16,7 +16,7 @@ use gpui_component::{
 use horo_core::verification::RequestState;
 
 use crate::{
-    store::{Store, VerifyAction},
+    store::{SettingsSection, Store, VerifyAction},
     theme::Palette,
     verify::Stage,
 };
@@ -144,7 +144,7 @@ pub fn banner(store: &Entity<Store>, palette: &Palette, cx: &App) -> Option<AnyE
             ],
         ));
     }
-    if state.device_trust.as_deref() == Some("unverified") && state.verification.is_none() && !state.security_open {
+    if state.device_trust.as_deref() == Some("unverified") && state.verification.is_none() && state.settings.is_none() {
         let open = store.clone();
         return Some(strip(
             palette,
@@ -154,7 +154,7 @@ pub fn banner(store: &Entity<Store>, palette: &Palette, cx: &App) -> Option<AnyE
                 Button::new("banner-security")
                     .primary()
                     .label("set it up")
-                    .on_click(move |_, _, cx| open.update(cx, |s, cx| s.set_security_open(true, cx)))
+                    .on_click(move |_, _, cx| open.update(cx, |s, cx| s.show_settings(Some(SettingsSection::Security), cx)))
                     .into_any_element(),
             ],
         ));

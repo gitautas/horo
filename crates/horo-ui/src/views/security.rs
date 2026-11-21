@@ -1,6 +1,6 @@
-//! This account's devices and its key backup, as the settings' security
-//! pane in SettingsView.tsx has them: verify a device, turn backup on, or
-//! restore from a recovery key. A panel of its own until settings exist.
+//! Settings' security section, as SettingsView.tsx has it: this account's
+//! devices and its key backup. Verify a device, turn backup on, or restore
+//! from a recovery key.
 //!
 //! A new device can't read older encrypted messages until it either gets
 //! verified by one that can, or opens the server's key backup with the
@@ -8,8 +8,8 @@
 //! timelines to decrypt again.
 
 use gpui::{
-    AnyElement, AppContext, ClipboardItem, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
+    AnyElement, AppContext, ClipboardItem, Context, Entity, FontWeight, Hsla, IntoElement, ParentElement, Render, SharedString,
+    Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     Disableable,
@@ -20,7 +20,7 @@ use gpui_component::{
 };
 use horo_core::verification::{self, DeviceInfo, RecoveryState, RecoveryStatus};
 
-use crate::{backend::Backend, store::Store, theme::Palette, verify::Stage, views::verification::scrim};
+use crate::{backend::Backend, store::Store, theme::Palette, verify::Stage};
 
 pub struct Security {
     store: Entity<Store>,
@@ -309,28 +309,7 @@ impl Render for Security {
         };
         let verification_error = self.store.read(cx).verification_error.clone();
 
-        let header = h_flex()
-            .px_6()
-            .pt_6()
-            .pb_2()
-            .child(
-                div().flex_1().font_family(palette.heading_font.clone()).text_size(px(28.)).font_weight(FontWeight::SEMIBOLD).child("security"),
-            )
-            .child(
-                Button::new("security-close")
-                    .ghost()
-                    .label("close")
-                    .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.set_security_open(false, cx)))),
-            );
-        // The header stays put while the rest scrolls: a long device list
-        // used to carry the close button away with it.
-        let body = v_flex()
-            .id("security-body")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .px_6()
-            .pb_6()
+        v_flex()
             .gap_4()
             .child(heading("your devices"))
             .child(div().text_sm().text_color(palette.text_secondary).child(
@@ -341,19 +320,6 @@ impl Render for Security {
             .child(heading("key backup"))
             .child(backup)
             .children(self.notice.clone().map(|n| div().text_sm().text_color(palette.online).child(n)))
-            .children(self.error.clone().map(|e| div().text_sm().text_color(palette.danger).child(e)));
-
-        scrim(&palette).child(
-            v_flex()
-                .w(px(560.))
-                .max_h(px(640.))
-                .rounded(px(20.))
-                .bg(palette.card)
-                .border_1()
-                .border_color(palette.border_strong)
-                .shadow_lg()
-                .child(header)
-                .child(body),
-        )
+            .children(self.error.clone().map(|e| div().text_sm().text_color(palette.danger).child(e)))
     }
 }

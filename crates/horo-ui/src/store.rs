@@ -54,8 +54,8 @@ pub struct Store {
     pub verification: Option<Flow>,
     /// The last verification action that failed.
     pub verification_error: Option<SharedString>,
-    /// The devices-and-recovery panel is open.
-    pub security_open: bool,
+    /// Settings, open at this section.
+    pub settings: Option<SettingsSection>,
     /// The picture open full-size over everything.
     pub lightbox: Option<Lightbox>,
 }
@@ -70,6 +70,26 @@ pub struct Lightbox {
     pub width: Option<u64>,
     pub height: Option<u64>,
     pub name: String,
+}
+
+/// Settings' sections, in the order the nav lists them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsSection {
+    Account,
+    Security,
+    About,
+}
+
+impl SettingsSection {
+    pub const ALL: [SettingsSection; 3] = [SettingsSection::Account, SettingsSection::Security, SettingsSection::About];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SettingsSection::Account => "account",
+            SettingsSection::Security => "security",
+            SettingsSection::About => "about",
+        }
+    }
 }
 
 /// What the user can do to the verification on screen.
@@ -105,7 +125,7 @@ impl Store {
             device_trust: None,
             verification: None,
             verification_error: None,
-            security_open: false,
+            settings: None,
             lightbox: None,
         };
         store.pump_events(cx);
@@ -196,11 +216,12 @@ impl Store {
         .detach();
     }
 
-    pub fn sign_out(&mut self, cx: &mut Context<Self>) {
+    /// Sign out; `wipe` also deletes this device's encrypted store.
+    pub fn sign_out(&mut self, wipe: bool, cx: &mut Context<Self>) {
         let backend = Backend::global(cx);
         let task = backend.run({
             let (state, dir) = (backend.state.clone(), backend.data_dir.clone());
-            async move { auth::logout(&state, &dir, false).await }
+            async move { auth::logout(&state, &dir, wipe).await }
         });
         self.rooms.clear();
         self.rooms_seq = None;
@@ -210,7 +231,7 @@ impl Store {
         self.device_trust = None;
         self.verification = None;
         self.verification_error = None;
-        self.security_open = false;
+        self.settings = None;
         self.lightbox = None;
         self.set_phase(Phase::SignedOut, cx);
         cx.spawn(async move |this, cx| {
@@ -330,8 +351,9 @@ impl Store {
         cx.notify();
     }
 
-    pub fn set_security_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.security_open = open;
+    /// Open settings at `section`, or close them with `None`.
+    pub fn show_settings(&mut self, section: Option<SettingsSection>, cx: &mut Context<Self>) {
+        self.settings = section;
         cx.notify();
     }
 
