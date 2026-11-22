@@ -1050,7 +1050,7 @@ impl Shell {
 }
 
 impl Render for Shell {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = cx.global::<Palette>().clone();
         h_flex()
             .id("shell")
@@ -1081,7 +1081,7 @@ impl Render for Shell {
             })
             .relative()
             .children(self.settings.clone())
-            .children(lightbox::lightbox(&self.store, &palette, cx))
+            .children(lightbox::lightbox(&self.store, &palette, window, cx))
             .children(voice::ringing(&self.store, &palette, cx))
             .children(self.explore.clone())
             .children(self.create.clone())
