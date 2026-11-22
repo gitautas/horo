@@ -47,6 +47,12 @@ const PRESENCE_FOR: usize = 100;
 /// drawn (and its picture fetched) whether it's scrolled to or not.
 const PAGE: usize = 100;
 
+/// The pencil was clicked: the shell opens the room's settings over the
+/// window (the panel is too narrow to hold them).
+pub struct OpenRoomSettings;
+
+impl gpui::EventEmitter<OpenRoomSettings> for RoomInfo {}
+
 pub struct RoomInfo {
     store: Entity<Store>,
     pub room_id: String,
@@ -491,7 +497,31 @@ impl Render for RoomInfo {
                     .children(more),
             )
             // Tucked in the corner: things you set once and forget.
-            .child(div().absolute().top(px(14.)).right(px(14.)).child(mute_button))
+            .child(
+                h_flex()
+                    .absolute()
+                    .top(px(14.))
+                    .right(px(14.))
+                    .gap(space(6.))
+                    .child(mute_button)
+                    .child(
+                        div()
+                            .id("info-settings")
+                            .size(px(28.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .cursor_pointer()
+                            .bg(palette.card)
+                            .hover(|d| d.bg(palette.raised))
+                            .border_1()
+                            .border_color(palette.border_subtle)
+                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("room settings").build(window, cx))
+                            .child(icon("icons/pencil.svg").size(px(13.)).text_color(palette.text_secondary))
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(OpenRoomSettings))),
+                    ),
+            )
             .into_any_element()
     }
 }

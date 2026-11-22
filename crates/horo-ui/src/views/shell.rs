@@ -21,7 +21,7 @@ use crate::{
     rooms::{self, Filter, View},
     store::{Phase, SettingsSection, Store},
     theme::{Palette, corner, heading, label, space, text},
-    views::{avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target}, room_info::RoomInfo, explore::{Explore, Closed}, create_room::CreateRoom,
+    views::{avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target}, room_info::{OpenRoomSettings, RoomInfo}, room_settings::RoomSettings, explore::{Explore, Closed}, create_room::CreateRoom,
         settings::Settings, timeline::{Timeline, TimelineAction}, verification, lightbox, voice},
 };
 
@@ -34,6 +34,7 @@ pub struct Shell {
     /// Explore spaces, and make-or-join a room, while open.
     explore: Option<Entity<Explore>>,
     create: Option<Entity<CreateRoom>>,
+    room_settings: Option<Entity<RoomSettings>>,
     /// Settings, while they're open.
     settings: Option<Entity<Settings>>,
     /// The profile card, while one is open.
@@ -60,7 +61,7 @@ impl Shell {
         focus.focus(window, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("find a room or friend~"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false };
+        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false };
         shell.follow_room(window, cx);
         shell.follow_settings(window, cx);
         shell
@@ -95,7 +96,13 @@ impl Shell {
         if self.info.as_ref().is_none_or(|info| info.read(cx).room_id != id) {
             let store = self.store.clone();
             let room_id = id.clone();
-            self.info = Some(cx.new(|cx| RoomInfo::new(store, room_id, cx)));
+            let info = cx.new(|cx| RoomInfo::new(store, room_id, cx));
+            cx.subscribe_in(&info, window, |this, info, _: &OpenRoomSettings, window, cx| {
+                let room_id = info.read(cx).room_id.clone();
+                this.open_room_settings(room_id, window, cx);
+            })
+            .detach();
+            self.info = Some(info);
         }
         let Ok(room_id) = OwnedRoomId::try_from(id.as_str()) else { return };
         self.store.update(cx, |s, cx| s.load_packs(&id, cx));
@@ -150,6 +157,18 @@ impl Shell {
         })
         .detach();
         self.explore = Some(explore);
+        cx.notify();
+    }
+
+    fn open_room_settings(&mut self, room_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        let settings = cx.new(|cx| RoomSettings::new(store, room_id, window, cx));
+        cx.subscribe(&settings, |this, _, _: &Closed, cx| {
+            this.room_settings = None;
+            cx.notify();
+        })
+        .detach();
+        self.room_settings = Some(settings);
         cx.notify();
     }
 
@@ -795,6 +814,7 @@ impl Render for Shell {
             .children(voice::ringing(&self.store, &palette, cx))
             .children(self.explore.clone())
             .children(self.create.clone())
+            .children(self.room_settings.clone())
             .children(self.profile.clone())
             // Above everything, the security panel included: the other
             // device's timeout is running, and a dialog hidden behind

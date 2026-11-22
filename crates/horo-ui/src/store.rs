@@ -524,6 +524,16 @@ impl Store {
         cx.notify();
     }
 
+    /// Stop showing `room_id` (it was just left).
+    pub fn close_room(&mut self, room_id: &str, cx: &mut Context<Self>) {
+        if self.room.as_deref() == Some(room_id) {
+            self.room = None;
+            self.thread = None;
+            self.thread_preview = None;
+            cx.notify();
+        }
+    }
+
     /// Show a thread of the open room in place of its timeline, or (`None`)
     /// go back to the room.
     pub fn open_thread(&mut self, root: Option<String>, cx: &mut Context<Self>) {

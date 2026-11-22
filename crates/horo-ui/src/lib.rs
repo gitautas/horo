@@ -49,7 +49,7 @@ macro_rules! own_icons {
 const OWN_ICONS: &[(&str, &[u8])] = own_icons![
     "phone", "phone-off", "phone-incoming", "phone-call", "mic-off", "headphones", "compass", "shield-check", "bell-off",
     "video", "lock", "funnel", "circle-plus", "smile", "send", "shield-alert", "badge-check", "badge-question-mark", "lock-open",
-    "hand", "cat", "hamburger", "plane", "trophy", "lightbulb", "flag", "search", "orbit", "users", "sticker", "messages-square",
+    "hand", "cat", "hamburger", "plane", "trophy", "lightbulb", "flag", "search", "orbit", "users", "sticker", "messages-square", "pencil",
 ];
 
 /// The horo wordmark, drawn in the rail.

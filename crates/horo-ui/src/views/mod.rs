@@ -12,6 +12,7 @@ pub mod login;
 pub mod modal;
 pub mod profile;
 pub mod room_info;
+pub mod room_settings;
 pub mod shell;
 pub mod security;
 pub mod settings;
