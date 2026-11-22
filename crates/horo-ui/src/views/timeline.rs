@@ -268,6 +268,37 @@ fn open_player(_: &std::path::Path, _: bool) -> PlayState {
     PlayState::Failed("can't play it here on this system".into())
 }
 
+/// How many bars a waveform is drawn with, at most.
+const WAVE_BARS: usize = 48;
+
+/// A voice message's waveform (MSC3246: values 0 to 1024) as `WAVE_BARS`
+/// rounded bars, each the loudest of the samples it covers; played up to
+/// `played` (0 to 1) in the accent.
+fn wave_heights(samples: &[u16], bars: usize) -> Vec<f32> {
+    if samples.is_empty() || bars == 0 {
+        return Vec::new();
+    }
+    let bars = bars.min(samples.len());
+    (0..bars)
+        .map(|i| {
+            let (start, end) = (i * samples.len() / bars, ((i + 1) * samples.len() / bars).max(i * samples.len() / bars + 1));
+            let loudest = samples[start..end].iter().copied().max().unwrap_or(0);
+            (f32::from(loudest.min(1024)) / 1024.).max(0.08)
+        })
+        .collect()
+}
+
+fn wave(samples: &[u16], played: f32, palette: &Palette) -> AnyElement {
+    let heights = wave_heights(samples, WAVE_BARS);
+    let count = heights.len().max(1) as f32;
+    let mut row = h_flex().w_full().h(px(22.)).items_center().justify_between();
+    for (i, height) in heights.into_iter().enumerate() {
+        let lit = (i as f32 + 0.5) / count <= played;
+        row = row.child(div().w(px(2.5)).h(px(22. * height)).rounded_full().bg(if lit { palette.accent } else { palette.border_strong }));
+    }
+    row.into_any_element()
+}
+
 fn range_after(end: usize, len: usize) -> bool {
     end > 0 && end <= len
 }
@@ -740,7 +771,7 @@ impl Timeline {
 
     /// Play/pause, a bar to see and seek with, the time, and (for video)
     /// open in player and close.
-    fn controls(&mut self, duration_ms: Option<u64>, video: bool, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+    fn controls(&mut self, duration_ms: Option<u64>, waveform: Option<&[u16]>, video: bool, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let Some(playing) = self.playing.as_mut() else { return div().into_any_element() };
         let path = playing.path.clone();
         let bar = playing.bar.clone();
@@ -774,11 +805,14 @@ impl Timeline {
             .relative()
             .flex_1()
             .min_w(px(60.))
-            .h(px(14.))
+            .h(px(if waveform.is_some() { 24. } else { 14. }))
             .flex()
             .items_center()
             .cursor_pointer()
-            .child(div().w_full().h(px(4.)).rounded_full().bg(palette.inset).child(div().h_full().w(gpui::relative(fraction)).rounded_full().bg(palette.accent)))
+            .child(match waveform {
+                Some(samples) => wave(samples, fraction, palette),
+                None => div().w_full().h(px(4.)).rounded_full().bg(palette.inset).child(div().h_full().w(gpui::relative(fraction)).rounded_full().bg(palette.accent)).into_any_element(),
+            })
             // Where the bar was drawn, so a press on it knows how far along.
             .child(gpui::canvas(move |bounds, _, _| record.set(Some(bounds)), |_, _, _, _| {}).absolute().inset_0())
             .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
@@ -834,7 +868,7 @@ impl Timeline {
             };
             #[cfg(not(target_os = "macos"))]
             let picture: Option<AnyElement> = None;
-            let controls = self.controls(media.duration_ms, true, palette, cx);
+            let controls = self.controls(media.duration_ms, None, true, palette, cx);
             // Wide enough for the controls; a narrow video sits centred.
             let wide = w.max(300.);
             return v_flex()
@@ -895,9 +929,10 @@ impl Timeline {
     fn audio(&mut self, event: &EventItemDto, body: &str, media: &MediaInfoDto, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let glyph = icon(if media.is_voice { "icons/mic.svg" } else { "icons/music.svg" }).flex_none().size(px(16.)).text_color(palette.accent_secondary);
         let middle = if self.is_playing(event) {
-            self.controls(media.duration_ms, false, palette, cx)
+            self.controls(media.duration_ms, media.waveform.as_deref().filter(|w| !w.is_empty()), false, palette, cx)
         } else {
             let length = media.duration_ms;
+            let waveform = media.waveform.clone().filter(|w| !w.is_empty());
             let (event, body, media) = (event.clone(), body.to_owned(), media.clone());
             h_flex()
                 .w_full()
@@ -916,7 +951,10 @@ impl Timeline {
                         .child(icon("icons/play.svg").size(px(15.)).text_color(palette.text))
                         .on_click(cx.listener(move |this, _, _, cx| this.start_media(&event, &body, &media, false, cx))),
                 )
-                .child(div().flex_1().min_w(px(60.)).h(px(4.)).rounded_full().bg(palette.inset))
+                .child(match waveform {
+                    Some(samples) => div().flex_1().min_w(px(60.)).h(px(24.)).flex().items_center().child(wave(&samples, 0., palette)).into_any_element(),
+                    None => div().flex_1().min_w(px(60.)).h(px(4.)).rounded_full().bg(palette.inset).into_any_element(),
+                })
                 .children(length.map(|ms| {
                     div().flex_none().font_family(palette.mono_font.clone()).text_size(text(10.5)).text_color(palette.text_tertiary).child(crate::views::content::duration(ms))
                 }))
@@ -956,8 +994,7 @@ impl Timeline {
             ContentDto::Sticker { body, media } => content::picture(&id, body, media, true, &store, palette, cx),
             ContentDto::Video { body, media } => self.video(event, body, media, palette, cx),
             ContentDto::Audio { body, media } => {
-                let name = if media.is_voice { "voice message" } else { body.as_str() };
-                self.audio(event, name, media, palette, cx)
+                self.audio(event, body, media, palette, cx)
             }
             ContentDto::File { body, media } => content::card(&id, "📎", body, media, Open::Save, palette, cx),
             content => {
@@ -1212,4 +1249,17 @@ fn reaction(r: &ReactionDto, palette: &Palette, cx: &mut App) -> AnyElement {
         .child(key)
         .child(div().font_weight(FontWeight::BOLD).child(r.count.to_string()))
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wave_heights;
+
+    #[test]
+    fn waveforms_are_squeezed_to_their_loudest() {
+        assert_eq!(wave_heights(&[0, 1024, 512, 256], 2), vec![1.0, 0.5]);
+        assert_eq!(wave_heights(&[1024, 0], 8), vec![1.0, 0.08]);
+        assert!(wave_heights(&[], 8).is_empty());
+        assert_eq!(wave_heights(&vec![2048; 1000], 48).len(), 48);
+    }
 }
