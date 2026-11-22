@@ -1052,6 +1052,16 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = cx.global::<Palette>().clone();
+        // Closing settings or a dialog drops the element that had the
+        // keyboard, and with nothing focused ⌘, (or any action) has no path
+        // to the shell's handlers. Take it back: the room's composer, so
+        // typing just works, or the shell itself.
+        if window.focused(cx).is_none() {
+            match &self.timeline {
+                Some((_, _, composer)) => composer.update(cx, |c, cx| c.focus(window, cx)),
+                None => self.focus.focus(window, cx),
+            }
+        }
         h_flex()
             .id("shell")
             .track_focus(&self.focus)

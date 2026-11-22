@@ -168,6 +168,11 @@ impl Composer {
         .detach();
     }
 
+    /// Put the caret in the box.
+    pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |state, cx| state.focus(window, cx));
+    }
+
     /// Reply to, or edit, what the timeline says.
     pub fn take(&mut self, action: &TimelineAction, window: &mut Window, cx: &mut Context<Self>) {
         match action.clone() {

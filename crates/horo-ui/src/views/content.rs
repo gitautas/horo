@@ -239,16 +239,11 @@ pub fn picture(id: &str, body: &str, media: &MediaInfoDto, sticker: bool, store:
         .into_any_element()
 }
 
-/// Something to do in place of the system's player.
-pub type PlayHere = std::rc::Rc<dyn Fn(&mut App)>;
-
 /// What a card's click does.
 #[derive(Clone)]
 pub enum Open {
     /// Play it in the system's player (video, audio).
     Play,
-    /// Play it in the window (a video in the timeline).
-    PlayHere(PlayHere),
     /// Ask where, then save it.
     Save,
 }
@@ -265,7 +260,7 @@ pub fn card(id: &str, glyph: &str, body: &str, media: &MediaInfoDto, open: Open,
         });
     let details = [media.duration_ms.map(duration), media.size.map(bytes)].into_iter().flatten().collect::<Vec<_>>().join(" · ");
     let action = match open {
-        Open::Play | Open::PlayHere(_) => "play",
+        Open::Play => "play",
         Open::Save => "save",
     };
     let (mxc, name, mime) = (media.mxc.clone(), body.to_owned(), media.mimetype.clone());
@@ -304,7 +299,6 @@ pub fn card(id: &str, glyph: &str, body: &str, media: &MediaInfoDto, open: Open,
         .on_click(move |_, _, cx| {
             let Some(mxc) = mxc.clone() else { return };
             match &open {
-                Open::PlayHere(play_here) => play_here(cx),
                 Open::Play => play(mxc, name.clone(), mime.clone(), cx),
                 Open::Save => save(mxc, name.clone(), cx),
             }
@@ -335,6 +329,10 @@ pub fn download_temp(mxc: String, name: &str, mime: Option<&str>, cx: &mut App) 
 }
 
 /// Fetch it into a temporary file and hand it to the system's player.
+pub fn play_externally(mxc: String, name: String, mime: Option<String>, cx: &mut App) {
+    play(mxc, name, mime, cx)
+}
+
 fn play(mxc: String, name: String, mime: Option<String>, cx: &mut App) {
     let download = download_temp(mxc, &name, mime.as_deref(), cx);
     cx.spawn(async move |cx| match download.await {
@@ -389,7 +387,7 @@ fn safe_name(name: &str, mime: Option<&str>) -> String {
     format!("{base}{extension}")
 }
 
-fn duration(ms: u64) -> String {
+pub fn duration(ms: u64) -> String {
     let s = ms / 1000;
     format!("{}:{:02}", s / 60, s % 60)
 }

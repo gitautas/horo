@@ -65,19 +65,22 @@ pub struct Timeline {
     notice: Option<SharedString>,
     /// The emoji picker, open for reacting to a message: which, where.
     picker: Option<(String, gpui::Point<gpui::Pixels>, Entity<EmojiPicker>)>,
-    /// The video playing in place of its card (one at a time).
-    video: Option<InlineVideo>,
+    /// The video or sound playing in its message (one at a time).
+    playing: Option<InlineMedia>,
 }
 
-/// A video played inside its message: fetched to a file, then played.
-struct InlineVideo {
+/// A video or a sound played inside its message: fetched to a file, then
+/// played.
+struct InlineMedia {
     event_id: String,
-    /// The fetched file, for "open in QuickTime".
+    /// The fetched file, for "open in player".
     path: Option<std::path::PathBuf>,
-    state: VideoState,
+    state: PlayState,
+    /// Where the progress bar was last drawn, for a press on it to seek.
+    bar: Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
 }
 
-enum VideoState {
+enum PlayState {
     Loading,
     #[cfg(target_os = "macos")]
     Playing(crate::video::VideoPlayer),
@@ -127,7 +130,7 @@ impl Timeline {
             error: None,
             marking_read: false,
             confirm_delete: None,
-            notice: None, picker: None, video: None };
+            notice: None, picker: None, playing: None };
 
         let backend = Backend::global(cx);
         let task = backend.run({
@@ -253,16 +256,16 @@ impl Timeline {
 }
 
 #[cfg(target_os = "macos")]
-fn open_player(path: &std::path::Path) -> VideoState {
-    match crate::video::VideoPlayer::open(path) {
-        Some(player) => VideoState::Playing(player),
-        None => VideoState::Failed("couldn't play it here".into()),
+fn open_player(path: &std::path::Path, video: bool) -> PlayState {
+    match crate::video::VideoPlayer::open(path, video) {
+        Some(player) => PlayState::Playing(player),
+        None => PlayState::Failed("couldn't play it here".into()),
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-fn open_player(_: &std::path::Path) -> VideoState {
-    VideoState::Failed("can't play video here on this system".into())
+fn open_player(_: &std::path::Path, _: bool) -> PlayState {
+    PlayState::Failed("can't play it here on this system".into())
 }
 
 fn range_after(end: usize, len: usize) -> bool {
@@ -510,9 +513,9 @@ fn reply_preview(content: &ContentDto) -> String {
 impl Render for Timeline {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = Rc::new(cx.global::<Palette>().clone());
-        // A playing video wants its next frame drawn.
+        // Something playing wants its next frame (or time) drawn.
         #[cfg(target_os = "macos")]
-        if let Some(InlineVideo { state: VideoState::Playing(player), .. }) = &self.video
+        if let Some(InlineMedia { state: PlayState::Playing(player), .. }) = &self.playing
             && player.is_playing()
         {
             window.request_animation_frame();
@@ -699,37 +702,30 @@ impl Timeline {
         self.rich.entry(html.to_owned()).or_insert_with(|| Rc::new(rich::parse(html))).clone()
     }
 
-    /// What "play" on a video does: play it here, on macOS; elsewhere the
-    /// system's player, which `None` leaves the card to.
-    fn play_here(&self, event: &EventItemDto, body: &str, media: &MediaInfoDto, cx: &mut Context<Self>) -> Option<content::PlayHere> {
-        if !cfg!(target_os = "macos") {
-            return None;
-        }
-        let (event_id, mxc) = (event.event_id.clone()?, media.mxc.clone()?);
+    /// Play a video or a sound in its message: on macOS here, elsewhere in
+    /// the system's player.
+    fn start_media(&mut self, event: &EventItemDto, body: &str, media: &MediaInfoDto, video: bool, cx: &mut Context<Self>) {
+        let (Some(event_id), Some(mxc)) = (event.event_id.clone(), media.mxc.clone()) else { return };
         let (name, mime) = (body.to_owned(), media.mimetype.clone());
-        let this = cx.weak_entity();
-        Some(Rc::new(move |cx: &mut App| {
-            let (event_id, mxc, name, mime) = (event_id.clone(), mxc.clone(), name.clone(), mime.clone());
-            let _ = this.update(cx, |timeline, cx| timeline.start_video(event_id, mxc, name, mime, cx));
-        }))
-    }
-
-    fn start_video(&mut self, event_id: String, mxc: String, name: String, mime: Option<String>, cx: &mut Context<Self>) {
-        self.video = Some(InlineVideo { event_id: event_id.clone(), path: None, state: VideoState::Loading });
+        if !cfg!(target_os = "macos") {
+            content::play_externally(mxc, name, mime, cx);
+            return;
+        }
+        self.playing = Some(InlineMedia { event_id: event_id.clone(), path: None, state: PlayState::Loading, bar: Rc::new(std::cell::Cell::new(None)) });
         cx.notify();
         let download = content::download_temp(mxc, &name, mime.as_deref(), cx);
         cx.spawn(async move |this, cx| {
             let outcome = download.await;
             let _ = this.update(cx, |timeline, cx| {
-                // Moved on to another video (or closed this one) meanwhile.
-                let Some(video) = timeline.video.as_mut().filter(|v| v.event_id == event_id) else { return };
-                video.state = match outcome {
+                // Moved on to something else (or closed this) meanwhile.
+                let Some(playing) = timeline.playing.as_mut().filter(|p| p.event_id == event_id) else { return };
+                playing.state = match outcome {
                     Ok(path) => {
-                        let state = open_player(&path);
-                        video.path = Some(path);
+                        let state = open_player(&path, video);
+                        playing.path = Some(path);
                         state
                     }
-                    Err(e) => VideoState::Failed(format!("couldn't fetch it: {e}").into()),
+                    Err(e) => PlayState::Failed(format!("couldn't fetch it: {e}").into()),
                 };
                 cx.notify();
             });
@@ -737,66 +733,208 @@ impl Timeline {
         .detach();
     }
 
-    /// The playing video, the size its card's poster was, with its
-    /// controls under it.
-    fn video_view(&mut self, media: &MediaInfoDto, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        let (w, h) = crate::media::fit(media.width, media.height, (400., 320.), 120.);
-        let Some(video) = self.video.as_mut() else { return div().into_any_element() };
-        let path = video.path.clone();
-        let (screen, playing, time): (AnyElement, bool, String) = match &mut video.state {
-            VideoState::Loading => (div().text_size(text(12.)).text_color(palette.text_tertiary).child("fetching it…").into_any_element(), false, String::new()),
-            VideoState::Failed(why) => (div().px_3().text_size(text(12.)).text_color(palette.danger).child(why.clone()).into_any_element(), false, String::new()),
+    /// Whether `event` is the one playing.
+    fn is_playing(&self, event: &EventItemDto) -> bool {
+        self.playing.as_ref().is_some_and(|p| Some(&p.event_id) == event.event_id.as_ref())
+    }
+
+    /// Play/pause, a bar to see and seek with, the time, and (for video)
+    /// open in player and close.
+    fn controls(&mut self, duration_ms: Option<u64>, video: bool, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let Some(playing) = self.playing.as_mut() else { return div().into_any_element() };
+        let path = playing.path.clone();
+        let bar = playing.bar.clone();
+        let (state, fraction, time): (Option<bool>, f32, String) = match &mut playing.state {
+            PlayState::Loading => (None, 0., "fetching it…".into()),
+            PlayState::Failed(why) => return div().text_size(text(12.)).text_color(palette.danger).child(why.clone()).into_any_element(),
             #[cfg(target_os = "macos")]
-            VideoState::Playing(player) => {
+            PlayState::Playing(player) => {
                 let (at, length) = player.position();
+                let length = if length > 0. { length } else { duration_ms.unwrap_or(0) as f64 / 1000. };
                 let time = if length > 0. { format!("{} / {}", crate::video::clock(at), crate::video::clock(length)) } else { crate::video::clock(at) };
-                let screen = match player.frame() {
-                    Some(frame) => gpui::surface(frame).w(px(w)).h(px(h)).into_any_element(),
-                    None => div().into_any_element(),
-                };
-                (screen, player.is_playing(), time)
+                (Some(player.is_playing()), if length > 0. { (at / length).clamp(0., 1.) as f32 } else { 0. }, time)
             }
         };
-        let button = |key: &'static str, words: String| {
-            div()
-                .id(key)
-                .px(space(8.))
-                .py(space(3.))
-                .rounded(corner(8.))
-                .cursor_pointer()
-                .text_size(text(12.))
-                .hover(|d| d.bg(palette.inset))
-                .child(words)
+        let _ = duration_ms;
+        let button = |key: &'static str| {
+            div().id(key).flex_none().size(px(28.)).flex().items_center().justify_center().rounded_full().cursor_pointer().hover(|d| d.bg(palette.inset))
         };
-        v_flex()
-            .max_w(px(w.max(240.)))
-            .rounded(px(12.))
-            .overflow_hidden()
-            .bg(palette.raised)
+        let toggle = button("media-toggle")
+            .child(icon(if state == Some(true) { "icons/pause.svg" } else { "icons/play.svg" }).size(px(15.)).text_color(palette.text))
+            .on_click(cx.listener(|this, _, _, cx| {
+                #[cfg(target_os = "macos")]
+                if let Some(InlineMedia { state: PlayState::Playing(player), .. }) = &this.playing {
+                    player.toggle();
+                }
+                cx.notify();
+            }));
+        let record = bar.clone();
+        let track = div()
+            .id("media-bar")
+            .relative()
+            .flex_1()
+            .min_w(px(60.))
+            .h(px(14.))
+            .flex()
+            .items_center()
+            .cursor_pointer()
+            .child(div().w_full().h(px(4.)).rounded_full().bg(palette.inset).child(div().h_full().w(gpui::relative(fraction)).rounded_full().bg(palette.accent)))
+            // Where the bar was drawn, so a press on it knows how far along.
+            .child(gpui::canvas(move |bounds, _, _| record.set(Some(bounds)), |_, _, _, _| {}).absolute().inset_0())
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                let Some(bounds) = bar.get() else { return };
+                let along = f32::from(event.position.x - bounds.origin.x) / f32::from(bounds.size.width).max(1.);
+                #[cfg(target_os = "macos")]
+                if let Some(InlineMedia { state: PlayState::Playing(player), .. }) = &this.playing {
+                    player.seek(along.clamp(0., 1.) as f64);
+                }
+                let _ = along;
+                cx.stop_propagation();
+                cx.notify();
+            }));
+        h_flex()
+            .w_full()
+            .gap(space(8.))
+            .child(toggle)
+            .child(track)
+            .child(div().flex_none().font_family(palette.mono_font.clone()).text_size(text(10.5)).text_color(palette.text_tertiary).child(time))
+            .when(video, |row| {
+                row.children(path.map(|path| {
+                    div()
+                        .id("media-external")
+                        .flex_none()
+                        .px(space(6.))
+                        .rounded(corner(8.))
+                        .cursor_pointer()
+                        .text_size(text(11.))
+                        .text_color(palette.text_secondary)
+                        .hover(|d| d.bg(palette.inset))
+                        .child("open in player")
+                        .on_click(move |_, _, cx| cx.open_with_system(&path))
+                }))
+                .child(button("media-close").text_size(text(12.)).text_color(palette.text_tertiary).child("✕").on_click(cx.listener(|this, _, _, cx| {
+                    this.playing = None;
+                    cx.notify();
+                })))
+            })
+            .into_any_element()
+    }
+
+    /// A video, as TimelineView's <video> shows it: a frame the size it
+    /// plays at, with its poster (when it has one), a play button and its
+    /// length; once playing, its frames and the controls under them.
+    fn video(&mut self, event: &EventItemDto, body: &str, media: &MediaInfoDto, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let (w, h) = crate::media::fit(media.width, media.height, (400., 320.), 120.);
+        let frame = div().relative().w(px(w)).h(px(h)).bg(gpui::black()).flex().items_center().justify_center().overflow_hidden();
+        if self.is_playing(event) {
+            #[cfg(target_os = "macos")]
+            let picture = match &mut self.playing {
+                Some(InlineMedia { state: PlayState::Playing(player), .. }) => player.frame().map(|f| gpui::surface(f).w(px(w)).h(px(h)).into_any_element()),
+                _ => None,
+            };
+            #[cfg(not(target_os = "macos"))]
+            let picture: Option<AnyElement> = None;
+            let controls = self.controls(media.duration_ms, true, palette, cx);
+            // Wide enough for the controls; a narrow video sits centred.
+            let wide = w.max(300.);
+            return v_flex()
+                .w(px(wide))
+                .rounded(corner(16.))
+                .overflow_hidden()
+                .border_1()
+                .border_color(palette.border_subtle)
+                .bg(palette.card)
+                .child(frame.w(px(wide)).children(picture))
+                .child(div().px(space(8.)).py(space(5.)).child(controls))
+                .into_any_element();
+        }
+        let poster = media.thumbnail_mxc.as_deref().and_then(|mxc| Media::image(mxc, Some(((w * 2.) as u32, (h * 2.) as u32)), cx));
+        let length = media.duration_ms.map(crate::views::content::duration);
+        let (event, body, media) = (event.clone(), body.to_owned(), media.clone());
+        frame
+            .id(SharedString::from(format!("video/{}", event_key(&event))))
+            .rounded(corner(16.))
             .border_1()
             .border_color(palette.border_subtle)
-            .child(div().w(px(w)).h(px(h)).bg(gpui::black()).flex().items_center().justify_center().child(screen))
+            .cursor_pointer()
+            .map(|d| match poster {
+                Some(poster) => d.child(img(poster).absolute().inset_0().size_full().object_fit(gpui::ObjectFit::Cover)),
+                // No poster: what it's called, where the picture would be.
+                None => d.child(div().absolute().top(px(10.)).left(px(12.)).right(px(12.)).truncate().text_size(text(12.)).text_color(palette.text_tertiary).child(body.clone())),
+            })
             .child(
-                h_flex()
-                    .gap(space(4.))
-                    .px(space(6.))
-                    .py(space(4.))
-                    .child(button("video-toggle", if playing { "❚❚".into() } else { "▶".into() }).on_click(cx.listener(|this, _, _, cx| {
-                        #[cfg(target_os = "macos")]
-                        if let Some(InlineVideo { state: VideoState::Playing(player), .. }) = &this.video {
-                            player.toggle();
-                        }
-                        cx.notify();
-                    })))
-                    .child(div().flex_1().font_family(palette.mono_font.clone()).text_size(text(11.)).text_color(palette.text_tertiary).child(time))
-                    .children(path.map(|path| {
-                        button("video-external", "open in player".into()).text_color(palette.text_secondary).on_click(move |_, _, cx| cx.open_with_system(&path))
-                    }))
-                    .child(button("video-close", "✕".into()).text_color(palette.text_tertiary).on_click(cx.listener(|this, _, _, cx| {
-                        this.video = None;
-                        cx.notify();
-                    }))),
+                div()
+                    .size(px(52.))
+                    .rounded_full()
+                    .bg(Hsla { a: 0.72, ..palette.app })
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon("icons/play.svg").size(px(22.)).text_color(palette.text)),
             )
+            .children(length.map(|length| {
+                div()
+                    .absolute()
+                    .right(px(8.))
+                    .bottom(px(8.))
+                    .px(space(6.))
+                    .py(px(1.))
+                    .rounded(corner(6.))
+                    .bg(Hsla { a: 0.72, ..palette.app })
+                    .font_family(palette.mono_font.clone())
+                    .text_size(text(10.5))
+                    .text_color(palette.text)
+                    .child(length)
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| this.start_media(&event, &body, &media, true, cx)))
+            .into_any_element()
+    }
+
+    /// A sound or a voice message, as AudioBody: its icon, then play and
+    /// the bar (or, once playing, the controls), then its length.
+    fn audio(&mut self, event: &EventItemDto, body: &str, media: &MediaInfoDto, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let glyph = icon(if media.is_voice { "icons/mic.svg" } else { "icons/music.svg" }).flex_none().size(px(16.)).text_color(palette.accent_secondary);
+        let middle = if self.is_playing(event) {
+            self.controls(media.duration_ms, false, palette, cx)
+        } else {
+            let length = media.duration_ms;
+            let (event, body, media) = (event.clone(), body.to_owned(), media.clone());
+            h_flex()
+                .w_full()
+                .gap(space(8.))
+                .child(
+                    div()
+                        .id(SharedString::from(format!("audio/{}", event_key(&event))))
+                        .flex_none()
+                        .size(px(28.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .cursor_pointer()
+                        .hover(|d| d.bg(palette.inset))
+                        .child(icon("icons/play.svg").size(px(15.)).text_color(palette.text))
+                        .on_click(cx.listener(move |this, _, _, cx| this.start_media(&event, &body, &media, false, cx))),
+                )
+                .child(div().flex_1().min_w(px(60.)).h(px(4.)).rounded_full().bg(palette.inset))
+                .children(length.map(|ms| {
+                    div().flex_none().font_family(palette.mono_font.clone()).text_size(text(10.5)).text_color(palette.text_tertiary).child(crate::views::content::duration(ms))
+                }))
+                .into_any_element()
+        };
+        h_flex()
+            .mt(px(4.))
+            .w(px(340.))
+            .max_w_full()
+            .gap(space(10.))
+            .px(space(12.))
+            .py(space(7.))
+            .rounded(corner(16.))
+            .bg(palette.card)
+            .border_1()
+            .border_color(palette.border_subtle)
+            .child(glyph)
+            .child(div().flex_1().min_w_0().child(middle))
             .into_any_element()
     }
 
@@ -816,16 +954,11 @@ impl Timeline {
             }
             ContentDto::Image { body, media } => content::picture(&id, body, media, false, &store, palette, cx),
             ContentDto::Sticker { body, media } => content::picture(&id, body, media, true, &store, palette, cx),
-            ContentDto::Video { body, media } => {
-                let playing_here = self.video.as_ref().is_some_and(|v| Some(&v.event_id) == event.event_id.as_ref());
-                if playing_here {
-                    return self.video_view(media, palette, cx);
-                }
-                let open = self.play_here(event, body, media, cx).map_or(Open::Play, Open::PlayHere);
-                content::card(&id, "🎞", body, media, open, palette, cx)
+            ContentDto::Video { body, media } => self.video(event, body, media, palette, cx),
+            ContentDto::Audio { body, media } => {
+                let name = if media.is_voice { "voice message" } else { body.as_str() };
+                self.audio(event, name, media, palette, cx)
             }
-            ContentDto::Audio { media, .. } if media.is_voice => content::card(&id, "🎙", "voice message", media, Open::Play, palette, cx),
-            ContentDto::Audio { body, media } => content::card(&id, "🎵", body, media, Open::Play, palette, cx),
             ContentDto::File { body, media } => content::card(&id, "📎", body, media, Open::Save, palette, cx),
             content => {
                 let (text, muted) = body_text(content);

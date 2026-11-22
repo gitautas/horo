@@ -16,10 +16,12 @@ use objc2_core_media::CMTime;
 use objc2_core_video::{CVPixelBuffer, kCVPixelBufferMetalCompatibilityKey, kCVPixelBufferPixelFormatTypeKey, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange};
 use objc2_foundation::{NSDictionary, NSNumber, NSString, NSURL};
 
+/// A video or a sound, playing (or paused) in the window.
 pub struct VideoPlayer {
     player: Retained<AVPlayer>,
     item: Retained<AVPlayerItem>,
-    output: Retained<AVPlayerItemVideoOutput>,
+    /// Where frames come from; none for audio.
+    output: Option<Retained<AVPlayerItemVideoOutput>>,
     /// The last frame, kept for redraws between new ones and while paused.
     frame: Option<CFRetained<CVPixelBuffer>>,
 }
@@ -31,23 +33,26 @@ fn ns(key: &CFString) -> &NSString {
 }
 
 impl VideoPlayer {
-    /// Open a local file, playing from the start. `None` off the main
-    /// thread.
-    pub fn open(path: &Path) -> Option<VideoPlayer> {
+    /// Open a local file, playing from the start; `video` asks for its
+    /// frames too. `None` off the main thread.
+    pub fn open(path: &Path, video: bool) -> Option<VideoPlayer> {
         let mtm = MainThreadMarker::new()?;
         let url = NSURL::from_file_path(path)?;
         // SAFETY: AVFoundation calls with valid, retained arguments, on the
         // main thread (`mtm`).
         unsafe {
             let item = AVPlayerItem::playerItemWithURL(&url, mtm);
-            let format = NSNumber::new_u32(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
-            let metal = NSNumber::new_bool(true);
-            let attributes: Retained<NSDictionary<NSString, AnyObject>> = NSDictionary::from_slices(
-                &[ns(kCVPixelBufferPixelFormatTypeKey), ns(kCVPixelBufferMetalCompatibilityKey)],
-                &[format.as_ref() as &AnyObject, metal.as_ref() as &AnyObject],
-            );
-            let output = AVPlayerItemVideoOutput::initWithPixelBufferAttributes(AVPlayerItemVideoOutput::alloc(), Some(&attributes));
-            item.addOutput(&output);
+            let output = video.then(|| {
+                let format = NSNumber::new_u32(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
+                let metal = NSNumber::new_bool(true);
+                let attributes: Retained<NSDictionary<NSString, AnyObject>> = NSDictionary::from_slices(
+                    &[ns(kCVPixelBufferPixelFormatTypeKey), ns(kCVPixelBufferMetalCompatibilityKey)],
+                    &[format.as_ref() as &AnyObject, metal.as_ref() as &AnyObject],
+                );
+                let output = AVPlayerItemVideoOutput::initWithPixelBufferAttributes(AVPlayerItemVideoOutput::alloc(), Some(&attributes));
+                item.addOutput(&output);
+                output
+            });
             let player = AVPlayer::playerWithPlayerItem(Some(&item), mtm);
             // Stay on the last frame at the end rather than going blank.
             player.setActionAtItemEnd(AVPlayerActionAtItemEnd::Pause);
@@ -60,9 +65,10 @@ impl VideoPlayer {
     pub fn frame(&mut self) -> Option<CFRetained<CVPixelBuffer>> {
         // SAFETY: plain queries on objects this player owns.
         unsafe {
+            let output = self.output.as_ref()?;
             let now = self.item.currentTime();
-            if self.output.hasNewPixelBufferForItemTime(now)
-                && let Some(buffer) = self.output.copyPixelBufferForItemTime_itemTimeForDisplay(now, std::ptr::null_mut())
+            if output.hasNewPixelBufferForItemTime(now)
+                && let Some(buffer) = output.copyPixelBufferForItemTime_itemTimeForDisplay(now, std::ptr::null_mut())
             {
                 // The same +1 reference, moved from objc2's wrapper to
                 // CoreFoundation's, which is what gpui takes.
