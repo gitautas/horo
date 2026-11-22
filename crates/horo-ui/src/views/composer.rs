@@ -10,11 +10,11 @@
 
 use gpui::{
     AppContext, Context, Entity, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    WeakEntity, Window, div, prelude::FluentBuilder, px,
+    StyledImage, WeakEntity, Window, div, img, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    h_flex,
-    input::{InputEvent, MoveDown, MoveUp, Position, Textarea, TextareaState},
+    h_flex, v_flex,
+    input::{IndentInline, InputEvent, MoveDown, MoveUp, Position, Textarea, TextareaState},
 };
 use horo_core::{
     dto::{SendOptions, StickerOptions},
@@ -24,6 +24,7 @@ use matrix_sdk::ruma::OwnedRoomId;
 
 use crate::{
     backend::Backend,
+    media::Media,
     packs::{self, Picked},
     store::Store,
     theme::{Palette, corner, space, text},
@@ -55,7 +56,20 @@ pub struct Composer {
     store: Entity<Store>,
     /// The emoji picker, open over the box, and where it was opened.
     picker: Option<(gpui::Point<gpui::Pixels>, Entity<EmojiPicker>)>,
+    /// Custom emotes matching the `:shortcode` being typed.
+    completing: Option<Completing>,
 }
+
+/// The shortcode menu over the box: what matches, where the typed `:code`
+/// starts (a byte offset), and which match Enter or Tab would put in.
+struct Completing {
+    start: usize,
+    matches: Vec<horo_core::matrix::packs::PackImageDto>,
+    active: usize,
+}
+
+/// How many matches the menu offers.
+const COMPLETIONS: usize = 8;
 
 impl Composer {
     pub fn new(
@@ -77,14 +91,19 @@ impl Composer {
             state
         });
         cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { shift: false, .. } = event {
-                this.send(window, cx);
+            match event {
+                // While the menu is up, Enter picks from it rather than
+                // sending `:blobc` as a message.
+                InputEvent::PressEnter { shift: false, .. } if this.completing.is_some() => this.complete(None, window, cx),
+                InputEvent::PressEnter { shift: false, .. } => this.send(window, cx),
+                InputEvent::Change => this.update_completion(cx),
+                _ => {}
             }
         })
         .detach();
         input.update(cx, |state, cx| state.focus(window, cx));
         cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        Composer { room_id, thread_root, timeline, input, mode: Mode::Write, error: None, encrypted, store, picker: None }
+        Composer { room_id, thread_root, timeline, input, mode: Mode::Write, error: None, encrypted, store, picker: None, completing: None }
     }
 
     /// The picker, over the box; a pick goes in at the cursor.
@@ -184,7 +203,56 @@ impl Composer {
     }
 
     /// Escape leaves a reply or an edit. Seen before the field does.
+    /// Whether a shortcode is being typed at the caret, and what it matches.
+    fn update_completion(&mut self, cx: &mut Context<Self>) {
+        let (text, caret) = {
+            let input = self.input.read(cx);
+            (input.value().to_string(), input.cursor())
+        };
+        self.completing = packs::typing_shortcode(&text, caret).and_then(|(query, start)| {
+            let matches = packs::match_emotes(&packs::emote_lookup(&self.store.read(cx).packs), &query, COMPLETIONS);
+            (!matches.is_empty()).then_some(Completing { start, matches, active: 0 })
+        });
+        cx.notify();
+    }
+
+    /// Put in the chosen match (the highlighted one unless `pick` says),
+    /// replacing the `:code` typed so far.
+    fn complete(&mut self, pick: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(completing) = self.completing.take() else { return };
+        let Some(image) = completing.matches.get(pick.unwrap_or(completing.active)) else { return };
+        let text = format!(":{}: ", image.shortcode);
+        self.input.update(cx, |state, cx| {
+            let caret = state.cursor();
+            state.set_selected_range(completing.start..caret, cx);
+            state.replace(text, window, cx);
+            state.focus(window, cx);
+        });
+        // The edit above reopens the menu for what's now `:code: `; it isn't.
+        self.completing = None;
+        cx.notify();
+    }
+
+    fn move_completion(&mut self, up: bool, cx: &mut Context<Self>) {
+        if let Some(c) = &mut self.completing {
+            let n = c.matches.len();
+            c.active = if up { (c.active + n - 1) % n } else { (c.active + 1) % n };
+            cx.notify();
+        }
+    }
+
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.completing.is_some() {
+            match event.keystroke.key.as_str() {
+                "escape" => {
+                    self.completing = None;
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
+                _ => {}
+            }
+        }
         if event.keystroke.key == "escape" && self.mode != Mode::Write {
             self.cancel(window, cx);
             cx.stop_propagation();
@@ -195,6 +263,12 @@ impl Composer {
     /// field's own actions (moving the caret), caught on their way to it;
     /// anywhere else they go on to move the caret.
     fn recall(&mut self, up: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // The shortcode menu owns the arrows while it's up.
+        if self.completing.is_some() {
+            self.move_completion(up, cx);
+            cx.stop_propagation();
+            return;
+        }
         let empty = self.input.read(cx).value().is_empty();
         if !empty || matches!(self.mode, Mode::Edit { .. }) {
             return;
@@ -303,6 +377,56 @@ impl Render for Composer {
             Mode::Edit { .. } => Some((palette.accent, "editing your message".to_owned(), "escape to cancel".to_owned())),
         };
         let can_send = !self.input.read(cx).value().trim().is_empty();
+        let menu = self.completing.as_ref().map(|completing| {
+            let mut list = v_flex()
+                .id("shortcodes")
+                .occlude()
+                .absolute()
+                .left(px(10.))
+                .bottom(gpui::relative(1.))
+                .mb(px(6.))
+                .min_w(px(220.))
+                .max_w(px(320.))
+                .p(space(5.))
+                .rounded(corner(16.))
+                .bg(palette.raised)
+                .border_1()
+                .border_color(palette.border)
+                .shadow_lg();
+            for (i, image) in completing.matches.iter().enumerate() {
+                let on = i == completing.active;
+                let picture = match Media::image(&image.url, Some((48, 48)), cx) {
+                    Some(picture) => img(picture).size(px(22.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
+                    None => div().size(px(22.)).into_any_element(),
+                };
+                list = list.child(
+                    h_flex()
+                        .id(("shortcode", i))
+                        .gap(space(9.))
+                        .px(space(9.))
+                        .py(space(5.))
+                        .rounded(corner(11.))
+                        .cursor_pointer()
+                        .when(on, |d| d.bg(gpui::Hsla { a: 0.08, ..gpui::white() }))
+                        .hover(|d| d.bg(gpui::Hsla { a: 0.08, ..gpui::white() }))
+                        .child(picture)
+                        .child(
+                            div()
+                                .truncate()
+                                .font_family(palette.mono_font.clone())
+                                .text_size(text(12.))
+                                .text_color(if on { palette.text } else { palette.text_secondary })
+                                .child(format!(":{}:", image.shortcode)),
+                        )
+                        // On press, so the field keeps its focus and caret.
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.complete(Some(i), window, cx);
+                        })),
+                );
+            }
+            list
+        });
         div()
             .flex_none()
             .px(space(22.))
@@ -340,6 +464,8 @@ impl Render for Composer {
             }))
             .child(
                 h_flex()
+                    .relative()
+                    .children(menu)
                     .items_end()
                     .gap(space(10.))
                     .px(space(12.))
@@ -352,6 +478,14 @@ impl Render for Composer {
                         _ => palette.border,
                     })
                     .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| this.on_key(event, window, cx)))
+                    // Tab is the field's indent action, caught on its way:
+                    // with the shortcode menu up it completes instead.
+                    .capture_action(cx.listener(|this, _: &IndentInline, window, cx| {
+                        if this.completing.is_some() {
+                            this.complete(None, window, cx);
+                            cx.stop_propagation();
+                        }
+                    }))
                     .capture_action(cx.listener(|this, _: &MoveUp, window, cx| this.recall(true, window, cx)))
                     .capture_action(cx.listener(|this, _: &MoveDown, window, cx| this.recall(false, window, cx)))
                     .child(

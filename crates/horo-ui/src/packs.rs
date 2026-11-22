@@ -91,6 +91,22 @@ pub fn match_emotes(lookup: &HashMap<String, PackImageDto>, query: &str, limit: 
     found.into_iter().take(limit).map(|(_, i)| i.clone()).collect()
 }
 
+/// The shortcode being typed at `caret` (a byte offset), for the
+/// composer's suggestions: the partial code and where its colon is. Only
+/// a colon that starts a word counts, so `https://` and `3:15` don't.
+pub fn typing_shortcode(text: &str, caret: usize) -> Option<(String, usize)> {
+    let before = text.get(..caret)?;
+    let colon = before.rfind(':')?;
+    let query = &before[colon + 1..];
+    if query.is_empty() || query.contains(|c: char| c.is_whitespace() || c == ':') {
+        return None;
+    }
+    if before[..colon].chars().next_back().is_some_and(|c| !c.is_whitespace()) {
+        return None;
+    }
+    Some((query.to_owned(), colon))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,5 +174,19 @@ mod tests {
         let packs = [pack("user", vec![image("happycat", true, false), image("cat", true, false), image("catjam", true, false), image("dog", true, false)])];
         let found: Vec<_> = match_emotes(&emote_lookup(&packs), "cat", 8).into_iter().map(|i| i.shortcode).collect();
         assert_eq!(found, ["cat", "catjam", "happycat"]);
+    }
+
+    #[test]
+    fn a_shortcode_is_caught_only_at_the_start_of_a_word() {
+        let at = |text: &str| typing_shortcode(text, text.len());
+        assert_eq!(at(":blob"), Some(("blob".into(), 0)));
+        assert_eq!(at("hello :blob"), Some(("blob".into(), 6)));
+        assert_eq!(at(":"), None);
+        assert_eq!(at("https://example"), None);
+        assert_eq!(at("3:15"), None);
+        assert_eq!(at(":blobcat: "), None);
+        assert_eq!(at(":blob cat"), None);
+        assert_eq!(typing_shortcode(":blob and more", 5), Some(("blob".into(), 0)));
+        assert_eq!(at("ąčę :žu"), Some(("žu".into(), 7)));
     }
 }
