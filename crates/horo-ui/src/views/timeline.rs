@@ -512,9 +512,10 @@ fn time_label(ms: u64) -> String {
 /// A day between messages, as TimelineView.tsx: a line, the day, a line.
 fn divider(label: String, colour: gpui::Hsla, line: gpui::Hsla) -> AnyElement {
     h_flex()
+        .w_full()
         .px(space(22.))
-        .mt(px(18.))
-        .mb(px(10.))
+        .pt(px(18.))
+        .pb(px(10.))
         .gap(space(12.))
         .child(div().flex_1().h(px(1.)).bg(line))
         .child(div().text_size(text(11.)).font_weight(FontWeight::SEMIBOLD).text_color(colour).child(label))
