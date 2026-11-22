@@ -21,7 +21,7 @@ use crate::{
     rooms::{self, Filter, View},
     store::{Phase, SettingsSection, Store},
     theme::{Palette, corner, heading, label, space, text},
-    views::{avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target}, room_info::{OpenRoomSettings, RoomInfo}, room_settings::RoomSettings, explore::{Explore, Closed}, create_room::CreateRoom,
+    views::{avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target}, room_info::{OpenRoomSettings, RoomInfo}, room_settings::RoomSettings, invite_pane::InvitePane, invite_to_space::InviteToSpace, explore::{Explore, Closed}, create_room::CreateRoom,
         settings::Settings, timeline::{Timeline, TimelineAction}, verification, lightbox, voice},
 };
 
@@ -35,6 +35,11 @@ pub struct Shell {
     explore: Option<Entity<Explore>>,
     create: Option<Entity<CreateRoom>>,
     room_settings: Option<Entity<RoomSettings>>,
+    /// An invite, shown where the room would be.
+    invite: Option<Entity<InvitePane>>,
+    /// A space's right-click menu: which space, its name, and where.
+    space_menu: Option<(String, String, gpui::Point<gpui::Pixels>)>,
+    invite_to_space: Option<Entity<InviteToSpace>>,
     /// Settings, while they're open.
     settings: Option<Entity<Settings>>,
     /// The profile card, while one is open.
@@ -61,7 +66,7 @@ impl Shell {
         focus.focus(window, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("find a room or friend~"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false };
+        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, invite_to_space: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false };
         shell.follow_room(window, cx);
         shell.follow_settings(window, cx);
         shell
@@ -72,6 +77,23 @@ impl Shell {
         let store = self.store.read(cx);
         let selected = store.room.clone();
         let thread = store.thread.clone();
+        // An invite has no timeline to read yet: the invite pane instead.
+        let invited = selected.as_ref().is_some_and(|id| {
+            store.rooms.iter().any(|r| r.id == *id && r.membership == horo_core::dto::RoomMembership::Invited)
+        });
+        if invited {
+            let id = selected.clone().unwrap_or_default();
+            if let Some((_, old, _)) = self.timeline.take() {
+                old.read(cx).close(cx);
+            }
+            self.info = None;
+            if self.invite.as_ref().is_none_or(|pane| pane.read(cx).room_id != id) {
+                let store = self.store.clone();
+                self.invite = Some(cx.new(|cx| InvitePane::new(store, id, cx)));
+            }
+            return;
+        }
+        self.invite = None;
         // The timeline is the room's, or one thread's of it.
         let wanted = selected.as_ref().map(|room| match &thread {
             Some(root) => format!("{room}|{root}"),
@@ -172,6 +194,61 @@ impl Shell {
         cx.notify();
     }
 
+    fn open_invite_to_space(&mut self, space_id: String, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.space_menu = None;
+        let dialog = cx.new(|cx| InviteToSpace::new(space_id, name, window, cx));
+        cx.subscribe(&dialog, |this, _, _: &Closed, cx| {
+            this.invite_to_space = None;
+            cx.notify();
+        })
+        .detach();
+        self.invite_to_space = Some(dialog);
+        cx.notify();
+    }
+
+    /// A space's right-click menu, as SpacesRail.tsx's.
+    fn space_menu(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (id, name, at) = self.space_menu.clone()?;
+        let item = |key: &'static str, words: &'static str| {
+            div()
+                .id(key)
+                .px(space(12.))
+                .py(space(7.))
+                .rounded(corner(10.))
+                .cursor_pointer()
+                .text_size(text(13.))
+                .hover(|d| d.bg(palette.inset))
+                .child(words)
+        };
+        Some(
+            gpui::deferred(
+                gpui::anchored().position(at).snap_to_window_with_margin(px(8.)).child(
+                    v_flex()
+                        .id("space-menu")
+                        .occlude()
+                        .min_w(px(180.))
+                        .p(space(4.))
+                        .rounded(corner(14.))
+                        .bg(palette.raised)
+                        .border_1()
+                        .border_color(palette.border)
+                        .shadow_lg()
+                        .text_color(palette.text)
+                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                            this.space_menu = None;
+                            cx.notify();
+                        }))
+                        .child(div().px(space(12.)).pt(space(6.)).pb(space(4.)).text_size(text(11.)).text_color(palette.text_tertiary).truncate().child(name.clone()))
+                        .child(item("space-menu-invite", "invite to space").on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_invite_to_space(id.clone(), name.clone(), window, cx)
+                        }))),
+                ),
+            )
+            .with_priority(2)
+            .into_any_element(),
+        )
+    }
+
     fn open_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let store = self.store.clone();
         let create = cx.new(|cx| CreateRoom::new(store, window, cx));
@@ -215,7 +292,14 @@ impl Shell {
             .on_click(cx.listener(move |this, _, _, cx| {
                 let id = id.clone();
                 this.store.update(cx, |s, cx| s.open_space(Some(id), cx))
-            }));
+            }))
+            .on_mouse_down(gpui::MouseButton::Right, {
+                let (id, name) = (space.id.clone(), space.name.clone());
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    this.space_menu = Some((id.clone(), name.clone(), event.position));
+                    cx.notify();
+                })
+            });
             tiles.push(tile);
         }
 
@@ -806,8 +890,10 @@ impl Render for Shell {
             .font_family(palette.body_font.clone())
             .child(self.rail(&palette, cx))
             .child(self.room_list(&palette, cx))
-            .child(self.room_pane(&palette, cx))
-            .when(self.store.read(cx).prefs.show_info_panel, |d| d.children(self.info.clone()))
+            .map(|d| match self.invite.clone() {
+                Some(invite) => d.child(invite),
+                None => d.child(self.room_pane(&palette, cx)).when(self.store.read(cx).prefs.show_info_panel, |d| d.children(self.info.clone())),
+            })
             .relative()
             .children(self.settings.clone())
             .children(lightbox::lightbox(&self.store, &palette, cx))
@@ -815,6 +901,8 @@ impl Render for Shell {
             .children(self.explore.clone())
             .children(self.create.clone())
             .children(self.room_settings.clone())
+            .children(self.invite_to_space.clone())
+            .children(self.space_menu(&palette, cx))
             .children(self.profile.clone())
             // Above everything, the security panel included: the other
             // device's timeout is running, and a dialog hidden behind
