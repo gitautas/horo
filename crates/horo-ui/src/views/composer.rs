@@ -242,16 +242,13 @@ impl Composer {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.completing.is_some() {
-            match event.keystroke.key.as_str() {
-                "escape" => {
-                    self.completing = None;
-                    cx.notify();
-                    cx.stop_propagation();
-                    return;
-                }
-                _ => {}
-            }
+        // Escape closes the shortcode menu first, before it cancels a
+        // reply or an edit.
+        if self.completing.is_some() && event.keystroke.key == "escape" {
+            self.completing = None;
+            cx.notify();
+            cx.stop_propagation();
+            return;
         }
         if event.keystroke.key == "escape" && self.mode != Mode::Write {
             self.cancel(window, cx);
