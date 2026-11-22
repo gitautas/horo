@@ -159,12 +159,19 @@ pub enum SettingsSection {
     Security,
     Voice,
     Notifications,
+    Packs,
     About,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 5] =
-        [SettingsSection::Account, SettingsSection::Security, SettingsSection::Voice, SettingsSection::Notifications, SettingsSection::About];
+    pub const ALL: [SettingsSection; 6] = [
+        SettingsSection::Account,
+        SettingsSection::Security,
+        SettingsSection::Voice,
+        SettingsSection::Notifications,
+        SettingsSection::Packs,
+        SettingsSection::About,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -172,6 +179,7 @@ impl SettingsSection {
             SettingsSection::Security => "security",
             SettingsSection::Voice => "voice",
             SettingsSection::Notifications => "notifications",
+            SettingsSection::Packs => "emotes & stickers",
             SettingsSection::About => "about",
         }
     }
@@ -513,6 +521,14 @@ impl Store {
             });
         })
         .detach();
+    }
+
+    /// Read the open room's packs again, after they were edited.
+    pub fn reload_packs(&mut self, cx: &mut Context<Self>) {
+        self.packs_for = None;
+        if let Some(room) = self.room.clone() {
+            self.load_packs(&room, cx);
+        }
     }
 
     pub fn open_room(&mut self, room: String, cx: &mut Context<Self>) {

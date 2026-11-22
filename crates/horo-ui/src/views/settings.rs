@@ -31,13 +31,14 @@ use crate::{
     sounds::{self, CALL_SOUNDS, Kind, MESSAGE_SOUNDS, NONE},
     store::{Phase, SettingsSection, Store},
     theme::Palette,
-    views::{avatar::avatar, security::Security},
+    views::{avatar::avatar, pack_settings::PackSettings, security::Security},
 };
 
 pub struct Settings {
     store: Entity<Store>,
     focus: FocusHandle,
     security: Option<Entity<Security>>,
+    packs: Option<Entity<PackSettings>>,
     /// Your profile as the server last said; `None` while it loads.
     profile: Option<ProfileDto>,
     status: Entity<InputState>,
@@ -87,6 +88,7 @@ impl Settings {
             store,
             focus,
             security: None,
+            packs: None,
             profile: None,
             status,
             bio,
@@ -547,6 +549,10 @@ impl Render for Settings {
             let store = self.store.clone();
             self.security = Some(cx.new(|cx| Security::new(store, window, cx)));
         }
+        if section == SettingsSection::Packs && self.packs.is_none() {
+            let store = self.store.clone();
+            self.packs = Some(cx.new(|cx| PackSettings::new(store, window, cx)));
+        }
 
         let nav = v_flex()
             .w(px(232.))
@@ -587,6 +593,7 @@ impl Render for Settings {
                 let prefs = self.store.read(cx).prefs.clone();
                 self.notifications(&prefs, &palette, cx)
             }
+            (SettingsSection::Packs, _) => self.packs.clone().map(|s| s.into_any_element()).unwrap_or_else(|| div().into_any_element()),
             (SettingsSection::About, _) => self.about(&palette),
             _ => div().into_any_element(),
         };

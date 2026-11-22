@@ -4335,6 +4335,7 @@ dependencies = [
  "gpui-pre",
  "horo-core",
  "horo-rtc",
+ "imagesize 0.14.0",
  "matrix-sdk",
  "notify-rust",
  "serde",

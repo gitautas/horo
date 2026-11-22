@@ -107,6 +107,56 @@ pub fn typing_shortcode(text: &str, caret: usize) -> Option<(String, usize)> {
     Some((query.to_owned(), colon))
 }
 
+/// A filename made into a shortcode: `Blob Cat.png` is `blob_cat`.
+pub fn shortcode_from_path(path: &str) -> String {
+    let base = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let stem = base.rsplit_once('.').map_or(base, |(stem, _)| stem);
+    let mut out = String::new();
+    for c in stem.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '+' {
+            out.push(c);
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    let out = out.trim_matches('_').to_owned();
+    if out.is_empty() { "emote".to_owned() } else { out }
+}
+
+/// The type of an image file, by its extension.
+pub fn mime_from_path(path: &str) -> Option<String> {
+    let ext = path.rsplit_once('.')?.1.to_lowercase();
+    Some(
+        match ext.as_str() {
+            "png" => "image/png",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "jpg" | "jpeg" => "image/jpeg",
+            _ => return None,
+        }
+        .to_owned(),
+    )
+}
+
+/// A readable state key for a new pack in a room, from its name.
+pub fn state_key_for(name: &str) -> String {
+    let mut slug = String::new();
+    for c in name.trim().to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c);
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-').to_owned();
+    if slug.is_empty() {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or_default();
+        format!("pack-{now:x}")
+    } else {
+        slug
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +238,16 @@ mod tests {
         assert_eq!(at(":blob cat"), None);
         assert_eq!(typing_shortcode(":blob and more", 5), Some(("blob".into(), 0)));
         assert_eq!(at("ąčę :žu"), Some(("žu".into(), 7)));
+    }
+
+    #[test]
+    fn filenames_become_shortcodes_and_names_become_state_keys() {
+        assert_eq!(shortcode_from_path("/x/Blob Cat.png"), "blob_cat");
+        assert_eq!(shortcode_from_path("C:\\pics\\party-parrot.GIF"), "party-parrot");
+        assert_eq!(shortcode_from_path("/x/???.png"), "emote");
+        assert_eq!(mime_from_path("a.JPG").as_deref(), Some("image/jpeg"));
+        assert_eq!(mime_from_path("a.bmp"), None);
+        assert_eq!(state_key_for("  Cats & Dogs!! "), "cats-dogs");
+        assert!(state_key_for("!!").starts_with("pack-"));
     }
 }

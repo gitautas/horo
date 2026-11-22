@@ -10,6 +10,7 @@ pub mod explore;
 pub mod lightbox;
 pub mod login;
 pub mod modal;
+pub mod pack_settings;
 pub mod profile;
 pub mod room_info;
 pub mod room_settings;
