@@ -26,13 +26,28 @@ const PICTURE_MAX: (f32, f32) = (400., 320.);
 const STICKER_MAX: (f32, f32) = (176., 176.);
 
 /// Formatted text, block by block.
-pub fn rich(id: &str, blocks: &[Block], colour: Hsla, palette: &Palette) -> AnyElement {
-    v_flex().w_full().gap_1().children(blocks.iter().enumerate().map(|(i, b)| block(&format!("{id}/{i}"), b, colour, palette))).into_any_element()
+pub fn rich(id: &str, blocks: &[Block], colour: Hsla, palette: &Palette, cx: &mut App) -> AnyElement {
+    // A message that's only emotes draws them big, as one emoji alone is.
+    let jumbo = !blocks.is_empty() && blocks.iter().all(|b| matches!(b, Block::Paragraph(i) if i.only_images()));
+    let size = if jumbo { EMOTE_JUMBO } else { EMOTE };
+    rich_sized(id, blocks, colour, size, palette, cx)
 }
 
-fn block(id: &str, block: &Block, colour: Hsla, palette: &Palette) -> AnyElement {
+fn rich_sized(id: &str, blocks: &[Block], colour: Hsla, emote: f32, palette: &Palette, cx: &mut App) -> AnyElement {
+    let mut column = v_flex().w_full().gap_1();
+    for (i, b) in blocks.iter().enumerate() {
+        column = column.child(block(&format!("{id}/{i}"), b, colour, emote, palette, cx));
+    }
+    column.into_any_element()
+}
+
+/// Emotes inline: 1.45 times the text, as the WebView build draws them.
+const EMOTE: f32 = 21.;
+const EMOTE_JUMBO: f32 = 48.;
+
+fn block(id: &str, block: &Block, colour: Hsla, emote: f32, palette: &Palette, cx: &mut App) -> AnyElement {
     match block {
-        Block::Paragraph(inline) => text(id, inline, colour, palette),
+        Block::Paragraph(inline) => text(id, inline, colour, emote, palette, cx),
         Block::Heading(level, inline) => {
             let size = match level {
                 1 => 22.,
@@ -40,13 +55,13 @@ fn block(id: &str, block: &Block, colour: Hsla, palette: &Palette) -> AnyElement
                 3 => 17.,
                 _ => 15.,
             };
-            div().pt_1().text_size(px(size)).child(text(id, inline, colour, palette)).into_any_element()
+            div().pt_1().text_size(px(size)).child(text(id, inline, colour, emote, palette, cx)).into_any_element()
         }
         Block::Quote(inner) => div()
             .pl_3()
             .border_l_2()
             .border_color(palette.border_strong)
-            .child(rich(id, inner, palette.text_secondary, palette))
+            .child(rich_sized(id, inner, palette.text_secondary, emote, palette, cx))
             .into_any_element(),
         Block::Code(code) => div()
             .w_full()
@@ -58,32 +73,87 @@ fn block(id: &str, block: &Block, colour: Hsla, palette: &Palette) -> AnyElement
             .text_color(colour)
             .child(code.clone())
             .into_any_element(),
-        Block::List { ordered, start, items } => v_flex()
-            .gap(px(2.))
-            .children(items.iter().enumerate().map(|(n, item)| {
+        Block::List { ordered, start, items } => {
+            let mut list = v_flex().gap(px(2.));
+            for (n, item) in items.iter().enumerate() {
                 let marker = if *ordered { format!("{}.", start + n as u64) } else { "•".into() };
-                h_flex()
-                    .items_start()
-                    .gap_2()
-                    .child(div().flex_none().min_w(px(14.)).text_color(palette.text_tertiary).child(marker))
-                    .child(div().flex_1().min_w_0().child(rich(&format!("{id}/{n}"), item, colour, palette)))
-            }))
-            .into_any_element(),
+                list = list.child(
+                    h_flex()
+                        .items_start()
+                        .gap_2()
+                        .child(div().flex_none().min_w(px(14.)).text_color(palette.text_tertiary).child(marker))
+                        .child(div().flex_1().min_w_0().child(rich_sized(&format!("{id}/{n}"), item, colour, emote, palette, cx))),
+                );
+            }
+            list.into_any_element()
+        }
         Block::Rule => div().w_full().my_1().h(px(1.)).bg(palette.border).into_any_element(),
     }
 }
 
-/// One paragraph: styled runs, with links that open when clicked.
-fn text(id: &str, inline: &Inline, colour: Hsla, palette: &Palette) -> AnyElement {
+/// One paragraph. With pictures in it, a wrapping row of words and
+/// pictures (gpui's text can't hold an image), each word keeping its style
+/// and link.
+fn text(id: &str, inline: &Inline, colour: Hsla, emote: f32, palette: &Palette, cx: &mut App) -> AnyElement {
+    if inline.images.is_empty() {
+        return words(id, inline, colour, palette);
+    }
+    let mut row = h_flex().w_full().flex_wrap().items_center();
+    let mut from = 0;
+    let mut piece = 0;
+    let add_words = |row: gpui::Div, range: std::ops::Range<usize>, piece: &mut usize| -> gpui::Div {
+        let mut row = row;
+        for token in tokens(&inline.text[range.clone()]) {
+            let start = range.start + token.start;
+            let slice = inline.slice(start..range.start + token.end);
+            row = row.child(div().flex_none().child(words(&format!("{id}/w{piece}"), &slice, colour, palette)));
+            *piece += 1;
+        }
+        row
+    };
+    for image in &inline.images {
+        row = add_words(row, from..image.at, &mut piece);
+        from = image.at;
+        row = row.child(match Media::image(&image.mxc, Some((64, 64)), cx) {
+            Some(picture) => img(picture).flex_none().size(px(emote)).mx(px(1.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
+            // Its shortcode while it loads, or if it can't be fetched.
+            None => div().flex_none().text_color(palette.text_tertiary).child(image.alt.clone()).into_any_element(),
+        });
+    }
+    row = add_words(row, from..inline.text.len(), &mut piece);
+    row.into_any_element()
+}
+
+/// Each word with the whitespace after it, so a row of them wraps where
+/// text would.
+fn tokens(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut in_space = false;
+    for (i, c) in text.char_indices() {
+        let space = c.is_whitespace();
+        if in_space && !space {
+            out.push(start..i);
+            start = i;
+        }
+        in_space = space;
+    }
+    if start < text.len() {
+        out.push(start..text.len());
+    }
+    out
+}
+
+/// Styled runs, with links that open when clicked.
+fn words(id: &str, inline: &Inline, colour: Hsla, palette: &Palette) -> AnyElement {
     let runs = runs(inline, colour, palette);
     let styled = StyledText::new(inline.text.clone()).with_runs(runs);
     if inline.links.is_empty() {
-        return div().w_full().child(styled).into_any_element();
+        return div().child(styled).into_any_element();
     }
     let ranges = inline.links.iter().map(|(r, _)| r.clone()).collect();
     let targets: Vec<String> = inline.links.iter().map(|(_, href)| href.clone()).collect();
     div()
-        .w_full()
         .child(InteractiveText::new(ElementId::Name(SharedString::from(id.to_owned())), styled).on_click(ranges, move |ix, _, cx| {
             if let Some(href) = targets.get(ix)
                 && (href.starts_with("https://") || href.starts_with("http://") || href.starts_with("mailto:"))
@@ -319,6 +389,15 @@ fn bytes(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn words_keep_the_space_after_them() {
+        let text = "hi  there friend";
+        let parts: Vec<&str> = tokens(text).into_iter().map(|r| &text[r]).collect();
+        assert_eq!(parts, ["hi  ", "there ", "friend"]);
+        assert!(tokens("").is_empty());
+        assert_eq!(tokens(" lead").into_iter().map(|r| &" lead"[r]).collect::<Vec<_>>(), [" ", "lead"]);
+    }
 
     #[test]
     fn saved_names_stay_in_their_directory() {

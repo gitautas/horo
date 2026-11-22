@@ -16,11 +16,15 @@ use gpui_component::{
     h_flex,
     input::{InputEvent, MoveDown, MoveUp, Position, Textarea, TextareaState},
 };
-use horo_core::{dto::SendOptions, matrix::timeline};
+use horo_core::{
+    dto::{SendOptions, StickerOptions},
+    matrix::timeline,
+};
 use matrix_sdk::ruma::OwnedRoomId;
 
 use crate::{
     backend::Backend,
+    packs::{self, Picked},
     store::Store,
     theme::{Palette, corner, space, text},
     views::{
@@ -87,22 +91,59 @@ impl Composer {
             return;
         }
         let store = self.store.clone();
-        let picker = cx.new(|cx| EmojiPicker::new(store, window, cx));
+        let picker = cx.new(|cx| EmojiPicker::new(store, true, window, cx));
         cx.subscribe_in(&picker, window, |this, _, event: &PickerEvent, window, cx| {
             this.picker = None;
-            if let PickerEvent::Pick(emoji) = event {
-                this.input.update(cx, |state, cx| {
-                    state.insert(emoji.clone(), window, cx);
-                    state.focus(window, cx);
-                });
-            } else {
-                this.input.update(cx, |state, cx| state.focus(window, cx));
-            }
+            // An emoji goes in as itself, an emote as its shortcode (sending
+            // turns it into the picture), and a sticker is sent at once.
+            let text = match event {
+                PickerEvent::Pick(Picked::Unicode(emoji)) => Some(emoji.clone()),
+                PickerEvent::Pick(Picked::Emote(image)) => Some(format!(":{}: ", image.shortcode)),
+                PickerEvent::Pick(Picked::Sticker(image)) => {
+                    this.send_sticker(image.clone(), cx);
+                    None
+                }
+                PickerEvent::Close => None,
+            };
+            this.input.update(cx, |state, cx| {
+                if let Some(text) = text {
+                    state.insert(text, window, cx);
+                }
+                state.focus(window, cx);
+            });
             cx.notify();
         })
         .detach();
         self.picker = Some((at, picker));
         cx.notify();
+    }
+
+    fn send_sticker(&mut self, image: horo_core::matrix::packs::PackImageDto, cx: &mut Context<Self>) {
+        let sticker = StickerOptions {
+            body: image.body.clone(),
+            url: image.url.clone(),
+            width: image.width,
+            height: image.height,
+            size: image.size.and_then(|s| u32::try_from(s).ok()),
+            mimetype: image.mimetype.clone(),
+        };
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let (state, room_id) = (backend.state.clone(), self.room_id.clone());
+            async move { timeline::send_sticker(&*state.core().await?, &room_id, None, sticker).await }
+        });
+        cx.spawn(async move |this, cx| {
+            let error = match task.await {
+                Ok(Ok(())) => return,
+                Ok(Err(e)) => e.to_string(),
+                Err(e) => e.to_string(),
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.error = Some(format!("couldn't send the sticker: {error}").into());
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Reply to, or edit, what the timeline says.
@@ -206,6 +247,8 @@ impl Composer {
         let backend = Backend::global(cx);
         let task = backend.run({
             let (state, room_id, body, mode) = (backend.state.clone(), self.room_id.clone(), body.clone(), mode.clone());
+            // Every emote we know; the backend puts in the ones the text uses.
+            let emotes = packs::emote_refs(&self.store.read(cx).packs);
             async move {
                 let core = state.core().await?;
                 match mode {
@@ -215,7 +258,7 @@ impl Composer {
                             Mode::Reply { event_id, .. } => Some(event_id),
                             _ => None,
                         };
-                        let options = SendOptions { body, markdown: true, reply_to, thread_root: None, msgtype: None, emotes: Default::default() };
+                        let options = SendOptions { body, markdown: true, reply_to, thread_root: None, msgtype: None, emotes };
                         timeline::send(&core, &room_id, options).await
                     }
                 }

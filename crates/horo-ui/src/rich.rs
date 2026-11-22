@@ -32,6 +32,17 @@ pub struct Inline {
     /// Non-overlapping, in order; text outside them is plain.
     pub spans: Vec<(Range<usize>, Marks)>,
     pub links: Vec<(Range<usize>, String)>,
+    /// Custom emotes and other inline pictures we can fetch ourselves:
+    /// where they sit in `text` (they take no characters), their `mxc://`
+    /// address, and their alt text (the `:shortcode:`).
+    pub images: Vec<InlineImage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineImage {
+    pub at: usize,
+    pub mxc: String,
+    pub alt: String,
 }
 
 impl Inline {
@@ -50,7 +61,23 @@ impl Inline {
     }
 
     fn is_blank(&self) -> bool {
-        self.text.trim().is_empty()
+        self.text.trim().is_empty() && self.images.is_empty()
+    }
+
+    /// Only pictures, no words: drawn big, as a message of one emoji is.
+    pub fn only_images(&self) -> bool {
+        !self.images.is_empty() && self.text.trim().is_empty()
+    }
+
+    /// `range` of the text, with what falls in it.
+    pub fn slice(&self, range: Range<usize>) -> Inline {
+        let clip = |r: &Range<usize>| r.start.clamp(range.start, range.end) - range.start..r.end.clamp(range.start, range.end) - range.start;
+        Inline {
+            text: self.text[range.clone()].to_owned(),
+            spans: self.spans.iter().map(|(r, m)| (clip(r), *m)).filter(|(r, _)| !r.is_empty()).collect(),
+            links: self.links.iter().map(|(r, l)| (clip(r), l.clone())).filter(|(r, _)| !r.is_empty()).collect(),
+            images: Vec::new(),
+        }
     }
 
     /// Drop the whitespace HTML's line breaks leave at either end.
@@ -64,6 +91,9 @@ impl Inline {
         self.text = self.text[start..end].to_owned();
         self.spans = self.spans.iter().map(|(r, m)| (clip(r), *m)).filter(|(r, _)| !r.is_empty()).collect();
         self.links = self.links.iter().map(|(r, l)| (clip(r), l.clone())).filter(|(r, _)| !r.is_empty()).collect();
+        for image in &mut self.images {
+            image.at = image.at.clamp(start, end) - start;
+        }
         self
     }
 }
@@ -124,7 +154,10 @@ impl Builder {
                 // newlines between tags that mean nothing.
                 let text = text.borrow();
                 let mut collapsed = String::with_capacity(text.len());
-                let mut space = self.current.text.ends_with([' ', '\n']) || self.current.text.is_empty();
+                // A picture just written counts as a word, so the space
+                // after it stays.
+                let picture_last = self.current.images.last().is_some_and(|i| i.at == self.current.text.len());
+                let mut space = !picture_last && (self.current.text.ends_with([' ', '\n']) || self.current.text.is_empty());
                 for c in text.chars() {
                     if c.is_whitespace() {
                         if !space {
@@ -199,11 +232,18 @@ impl Builder {
                             self.current.links.push((start..end, href));
                         }
                     }
-                    // Custom emoji and inline images: their name, until
-                    // they're drawn as pictures.
+                    // Custom emoji and inline images: pictures when they're
+                    // on a Matrix server (fetched through ours); a remote URL
+                    // would tell its owner who's reading, so that's its name.
                     "img" => {
                         let alt = attr("alt").or_else(|| attr("title")).unwrap_or_else(|| "🖼".into());
-                        self.current.push(&alt, marks);
+                        match attr("src").filter(|src| src.starts_with("mxc://")) {
+                            Some(mxc) => {
+                                let at = self.current.text.len();
+                                self.current.images.push(InlineImage { at, mxc, alt });
+                            }
+                            None => self.current.push(&alt, marks),
+                        }
                     }
                     "span" if attr("data-mx-spoiler").is_some() => self.children(node, Marks { spoiler: true, ..marks }),
                     _ => self.children(node, marks),
@@ -312,9 +352,19 @@ mod tests {
 
     #[test]
     fn spoilers_and_emoji_images() {
-        let blocks = parse("<span data-mx-spoiler=\"\">secret</span> <img src=\"mxc://x/y\" alt=\":blob:\">");
+        let blocks = parse("<span data-mx-spoiler=\"\">secret</span> <img src=\"mxc://x/y\" alt=\":blob:\"> <img src=\"https://evil/x.png\" alt=\"remote\">");
         let p = paragraph(&blocks);
-        assert_eq!(p.text, "secret :blob:");
+        assert_eq!(p.text, "secret  remote");
         assert!(p.spans[0].1.spoiler);
+        assert_eq!(p.images, vec![InlineImage { at: 7, mxc: "mxc://x/y".into(), alt: ":blob:".into() }]);
+        assert!(!p.only_images());
+    }
+
+    #[test]
+    fn a_message_of_only_emotes_is_only_images() {
+        let blocks = parse("<img data-mx-emoticon src=\"mxc://x/a\" alt=\":a:\"> <img data-mx-emoticon src=\"mxc://x/b\" alt=\":b:\">");
+        let p = paragraph(&blocks);
+        assert!(p.only_images());
+        assert_eq!(p.images.len(), 2);
     }
 }

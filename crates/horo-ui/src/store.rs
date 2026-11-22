@@ -22,6 +22,8 @@ use horo_core::{
     verification,
 };
 
+use horo_core::matrix::packs::ImagePackDto;
+
 use crate::{
     alerts::{self, Looking, Watch},
     call::CallView,
@@ -46,6 +48,11 @@ pub struct Store {
     /// The last sign-in failure, for the login screen.
     pub error: Option<SharedString>,
     pub rooms: Vec<RoomSummary>,
+    /// Custom emotes and stickers usable in the open room: your own pack,
+    /// the room's, and the ones you carry everywhere, in that order.
+    pub packs: Vec<ImagePackDto>,
+    /// Which room `packs` was loaded for.
+    packs_for: Option<String>,
     /// The last diff batch folded into `rooms`; `None` until the snapshot.
     rooms_seq: Option<u64>,
     /// Batches that arrived before the snapshot.
@@ -188,6 +195,8 @@ impl Store {
             phase: Phase::Restoring,
             error: None,
             rooms: Vec::new(),
+            packs: Vec::new(),
+            packs_for: None,
             rooms_seq: None,
             early: Vec::new(),
             spaces: Vec::new(),
@@ -334,6 +343,8 @@ impl Store {
             async move { auth::logout(&state, &dir, wipe).await }
         });
         self.rooms.clear();
+        self.packs.clear();
+        self.packs_for = None;
         self.rooms_seq = None;
         self.spaces.clear();
         self.room = None;
@@ -462,6 +473,40 @@ impl Store {
     pub fn open_space(&mut self, space: Option<String>, cx: &mut Context<Self>) {
         self.space = space;
         cx.notify();
+    }
+
+    /// Load the packs usable in `room_id`, unless they're already here.
+    /// A failure leaves none: a picker without custom packs is still a
+    /// picker.
+    pub fn load_packs(&mut self, room_id: &str, cx: &mut Context<Self>) {
+        if self.packs_for.as_deref() == Some(room_id) {
+            return;
+        }
+        self.packs_for = Some(room_id.to_owned());
+        let Ok(room) = matrix_sdk::ruma::OwnedRoomId::try_from(room_id) else { return };
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let state = backend.state.clone();
+            async move { horo_core::matrix::packs::available(&*state.core().await?, Some(&room)).await }
+        });
+        let wanted = room_id.to_owned();
+        cx.spawn(async move |this, cx| {
+            let packs = match task.await {
+                Ok(Ok(packs)) => packs,
+                Ok(Err(e)) => {
+                    tracing::debug!("couldn't load emote packs: {e}");
+                    Vec::new()
+                }
+                Err(_) => Vec::new(),
+            };
+            let _ = this.update(cx, |store, cx| {
+                if store.packs_for.as_deref() == Some(wanted.as_str()) {
+                    store.packs = packs;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub fn open_room(&mut self, room: String, cx: &mut Context<Self>) {

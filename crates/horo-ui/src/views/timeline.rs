@@ -23,6 +23,7 @@ use matrix_sdk::ruma::OwnedRoomId;
 use crate::{
     backend::Backend,
     media::Media,
+    packs,
     rich::{self, Block},
     store::{Store, apply_diff},
     theme::{Palette, corner, space, text},
@@ -267,9 +268,20 @@ impl Timeline {
         }
         // Your recent reactions, one click each, then the picker for more.
         if reactable && !confirming {
-            let recent = self.store.read(cx).prefs.recent_reactions.clone();
+            let (recent, known) = {
+                let store = self.store.read(cx);
+                (store.prefs.recent_reactions.clone(), packs::image_lookup(&store.packs))
+            };
             for (i, key) in recent.into_iter().enumerate() {
-                let (event_id, tip) = (id.clone(), format!("react with {key}"));
+                // A custom emote is remembered by its address (or a
+                // shortcode another client used): drawn as its picture.
+                let picture = packs::reaction_image(&key, &known);
+                let name = picture.as_ref().map(|(_, name)| name.clone()).unwrap_or_else(|| key.clone());
+                let face = match picture.and_then(|(url, _)| Media::image(&url, Some((52, 52)), cx)) {
+                    Some(image) => img(image).size(px(18.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
+                    None => div().child(key.clone()).into_any_element(),
+                };
+                let (event_id, tip) = (id.clone(), format!("react with {name}"));
                 bar = bar.child(
                     div()
                         .id(SharedString::from(format!("quick-{i}/{id}")))
@@ -282,7 +294,7 @@ impl Timeline {
                         .text_size(text(15.))
                         .hover(|b| b.bg(Hsla { a: 0.08, ..gpui::white() }))
                         .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
-                        .child(key.clone())
+                        .child(face)
                         .on_click(cx.listener(move |this, _, _, cx| this.toggle_reaction(event_id.clone(), key.clone(), cx))),
                 );
             }
@@ -352,12 +364,13 @@ impl Timeline {
 
     fn open_picker(&mut self, event_id: String, at: gpui::Point<gpui::Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         let store = self.store.clone();
-        let picker = cx.new(|cx| EmojiPicker::new(store, window, cx));
+        // No stickers: a reaction is a string, and a sticker can't be one.
+        let picker = cx.new(|cx| EmojiPicker::new(store, false, window, cx));
         let target = event_id.clone();
         cx.subscribe(&picker, move |this, _, event: &PickerEvent, cx| {
             this.picker = None;
-            if let PickerEvent::Pick(key) = event {
-                this.toggle_reaction(target.clone(), key.clone(), cx);
+            if let PickerEvent::Pick(picked) = event {
+                this.toggle_reaction(target.clone(), packs::reaction_key(picked), cx);
             }
             cx.notify();
         })
@@ -642,11 +655,11 @@ impl Timeline {
             ContentDto::Text { formatted: Some(html), .. } | ContentDto::Notice { formatted: Some(html), .. } if !event.is_emoji_only => {
                 let colour = if matches!(event.content, ContentDto::Notice { .. }) { palette.text_secondary } else { palette.text };
                 let blocks = self.blocks(html);
-                content::rich(&id, &blocks, colour, palette)
+                content::rich(&id, &blocks, colour, palette, cx)
             }
             ContentDto::Emote { formatted: Some(html), .. } => {
                 let blocks = self.blocks(&format!("* {html}"));
-                div().italic().child(content::rich(&id, &blocks, palette.text, palette)).into_any_element()
+                div().italic().child(content::rich(&id, &blocks, palette.text, palette, cx)).into_any_element()
             }
             ContentDto::Image { body, media } => content::picture(&id, body, media, false, &store, palette, cx),
             ContentDto::Sticker { body, media } => content::picture(&id, body, media, true, &store, palette, cx),

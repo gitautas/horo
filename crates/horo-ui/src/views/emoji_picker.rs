@@ -4,12 +4,13 @@
 //!
 //! Its owner places it (in a `deferred(anchored())` at the button that
 //! opened it) and listens for [`PickerEvent`]: a pick, or a close (Escape,
-//! or a press anywhere else). Custom packs and stickers aren't here yet;
-//! the gpui app doesn't load packs.
+//! or a press anywhere else). Your custom packs come first, then the
+//! stickers when the owner can send one (the composer; a reaction can't be
+//! a sticker), then the Unicode set; search covers shortcodes and names.
 
 use std::rc::Rc;
 
-use gpui::AppContext as _;
+use gpui::{AppContext as _, StyledImage as _};
 
 use gpui::{
     AnyElement, Context, Entity, EventEmitter, FocusHandle, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ListAlignment,
@@ -24,6 +25,8 @@ use gpui_component::{
 
 use crate::{
     emoji::{self, SkinTone, TONE_SAMPLES},
+    media::Media,
+    packs::{self, Picked},
     store::Store,
     theme::{Palette, corner, space, text},
     views::voice::icon,
@@ -34,18 +37,51 @@ pub const HEIGHT: f32 = 392.;
 const COLUMNS: usize = 8;
 const CELL: f32 = 34.;
 const SEARCH_LIMIT: usize = 90;
+const EMOTE_SEARCH_LIMIT: usize = 16;
+/// The size pack images are drawn at in the grid.
+const CELL_IMAGE: f32 = 26.;
 
 pub enum PickerEvent {
-    Pick(String),
+    Pick(Picked),
     Close,
 }
 
 #[derive(Clone)]
+enum Draw {
+    Text(String),
+    /// An `mxc://` picture.
+    Image(String),
+}
+
+#[derive(Clone)]
 struct Cell {
-    /// What's drawn and what picking sends (toned where it takes a tone).
-    shown: String,
+    draw: Draw,
+    /// What picking it sends.
+    pick: Picked,
     /// What the footer says on hover.
     name: SharedString,
+}
+
+impl Cell {
+    fn unicode(shown: String, name: &str) -> Cell {
+        Cell { draw: Draw::Text(shown.clone()), pick: Picked::Unicode(shown), name: name.to_owned().into() }
+    }
+
+    fn image(image: &horo_core::matrix::packs::PackImageDto, sticker: bool) -> Cell {
+        let pick = if sticker { Picked::Sticker(image.clone()) } else { Picked::Emote(image.clone()) };
+        Cell { draw: Draw::Image(image.url.clone()), pick, name: format!(":{}:", image.shortcode).into() }
+    }
+}
+
+/// A cell's face: the character, or the picture (blank while it loads).
+fn face(draw: &Draw, size: f32, cx: &mut gpui::App) -> AnyElement {
+    match draw {
+        Draw::Text(text) => div().child(text.clone()).into_any_element(),
+        Draw::Image(mxc) => match Media::image(mxc, Some((64, 64)), cx) {
+            Some(image) => gpui::img(image).size(px(size)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
+            None => div().size(px(size)).into_any_element(),
+        },
+    }
 }
 
 enum Row {
@@ -63,12 +99,14 @@ pub struct EmojiPicker {
     sections: Vec<(&'static str, SharedString, usize)>,
     hovered: Option<Cell>,
     focus: FocusHandle,
+    /// Whether stickers are on offer (the composer) or not (reactions).
+    stickers: bool,
 }
 
 impl EventEmitter<PickerEvent> for EmojiPicker {}
 
 impl EmojiPicker {
-    pub fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> EmojiPicker {
+    pub fn new(store: Entity<Store>, stickers: bool, window: &mut Window, cx: &mut Context<Self>) -> EmojiPicker {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("search emoji~"));
         cx.subscribe(&search, |this: &mut Self, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
@@ -87,6 +125,7 @@ impl EmojiPicker {
             sections: Vec::new(),
             hovered: None,
             focus: cx.focus_handle(),
+            stickers,
         };
         picker.rebuild(cx);
         picker
@@ -94,10 +133,11 @@ impl EmojiPicker {
 
     fn rebuild(&mut self, cx: &mut Context<Self>) {
         let query = self.search.read(cx).value().trim().to_owned();
-        let (tone, recent) = {
-            let prefs = &self.store.read(cx).prefs;
-            (prefs.skin_tone as SkinTone, prefs.recent_reactions.clone())
+        let (tone, recent, pack_list) = {
+            let store = self.store.read(cx);
+            (store.prefs.skin_tone as SkinTone, store.prefs.recent_reactions.clone(), store.packs.clone())
         };
+        let known = packs::image_lookup(&pack_list);
         let mut rows = Vec::new();
         let mut sections = Vec::new();
         let grid = |rows: &mut Vec<Row>, cells: Vec<Cell>| {
@@ -108,22 +148,59 @@ impl EmojiPicker {
         if query.is_empty() {
             if !recent.is_empty() {
                 rows.push(Row::Title("recent".into()));
-                // Stored as sent: already toned.
-                let cells = recent.iter().map(|key| Cell { shown: key.clone(), name: emoji::name_of(key).unwrap_or(key).to_owned().into() }).collect();
+                // Stored as sent: already toned, and a custom emote as its
+                // address (or a shortcode another client used).
+                let cells = recent
+                    .iter()
+                    .map(|key| match packs::reaction_image(key, &known) {
+                        Some((url, name)) => {
+                            let pick = match packs::reaction_shortcode(key).and_then(|code| known.get(code)) {
+                                Some(image) => Picked::Emote(image.clone()),
+                                None => Picked::Unicode(key.clone()),
+                            };
+                            Cell { draw: Draw::Image(url), pick, name: name.into() }
+                        }
+                        None => Cell::unicode(key.clone(), emoji::name_of(key).unwrap_or(key)),
+                    })
+                    .collect();
                 grid(&mut rows, cells);
+            }
+            for pack in &pack_list {
+                let images: Vec<Cell> = pack.images.iter().filter(|i| i.is_emoticon).map(|i| Cell::image(i, false)).collect();
+                if images.is_empty() {
+                    continue;
+                }
+                let icon = if pack.source == horo_core::matrix::packs::PackSource::User { "icons/circle-user.svg" } else { "icons/users.svg" };
+                sections.push((icon, SharedString::from(pack.display_name.clone()), rows.len()));
+                rows.push(Row::Title(pack.display_name.clone().into()));
+                grid(&mut rows, images);
+            }
+            if self.stickers {
+                let stickers: Vec<Cell> = packs::stickers_of(&pack_list).iter().map(|i| Cell::image(i, true)).collect();
+                if !stickers.is_empty() {
+                    sections.push(("icons/sticker.svg", "stickers".into(), rows.len()));
+                    rows.push(Row::Title("stickers".into()));
+                    grid(&mut rows, stickers);
+                }
             }
             for group in emoji::groups() {
                 sections.push((group.icon, SharedString::from(group.name.clone()), rows.len()));
                 rows.push(Row::Title(group.name.clone().into()));
-                grid(&mut rows, group.emojis.iter().map(|e| Cell { shown: emoji::toned(e, tone), name: e.name.into() }).collect());
+                grid(&mut rows, group.emojis.iter().map(|e| Cell::unicode(emoji::toned(e, tone), e.name)).collect());
             }
         } else {
+            let emotes = packs::match_emotes(&packs::emote_lookup(&pack_list), &query, EMOTE_SEARCH_LIMIT);
             let found = emoji::search(&query, SEARCH_LIMIT);
-            if found.is_empty() {
+            if emotes.is_empty() && found.is_empty() {
                 rows.push(Row::Nothing(format!("nothing matches \"{query}\"").into()));
-            } else {
+            }
+            if !emotes.is_empty() {
+                rows.push(Row::Title("your packs".into()));
+                grid(&mut rows, emotes.iter().map(|i| Cell::image(i, false)).collect());
+            }
+            if !found.is_empty() {
                 rows.push(Row::Title(format!("{} emoji", found.len()).into()));
-                grid(&mut rows, found.into_iter().map(|e| Cell { shown: emoji::toned(e, tone), name: e.name.into() }).collect());
+                grid(&mut rows, found.into_iter().map(|e| Cell::unicode(emoji::toned(e, tone), e.name)).collect());
             }
         }
         // A rebuild for a tone change keeps the scroll; a new query starts
@@ -162,7 +239,8 @@ impl EmojiPicker {
             Some(Row::Cells(cells)) => {
                 let mut row = h_flex().w_full().gap(space(1.));
                 for (col, cell) in cells.iter().enumerate() {
-                    let (pick, hover) = (cell.shown.clone(), cell.clone());
+                    let (pick, hover) = (cell.pick.clone(), cell.clone());
+                    let shown = face(&cell.draw, CELL_IMAGE, cx);
                     row = row.child(
                         div()
                             .id(("emoji", ix * COLUMNS + col))
@@ -175,7 +253,7 @@ impl EmojiPicker {
                             .cursor_pointer()
                             .text_size(text(20.))
                             .hover(|d| d.bg(Hsla { a: 0.08, ..gpui::white() }))
-                            .child(cell.shown.clone())
+                            .child(shown)
                             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                                 if *hovered {
                                     this.hovered = Some(hover.clone());
@@ -197,9 +275,9 @@ impl EmojiPicker {
 
     fn footer(&self, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let tone = self.store.read(cx).prefs.skin_tone;
-        let (face, label) = match &self.hovered {
-            Some(cell) => (cell.shown.clone(), cell.name.clone()),
-            None => ("🫧".to_owned(), "pick something~".into()),
+        let (shown, label) = match &self.hovered {
+            Some(cell) => (face(&cell.draw, 19., cx), cell.name.clone()),
+            None => (div().child("🫧").into_any_element(), "pick something~".into()),
         };
         let mut swatches = h_flex().gap(space(1.));
         for (i, sample) in TONE_SAMPLES.iter().enumerate() {
@@ -230,7 +308,7 @@ impl EmojiPicker {
             .border_t_1()
             .border_color(palette.border_subtle)
             .bg(palette.card)
-            .child(div().w(px(20.)).flex().justify_center().text_size(text(17.)).child(face))
+            .child(div().w(px(20.)).flex().justify_center().text_size(text(17.)).child(shown))
             .child(div().flex_1().min_w_0().truncate().text_size(text(11.5)).text_color(palette.text_secondary).child(label))
             .child(swatches)
             .into_any_element()

@@ -87,6 +87,7 @@ impl Shell {
         let room_id = id.clone();
         self.info = Some(cx.new(|cx| RoomInfo::new(store, room_id, cx)));
         let Ok(room_id) = OwnedRoomId::try_from(id.as_str()) else { return };
+        self.store.update(cx, |s, cx| s.load_packs(&id, cx));
         let store = self.store.clone();
         let timeline = cx.new(|cx| Timeline::new(room_id.clone(), &store, cx));
         let weak = timeline.downgrade();
