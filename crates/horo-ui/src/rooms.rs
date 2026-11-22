@@ -31,6 +31,27 @@ pub fn is_in_space(room: &RoomSummary, space: &SpaceSummary) -> bool {
     space.children.contains(&room.id) || room.parent_spaces.contains(&space.id)
 }
 
+/// The joined rooms in a space (not its subspaces).
+pub fn in_space<'r>(rooms: &'r [RoomSummary], spaces: &[SpaceSummary], space_id: &str) -> Vec<&'r RoomSummary> {
+    let Some(space) = spaces.iter().find(|s| s.id == space_id) else { return Vec::new() };
+    rooms.iter().filter(|r| !r.is_space && r.membership == RoomMembership::Joined && is_in_space(r, space)).collect()
+}
+
+/// The joined rooms in a space and in no other space you're in: the ones
+/// it's safe to offer to leave with it. Leaving one space shouldn't empty
+/// another.
+pub fn only_in_space<'r>(rooms: &'r [RoomSummary], spaces: &[SpaceSummary], space_id: &str) -> Vec<&'r RoomSummary> {
+    in_space(rooms, spaces, space_id).into_iter().filter(|room| !spaces.iter().any(|other| other.id != space_id && is_in_space(room, other))).collect()
+}
+
+/// "a, b, c and 4 more": enough to recognise, short enough to read.
+pub fn list_names(names: &[&str], shown: usize) -> String {
+    if names.len() <= shown {
+        return names.join(", ");
+    }
+    format!("{} and {} more", names[..shown].join(", "), names.len() - shown)
+}
+
 /// The rooms to list, newest activity first. Spaces are never listed (they
 /// are the rail) unless it's an invite to one outside any space.
 pub fn filter<'r>(rooms: &'r [RoomSummary], view: &View) -> Vec<&'r RoomSummary> {
@@ -249,5 +270,16 @@ mod tests {
                 (Section::Voice, vec!["!v".into()]),
             ]
         );
+    }
+
+    #[test]
+    fn a_spaces_own_rooms_leave_out_ones_another_space_holds() {
+        let rooms = vec![room("!a", "a"), room("!b", "b"), room("!c", "c")];
+        let spaces = vec![space("!s", &["!a", "!b"]), space("!t", &["!b"])];
+        assert_eq!(ids(&in_space(&rooms, &spaces, "!s")), ["!a", "!b"]);
+        assert_eq!(ids(&only_in_space(&rooms, &spaces, "!s")), ["!a"]);
+        assert!(in_space(&rooms, &spaces, "!nope").is_empty());
+        assert_eq!(list_names(&["a", "b"], 3), "a, b");
+        assert_eq!(list_names(&["a", "b", "c", "d", "e"], 3), "a, b, c and 2 more");
     }
 }

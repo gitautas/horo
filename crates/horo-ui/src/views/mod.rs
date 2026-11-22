@@ -9,6 +9,7 @@ pub mod emoji_picker;
 pub mod explore;
 pub mod invite_pane;
 pub mod invite_to_space;
+pub mod leave_space;
 pub mod lightbox;
 pub mod login;
 pub mod modal;

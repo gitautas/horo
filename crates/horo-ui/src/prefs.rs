@@ -34,6 +34,8 @@ pub struct Prefs {
     /// The reactions you reach for, newest first: the hover bar's quick
     /// row and the picker's "recent".
     pub recent_reactions: Vec<String>,
+    /// Spaces whose muted rooms are left out of the list, by id.
+    pub hide_muted_in_spaces: Vec<String>,
 }
 
 /// How many recent reactions are kept.
@@ -53,6 +55,7 @@ impl Default for Prefs {
             show_info_panel: true,
             skin_tone: 0,
             recent_reactions: ["💜", "😹", "🥺", "✨", "👀", "🔥"].map(String::from).to_vec(),
+            hide_muted_in_spaces: Vec::new(),
         }
     }
 }

@@ -65,6 +65,9 @@ pub struct Explore {
     /// Every fetch takes a ticket; an answer to an older one is dropped.
     ticket: u64,
     debounce: Option<Task<()>>,
+    /// Browsing one space's rooms (from its menu in the rail) rather than
+    /// the directory.
+    browse: Option<PublicRoom>,
 }
 
 impl EventEmitter<Closed> for Explore {}
@@ -102,8 +105,45 @@ impl Explore {
             busy: HashMap::new(),
             ticket: 0,
             debounce: None,
+            browse: None,
         };
         explore.load(None, cx);
+        explore
+    }
+
+    /// Everything in one space, rooms not joined yet included, as
+    /// SpaceDialogs.tsx's BrowseRooms.
+    pub fn browse(store: Entity<Store>, space_id: String, name: String, window: &mut Window, cx: &mut Context<Self>) -> Explore {
+        let mut explore = Explore {
+            store,
+            focus: cx.focus_handle(),
+            search: cx.new(|cx| InputState::new(window, cx)),
+            server: cx.new(|cx| InputState::new(window, cx)),
+            query: (String::new(), String::new()),
+            spaces: Vec::new(),
+            next_batch: None,
+            loading: false,
+            error: None,
+            expanded: None,
+            inside: HashMap::new(),
+            busy: HashMap::new(),
+            ticket: 0,
+            debounce: None,
+            browse: Some(PublicRoom {
+                id: space_id.clone(),
+                name: Some(name),
+                topic: None,
+                alias: None,
+                avatar_url: None,
+                members: 0,
+                is_space: true,
+                is_voice: false,
+                join_rule: "invite".into(),
+                via: Vec::new(),
+            }),
+        };
+        explore.focus.focus(window, cx);
+        explore.toggle(space_id, cx);
         explore
     }
 
@@ -483,6 +523,24 @@ fn first_lines(topic: &str, lines: usize, chars: usize) -> String {
 impl Render for Explore {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = cx.global::<Palette>().clone();
+        if let Some(space) = self.browse.clone() {
+            let body = v_flex()
+                .child(div().mb(px(12.)).text_size(text(12.5)).text_color(palette.text_tertiary).child("everything in the space, including rooms you haven't joined yet."))
+                .child(self.inside_list(&space, &palette, cx))
+                .into_any_element();
+            let this = cx.weak_entity();
+            return modal(
+                "browse-rooms",
+                format!("rooms in {}", space.name.clone().unwrap_or_default()),
+                460.,
+                &self.focus,
+                &palette,
+                move |_, cx| {
+                    let _ = this.update(cx, |this, cx| this.close(cx));
+                },
+                body,
+            );
+        }
         let _ = window;
         let spaces = self.spaces.clone();
         let rows: Vec<AnyElement> = spaces.iter().map(|s| self.space_row(s, &palette, cx)).collect();
