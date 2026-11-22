@@ -4,6 +4,7 @@ pub mod app;
 pub mod avatar;
 pub mod composer;
 pub mod content;
+pub mod emoji_picker;
 pub mod lightbox;
 pub mod login;
 pub mod profile;

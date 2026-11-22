@@ -21,8 +21,10 @@ use matrix_sdk::ruma::OwnedRoomId;
 
 use crate::{
     backend::Backend,
+    store::Store,
     theme::{Palette, corner, space, text},
     views::{
+        emoji_picker::{EmojiPicker, PickerEvent},
         timeline::{Timeline, TimelineAction},
         voice::icon,
     },
@@ -44,10 +46,21 @@ pub struct Composer {
     error: Option<SharedString>,
     /// Said under the box when it isn't: the one case worth a line.
     encrypted: bool,
+    store: Entity<Store>,
+    /// The emoji picker, open over the box, and where it was opened.
+    picker: Option<(gpui::Point<gpui::Pixels>, Entity<EmojiPicker>)>,
 }
 
 impl Composer {
-    pub fn new(room_id: OwnedRoomId, room_name: &str, encrypted: bool, timeline: WeakEntity<Timeline>, window: &mut Window, cx: &mut Context<Self>) -> Composer {
+    pub fn new(
+        room_id: OwnedRoomId,
+        room_name: &str,
+        encrypted: bool,
+        store: Entity<Store>,
+        timeline: WeakEntity<Timeline>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Composer {
         let placeholder = format!("say something cute in {room_name}~");
         let input = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx);
@@ -64,7 +77,32 @@ impl Composer {
         .detach();
         input.update(cx, |state, cx| state.focus(window, cx));
         cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        Composer { room_id, timeline, input, mode: Mode::Write, error: None, encrypted }
+        Composer { room_id, timeline, input, mode: Mode::Write, error: None, encrypted, store, picker: None }
+    }
+
+    /// The picker, over the box; a pick goes in at the cursor.
+    fn open_picker(&mut self, at: gpui::Point<gpui::Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.picker.take().is_some() {
+            cx.notify();
+            return;
+        }
+        let store = self.store.clone();
+        let picker = cx.new(|cx| EmojiPicker::new(store, window, cx));
+        cx.subscribe_in(&picker, window, |this, _, event: &PickerEvent, window, cx| {
+            this.picker = None;
+            if let PickerEvent::Pick(emoji) = event {
+                this.input.update(cx, |state, cx| {
+                    state.insert(emoji.clone(), window, cx);
+                    state.focus(window, cx);
+                });
+            } else {
+                this.input.update(cx, |state, cx| state.focus(window, cx));
+            }
+            cx.notify();
+        })
+        .detach();
+        self.picker = Some((at, picker));
+        cx.notify();
     }
 
     /// Reply to, or edit, what the timeline says.
@@ -283,6 +321,26 @@ impl Render for Composer {
                     .child(div().flex_1().min_w_0().py(space(4.)).text_size(px(14.5)).child(Textarea::new(&self.input).appearance(false)))
                     .child(
                         div()
+                            .id("composer-emoji")
+                            .size(px(38.))
+                            .flex_none()
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("emoji").build(window, cx))
+                            .child(icon("icons/smile.svg").size(px(20.)).text_color(if self.picker.is_some() { palette.accent } else { palette.text_tertiary }))
+                            // On press, so the picker's own "pressed outside"
+                            // doesn't close it and this reopen it.
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                // Above the button, clear of the box.
+                                this.open_picker(gpui::point(event.position.x, event.position.y - px(28.)), window, cx)
+                            })),
+                    )
+                    .child(
+                        div()
                             .id("composer-send")
                             .size(px(38.))
                             .flex_none()
@@ -299,6 +357,16 @@ impl Render for Composer {
                             .on_click(cx.listener(|this, _, window, cx| this.send(window, cx))),
                     ),
             )
+            .children(self.picker.as_ref().map(|(at, picker)| {
+                gpui::deferred(
+                    gpui::anchored()
+                        .position(*at)
+                        .anchor(gpui::Anchor::BottomRight)
+                        .snap_to_window_with_margin(px(10.))
+                        .child(picker.clone()),
+                )
+                .with_priority(1)
+            }))
             .when(!self.encrypted, |d| {
                 d.child(
                     h_flex()

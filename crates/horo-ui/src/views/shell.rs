@@ -87,7 +87,7 @@ impl Shell {
         let store = self.store.clone();
         let timeline = cx.new(|cx| Timeline::new(room_id.clone(), &store, cx));
         let weak = timeline.downgrade();
-        let composer = cx.new(|cx| Composer::new(room_id, &name, encrypted, weak, window, cx));
+        let composer = cx.new(|cx| Composer::new(room_id, &name, encrypted, store.clone(), weak, window, cx));
         // Reply and edit buttons on a message go to the composer under it.
         cx.subscribe_in(&timeline, window, |this, _, action: &TimelineAction, window, cx| {
             if let Some((_, _, composer)) = &this.timeline {

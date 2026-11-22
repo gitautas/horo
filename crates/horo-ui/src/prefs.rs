@@ -29,7 +29,15 @@ pub struct Prefs {
     pub audio_output: Option<String>,
     /// The room info panel beside the timeline.
     pub show_info_panel: bool,
+    /// 0 (default yellow) to 5, for emoji that take one.
+    pub skin_tone: u8,
+    /// The reactions you reach for, newest first: the hover bar's quick
+    /// row and the picker's "recent".
+    pub recent_reactions: Vec<String>,
 }
+
+/// How many recent reactions are kept.
+pub const MAX_RECENT_REACTIONS: usize = 6;
 
 impl Default for Prefs {
     fn default() -> Prefs {
@@ -43,6 +51,8 @@ impl Default for Prefs {
             audio_input: None,
             audio_output: None,
             show_info_panel: true,
+            skin_tone: 0,
+            recent_reactions: ["💜", "😹", "🥺", "✨", "👀", "🔥"].map(String::from).to_vec(),
         }
     }
 }
@@ -52,6 +62,13 @@ fn file(data_dir: &Path) -> PathBuf {
 }
 
 impl Prefs {
+    /// `key` was just reacted with: to the front of the recent ones.
+    pub fn note_reaction(&mut self, key: &str) {
+        self.recent_reactions.retain(|k| k != key);
+        self.recent_reactions.insert(0, key.to_owned());
+        self.recent_reactions.truncate(MAX_RECENT_REACTIONS);
+    }
+
     pub fn load(data_dir: &Path) -> Prefs {
         match std::fs::read(file(data_dir)) {
             Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
@@ -94,6 +111,17 @@ mod tests {
         changed.save(&dir);
         assert_eq!(Prefs::load(&dir), changed);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_reaction_moves_to_the_front_and_the_list_stays_short() {
+        let mut prefs = Prefs::default();
+        prefs.note_reaction("🔥");
+        assert_eq!(prefs.recent_reactions[0], "🔥");
+        assert_eq!(prefs.recent_reactions.len(), MAX_RECENT_REACTIONS);
+        prefs.note_reaction("🐸");
+        assert_eq!(prefs.recent_reactions[..2], ["🐸".to_owned(), "🔥".to_owned()]);
+        assert_eq!(prefs.recent_reactions.len(), MAX_RECENT_REACTIONS);
     }
 
     #[test]

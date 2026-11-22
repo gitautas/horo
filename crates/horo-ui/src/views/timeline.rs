@@ -10,7 +10,7 @@ use std::{collections::HashMap, rc::Rc};
 
 use chrono::{DateTime, Local, TimeZone};
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, InteractiveElement, StatefulInteractiveElement, FontWeight, IntoElement, ListAlignment, ListState, ParentElement, Render, SharedString, Styled,
+    AnyElement, App, AppContext, Context, Entity, Hsla, EventEmitter, InteractiveElement, StatefulInteractiveElement, FontWeight, IntoElement, ListAlignment, ListState, ParentElement, Render, SharedString, Styled,
     WeakEntity, Window, div, img, list, prelude::FluentBuilder, px, StyledImage,
 };
 use gpui_component::{h_flex, v_flex};
@@ -29,6 +29,8 @@ use crate::{
     views::{
         avatar::{accent_for, avatar},
         content::{self, Open},
+        emoji_picker::{EmojiPicker, PickerEvent},
+        voice::icon,
     },
 };
 
@@ -56,6 +58,8 @@ pub struct Timeline {
     confirm_delete: Option<String>,
     /// The last action on a message that failed.
     notice: Option<SharedString>,
+    /// The emoji picker, open for reacting to a message: which, where.
+    picker: Option<(String, gpui::Point<gpui::Pixels>, Entity<EmojiPicker>)>,
 }
 
 /// What the timeline asks of the composer under it.
@@ -98,8 +102,7 @@ impl Timeline {
             error: None,
             marking_read: false,
             confirm_delete: None,
-            notice: None,
-        };
+            notice: None, picker: None };
 
         let backend = Backend::global(cx);
         let task = backend.run({
@@ -257,9 +260,47 @@ impl Timeline {
             .border_color(palette.border)
             .shadow_sm();
         bar = if confirming { bar.visible() } else { bar.invisible().group_hover("message", |s| s.visible()) };
-        let any = event.can_reply || (event.is_editable && editable_body(&event.content).is_some()) || (event.is_own && !matches!(event.content, ContentDto::Redacted));
+        let reactable = !matches!(event.content, ContentDto::Redacted);
+        let any = reactable || event.can_reply || (event.is_editable && editable_body(&event.content).is_some()) || event.is_own;
         if !any {
             return None;
+        }
+        // Your recent reactions, one click each, then the picker for more.
+        if reactable && !confirming {
+            let recent = self.store.read(cx).prefs.recent_reactions.clone();
+            for (i, key) in recent.into_iter().enumerate() {
+                let (event_id, tip) = (id.clone(), format!("react with {key}"));
+                bar = bar.child(
+                    div()
+                        .id(SharedString::from(format!("quick-{i}/{id}")))
+                        .size(px(26.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(corner(9.))
+                        .cursor_pointer()
+                        .text_size(text(15.))
+                        .hover(|b| b.bg(Hsla { a: 0.08, ..gpui::white() }))
+                        .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
+                        .child(key.clone())
+                        .on_click(cx.listener(move |this, _, _, cx| this.toggle_reaction(event_id.clone(), key.clone(), cx))),
+                );
+            }
+            let event_id = id.clone();
+            bar = bar.child(
+                div()
+                    .id(SharedString::from(format!("more-reactions/{id}")))
+                    .size(px(26.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(corner(9.))
+                    .cursor_pointer()
+                    .hover(|b| b.bg(Hsla { a: 0.08, ..gpui::white() }))
+                    .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("more reactions").build(window, cx))
+                    .child(icon("icons/smile.svg").size(px(15.)).text_color(palette.text_secondary))
+                    .on_click(cx.listener(move |this, click: &gpui::ClickEvent, window, cx| this.open_picker(event_id.clone(), click.position(), window, cx))),
+            );
         }
 
         if event.can_reply && !confirming {
@@ -309,7 +350,26 @@ impl Timeline {
         self.store.update(cx, |s, cx| s.set_people_on_screen(people, cx));
     }
 
+    fn open_picker(&mut self, event_id: String, at: gpui::Point<gpui::Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        let picker = cx.new(|cx| EmojiPicker::new(store, window, cx));
+        let target = event_id.clone();
+        cx.subscribe(&picker, move |this, _, event: &PickerEvent, cx| {
+            this.picker = None;
+            if let PickerEvent::Pick(key) = event {
+                this.toggle_reaction(target.clone(), key.clone(), cx);
+            }
+            cx.notify();
+        })
+        .detach();
+        self.picker = Some((event_id, at, picker));
+        cx.notify();
+    }
+
     fn toggle_reaction(&mut self, event_id: String, key: String, cx: &mut Context<Self>) {
+        // Remembered even if sending fails: picking it is what says what
+        // you reach for.
+        self.store.update(cx, |s, cx| s.update_prefs(|p| p.note_reaction(&key), cx));
         let backend = Backend::global(cx);
         let task = backend.run({
             let (state, room_id) = (backend.state.clone(), self.room_id.clone());
@@ -412,6 +472,16 @@ impl Render for Timeline {
                 .min_h_0()
                 .w_full(),
             )
+            .children(self.picker.as_ref().map(|(_, at, picker)| {
+                gpui::deferred(
+                    gpui::anchored()
+                        .position(*at)
+                        .anchor(gpui::Anchor::TopRight)
+                        .snap_to_window_with_margin(px(10.))
+                        .child(picker.clone()),
+                )
+                .with_priority(1)
+            }))
             .children(self.notice.clone().map(|notice| {
                 h_flex()
                     .id("timeline-notice")
