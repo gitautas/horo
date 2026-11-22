@@ -34,6 +34,8 @@ pub mod livekit;
 pub mod peer;
 #[cfg(feature = "media")]
 pub mod turn;
+#[cfg(feature = "media")]
+pub mod voice;
 
 pub use matrixrtc::{CallCredentials, CallParticipants, active_calls, join, leave, participants, refresh};
 

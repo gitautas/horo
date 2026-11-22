@@ -14,6 +14,7 @@ pub mod echo;
 pub mod gate;
 pub mod jitter;
 pub mod mixer;
+pub mod ogg;
 
 pub const SAMPLE_RATE: u32 = 48_000;
 /// Samples in one 20 ms frame at 48 kHz.

@@ -82,9 +82,51 @@ struct InlineMedia {
 
 enum PlayState {
     Loading,
+    /// AVFoundation's player: video, and audio other than Ogg/Opus.
     #[cfg(target_os = "macos")]
     Playing(crate::video::VideoPlayer),
+    /// horo-rtc's, for Ogg/Opus voice messages, on every platform.
+    Voice(horo_rtc::voice::VoicePlayer),
     Failed(SharedString),
+}
+
+impl PlayState {
+    /// Where it's at and how long it is, once something's playing.
+    fn position(&self) -> Option<(f64, f64)> {
+        match self {
+            #[cfg(target_os = "macos")]
+            PlayState::Playing(player) => Some(player.position()),
+            PlayState::Voice(player) => Some(player.position()),
+            _ => None,
+        }
+    }
+
+    fn is_playing(&self) -> bool {
+        match self {
+            #[cfg(target_os = "macos")]
+            PlayState::Playing(player) => player.is_playing(),
+            PlayState::Voice(player) => player.is_playing(),
+            _ => false,
+        }
+    }
+
+    fn toggle(&self) {
+        match self {
+            #[cfg(target_os = "macos")]
+            PlayState::Playing(player) => player.toggle(),
+            PlayState::Voice(player) => player.toggle(),
+            _ => {}
+        }
+    }
+
+    fn seek(&self, fraction: f64) {
+        match self {
+            #[cfg(target_os = "macos")]
+            PlayState::Playing(player) => player.seek(fraction),
+            PlayState::Voice(player) => player.seek(fraction),
+            _ => {}
+        }
+    }
 }
 
 /// What the timeline asks of the composer under it.
@@ -266,6 +308,12 @@ fn open_player(path: &std::path::Path, video: bool) -> PlayState {
 #[cfg(not(target_os = "macos"))]
 fn open_player(_: &std::path::Path, _: bool) -> PlayState {
     PlayState::Failed("can't play it here on this system".into())
+}
+
+/// "1:05", or "1:02:05" past an hour.
+fn clock(seconds: f64) -> String {
+    let s = seconds.max(0.) as u64;
+    if s >= 3600 { format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60) } else { format!("{}:{:02}", s / 60, s % 60) }
 }
 
 /// How many bars a waveform is drawn with, at most.
@@ -545,10 +593,7 @@ impl Render for Timeline {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = Rc::new(cx.global::<Palette>().clone());
         // Something playing wants its next frame (or time) drawn.
-        #[cfg(target_os = "macos")]
-        if let Some(InlineMedia { state: PlayState::Playing(player), .. }) = &self.playing
-            && player.is_playing()
-        {
+        if self.playing.as_ref().is_some_and(|p| p.state.is_playing()) {
             window.request_animation_frame();
         }
         let _ = &window;
@@ -733,30 +778,53 @@ impl Timeline {
         self.rich.entry(html.to_owned()).or_insert_with(|| Rc::new(rich::parse(html))).clone()
     }
 
-    /// Play a video or a sound in its message: on macOS here, elsewhere in
-    /// the system's player.
+    /// Play a video or a sound in its message. Ogg/Opus voice messages play
+    /// here everywhere; anything else here on macOS, and elsewhere in the
+    /// system's player.
     fn start_media(&mut self, event: &EventItemDto, body: &str, media: &MediaInfoDto, video: bool, cx: &mut Context<Self>) {
         let (Some(event_id), Some(mxc)) = (event.event_id.clone(), media.mxc.clone()) else { return };
         let (name, mime) = (body.to_owned(), media.mimetype.clone());
-        if !cfg!(target_os = "macos") {
+        let ogg = mime.as_deref().is_some_and(|m| m.starts_with("audio/ogg") || m.starts_with("audio/opus"));
+        if !cfg!(target_os = "macos") && !ogg {
             content::play_externally(mxc, name, mime, cx);
             return;
         }
+        let speaker = self.store.read(cx).prefs.audio_output.clone();
         self.playing = Some(InlineMedia { event_id: event_id.clone(), path: None, state: PlayState::Loading, bar: Rc::new(std::cell::Cell::new(None)) });
         cx.notify();
         let download = content::download_temp(mxc, &name, mime.as_deref(), cx);
         cx.spawn(async move |this, cx| {
             let outcome = download.await;
+            // An Ogg file (by its first bytes, whatever its label says) is
+            // decoded here, off the UI thread, and played by horo-rtc.
+            let decoded = match &outcome {
+                Ok(path) if !video => {
+                    let path = path.clone();
+                    cx.background_spawn(async move {
+                        let bytes = std::fs::read(&path).ok()?;
+                        bytes.starts_with(b"OggS").then(|| horo_rtc::voice::decode(&bytes).map_err(|e| e.to_string()))
+                    })
+                    .await
+                }
+                _ => None,
+            };
             let _ = this.update(cx, |timeline, cx| {
                 // Moved on to something else (or closed this) meanwhile.
                 let Some(playing) = timeline.playing.as_mut().filter(|p| p.event_id == event_id) else { return };
-                playing.state = match outcome {
-                    Ok(path) => {
+                playing.state = match (outcome, decoded) {
+                    (Ok(path), Some(samples)) => {
+                        playing.path = Some(path);
+                        match samples.and_then(|s| horo_rtc::voice::VoicePlayer::start(s, speaker.as_deref()).map_err(|e| e.to_string())) {
+                            Ok(player) => PlayState::Voice(player),
+                            Err(e) => PlayState::Failed(format!("couldn't play it: {e}").into()),
+                        }
+                    }
+                    (Ok(path), None) => {
                         let state = open_player(&path, video);
                         playing.path = Some(path);
                         state
                     }
-                    Err(e) => PlayState::Failed(format!("couldn't fetch it: {e}").into()),
+                    (Err(e), _) => PlayState::Failed(format!("couldn't fetch it: {e}").into()),
                 };
                 cx.notify();
             });
@@ -778,24 +846,21 @@ impl Timeline {
         let (state, fraction, time): (Option<bool>, f32, String) = match &mut playing.state {
             PlayState::Loading => (None, 0., "fetching it…".into()),
             PlayState::Failed(why) => return div().text_size(text(12.)).text_color(palette.danger).child(why.clone()).into_any_element(),
-            #[cfg(target_os = "macos")]
-            PlayState::Playing(player) => {
-                let (at, length) = player.position();
+            ready => {
+                let (at, length) = ready.position().unwrap_or((0., 0.));
                 let length = if length > 0. { length } else { duration_ms.unwrap_or(0) as f64 / 1000. };
-                let time = if length > 0. { format!("{} / {}", crate::video::clock(at), crate::video::clock(length)) } else { crate::video::clock(at) };
-                (Some(player.is_playing()), if length > 0. { (at / length).clamp(0., 1.) as f32 } else { 0. }, time)
+                let time = if length > 0. { format!("{} / {}", clock(at), clock(length)) } else { clock(at) };
+                (Some(ready.is_playing()), if length > 0. { (at / length).clamp(0., 1.) as f32 } else { 0. }, time)
             }
         };
-        let _ = duration_ms;
         let button = |key: &'static str| {
             div().id(key).flex_none().size(px(28.)).flex().items_center().justify_center().rounded_full().cursor_pointer().hover(|d| d.bg(palette.inset))
         };
         let toggle = button("media-toggle")
             .child(icon(if state == Some(true) { "icons/pause.svg" } else { "icons/play.svg" }).size(px(15.)).text_color(palette.text))
             .on_click(cx.listener(|this, _, _, cx| {
-                #[cfg(target_os = "macos")]
-                if let Some(InlineMedia { state: PlayState::Playing(player), .. }) = &this.playing {
-                    player.toggle();
+                if let Some(playing) = &this.playing {
+                    playing.state.toggle();
                 }
                 cx.notify();
             }));
@@ -818,11 +883,9 @@ impl Timeline {
             .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
                 let Some(bounds) = bar.get() else { return };
                 let along = f32::from(event.position.x - bounds.origin.x) / f32::from(bounds.size.width).max(1.);
-                #[cfg(target_os = "macos")]
-                if let Some(InlineMedia { state: PlayState::Playing(player), .. }) = &this.playing {
-                    player.seek(along.clamp(0., 1.) as f64);
+                if let Some(playing) = &this.playing {
+                    playing.state.seek(along.clamp(0., 1.) as f64);
                 }
-                let _ = along;
                 cx.stop_propagation();
                 cx.notify();
             }));
@@ -1253,7 +1316,15 @@ fn reaction(r: &ReactionDto, palette: &Palette, cx: &mut App) -> AnyElement {
 
 #[cfg(test)]
 mod tests {
-    use super::wave_heights;
+    use super::{clock, wave_heights};
+
+    #[test]
+    fn times_read_like_a_player() {
+        assert_eq!(clock(0.), "0:00");
+        assert_eq!(clock(65.4), "1:05");
+        assert_eq!(clock(3725.), "1:02:05");
+        assert_eq!(clock(-3.), "0:00");
+    }
 
     #[test]
     fn waveforms_are_squeezed_to_their_loudest() {

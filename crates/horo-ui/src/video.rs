@@ -131,22 +131,3 @@ impl Drop for VideoPlayer {
         unsafe { self.player.pause() };
     }
 }
-
-/// "1:05", or "1:02:05" past an hour.
-pub fn clock(seconds: f64) -> String {
-    let s = seconds.max(0.) as u64;
-    if s >= 3600 { format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60) } else { format!("{}:{:02}", s / 60, s % 60) }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn times_read_like_a_player() {
-        assert_eq!(clock(0.), "0:00");
-        assert_eq!(clock(65.4), "1:05");
-        assert_eq!(clock(3725.), "1:02:05");
-        assert_eq!(clock(-3.), "0:00");
-    }
-}

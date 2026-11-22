@@ -58,6 +58,30 @@ pub struct Composer {
     picker: Option<(gpui::Point<gpui::Pixels>, Entity<EmojiPicker>)>,
     /// Custom emotes matching the `:shortcode` being typed.
     completing: Option<Completing>,
+    /// A voice message being recorded, and its recent levels for the meter.
+    recording: Option<Recording>,
+    levels: std::collections::VecDeque<f32>,
+}
+
+/// How many recent levels the recording meter shows.
+const METER_BARS: usize = 36;
+
+/// How long a recording runs before it can be sent: the send button sits
+/// where the mic button was, so a second click meant for the mic (or a
+/// double click) mustn't send a fragment.
+const SEND_AFTER: std::time::Duration = std::time::Duration::from_millis(600);
+
+enum Recording {
+    /// The microphone is opening (off the UI thread: it can take a moment).
+    Starting,
+    Live { recorder: horo_rtc::voice::Recorder, since: std::time::Instant },
+}
+
+impl Recording {
+    /// Whether it's been recording long enough to send.
+    fn sendable(&self) -> bool {
+        matches!(self, Recording::Live { since, .. } if since.elapsed() >= SEND_AFTER)
+    }
 }
 
 /// The shortcode menu over the box: what matches, where the typed `:code`
@@ -103,7 +127,7 @@ impl Composer {
         .detach();
         input.update(cx, |state, cx| state.focus(window, cx));
         cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        Composer { room_id, thread_root, timeline, input, mode: Mode::Write, error: None, encrypted, store, picker: None, completing: None }
+        Composer { room_id, thread_root, timeline, input, mode: Mode::Write, error: None, encrypted, store, picker: None, completing: None, recording: None, levels: Default::default() }
     }
 
     /// The picker, over the box; a pick goes in at the cursor.
@@ -246,7 +270,137 @@ impl Composer {
         }
     }
 
+    /// Start recording a voice message from the chosen microphone.
+    /// The strip shows at once; the microphone opens in the background.
+    fn start_recording(&mut self, cx: &mut Context<Self>) {
+        if self.recording.is_some() {
+            return;
+        }
+        let microphone = self.store.read(cx).prefs.audio_input.clone();
+        self.recording = Some(Recording::Starting);
+        self.levels.clear();
+        self.error = None;
+        cx.notify();
+        let opening = cx.background_spawn(async move { horo_rtc::voice::Recorder::start(microphone.as_deref()) });
+        cx.spawn(async move |this, cx| {
+            let opened = opening.await;
+            let _ = this.update(cx, |this, cx| {
+                // Cancelled while it opened: dropping the recorder stops it.
+                if !matches!(this.recording, Some(Recording::Starting)) {
+                    return;
+                }
+                match opened {
+                    Ok(recorder) => this.recording = Some(Recording::Live { recorder, since: std::time::Instant::now() }),
+                    Err(e) => {
+                        this.recording = None;
+                        this.error = Some(format!("couldn't start the microphone: {e}").into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn cancel_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Dropping it stops the microphone; nothing is kept.
+        self.recording = None;
+        self.input.update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
+    }
+
+    /// Stop, and send what was recorded as a voice message.
+    fn send_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.recording.as_ref().is_some_and(Recording::sendable) {
+            return;
+        }
+        let Some(Recording::Live { recorder, .. }) = self.recording.take() else { return };
+        self.input.update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
+        let note = match recorder.finish() {
+            Ok(Some(note)) => note,
+            Ok(None) => return,
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                return;
+            }
+        };
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let (state, room_id, thread) = (backend.state.clone(), self.room_id.clone(), self.thread_root.clone());
+            async move { timeline::send_voice(&*state.core().await?, &room_id, thread.as_deref(), note.bytes, note.duration, note.waveform).await }
+        });
+        cx.spawn(async move |this, cx| {
+            let error = match task.await {
+                Ok(Ok(())) => return,
+                Ok(Err(e)) => e.to_string(),
+                Err(e) => e.to_string(),
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.error = Some(format!("couldn't send the voice message: {error}").into());
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The box while recording: cancel, the time and a live meter, send.
+    fn recording_strip(&mut self, palette: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let (elapsed, level) = match &self.recording {
+            Some(Recording::Live { recorder, .. }) => (recorder.elapsed(), recorder.level()),
+            _ => Default::default(),
+        };
+        let starting = matches!(self.recording, Some(Recording::Starting));
+        self.levels.push_back(level);
+        while self.levels.len() > METER_BARS {
+            self.levels.pop_front();
+        }
+        let secs = elapsed.as_secs();
+        let mut meter = h_flex().flex_1().min_w_0().h(px(24.)).items_center().justify_end().gap(px(2.));
+        for _ in self.levels.len()..METER_BARS {
+            meter = meter.child(div().w(px(3.)).h(px(3.)).rounded_full().bg(palette.border));
+        }
+        for level in &self.levels {
+            meter = meter.child(div().w(px(3.)).h(px(3. + 19. * level)).rounded_full().bg(palette.danger));
+        }
+        h_flex()
+            .flex_1()
+            .min_w_0()
+            .gap(space(10.))
+            .child(
+                div()
+                    .id("recording-cancel")
+                    .size(px(38.))
+                    .flex_none()
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .text_color(palette.text_tertiary)
+                    .hover(|d| d.bg(palette.inset).text_color(palette.text))
+                    .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("throw it away").build(window, cx))
+                    .child("✕")
+                    .on_click(cx.listener(|this, _, window, cx| this.cancel_recording(window, cx))),
+            )
+            .child(div().flex_none().size(px(9.)).rounded_full().bg(palette.danger))
+            .child(div().flex_none().font_family(palette.mono_font.clone()).text_size(text(13.)).child(format!("{}:{:02}", secs / 60, secs % 60)))
+            .map(|row| {
+                if starting {
+                    row.child(div().flex_1().text_size(text(12.5)).text_color(palette.text_tertiary).child("starting the microphone…"))
+                } else {
+                    row.child(meter)
+                }
+            })
+            .into_any_element()
+    }
+
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.recording.is_some() && event.keystroke.key == "escape" {
+            self.cancel_recording(window, cx);
+            cx.stop_propagation();
+            return;
+        }
         // Escape closes the shortcode menu first, before it cancels a
         // reply or an edit.
         if self.completing.is_some() && event.keystroke.key == "escape" {
@@ -371,7 +525,11 @@ impl Composer {
 }
 
 impl Render for Composer {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The time and the meter move while recording.
+        if self.recording.is_some() {
+            window.request_animation_frame();
+        }
         let palette = cx.global::<Palette>().clone();
         let bar = match &self.mode {
             Mode::Write => None,
@@ -379,6 +537,9 @@ impl Render for Composer {
             Mode::Edit { .. } => Some((palette.accent, "editing your message".to_owned(), "escape to cancel".to_owned())),
         };
         let can_send = !self.input.read(cx).value().trim().is_empty();
+        let recording = self.recording.is_some();
+        let sendable = self.recording.as_ref().is_some_and(Recording::sendable);
+        let strip = recording.then(|| self.recording_strip(&palette, cx));
         let menu = self.completing.as_ref().map(|completing| {
             let mut list = v_flex()
                 .id("shortcodes")
@@ -490,41 +651,45 @@ impl Render for Composer {
                     }))
                     .capture_action(cx.listener(|this, _: &MoveUp, window, cx| this.recall(true, window, cx)))
                     .capture_action(cx.listener(|this, _: &MoveDown, window, cx| this.recall(false, window, cx)))
-                    .child(
-                        div()
-                            .id("composer-attach")
-                            .size(px(38.))
-                            .flex_none()
-                            .rounded_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("attach a file").build(window, cx))
-                            .child(icon("icons/circle-plus.svg").size(px(22.)).text_color(palette.text_tertiary))
-                            .on_click(cx.listener(|this, _, window, cx| this.attach(window, cx))),
-                    )
-                    .child(div().flex_1().min_w_0().py(space(4.)).text_size(px(14.5)).child(Textarea::new(&self.input).appearance(false)))
-                    .child(
-                        div()
-                            .id("composer-emoji")
-                            .size(px(38.))
-                            .flex_none()
-                            .rounded_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("emoji").build(window, cx))
-                            .child(icon("icons/smile.svg").size(px(20.)).text_color(if self.picker.is_some() { palette.accent } else { palette.text_tertiary }))
-                            // On press, so the picker's own "pressed outside"
-                            // doesn't close it and this reopen it.
-                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                // Above the button, clear of the box.
-                                this.open_picker(gpui::point(event.position.x, event.position.y - px(28.)), window, cx)
-                            })),
-                    )
+                    .map(|row| match strip {
+                        Some(strip) => row.child(strip),
+                        None => row
+                            .child(
+                            div()
+                                .id("composer-attach")
+                                .size(px(38.))
+                                .flex_none()
+                                .rounded_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("attach a file").build(window, cx))
+                                .child(icon("icons/circle-plus.svg").size(px(22.)).text_color(palette.text_tertiary))
+                                .on_click(cx.listener(|this, _, window, cx| this.attach(window, cx))),
+                        )
+                        .child(div().flex_1().min_w_0().py(space(4.)).text_size(px(14.5)).child(Textarea::new(&self.input).appearance(false)))
+                        .child(
+                            div()
+                                .id("composer-emoji")
+                                .size(px(38.))
+                                .flex_none()
+                                .rounded_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("emoji").build(window, cx))
+                                .child(icon("icons/smile.svg").size(px(20.)).text_color(if self.picker.is_some() { palette.accent } else { palette.text_tertiary }))
+                                // On press, so the picker's own "pressed outside"
+                                // doesn't close it and this reopen it.
+                                .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    // Above the button, clear of the box.
+                                    this.open_picker(gpui::point(event.position.x, event.position.y - px(28.)), window, cx)
+                                })),
+                        ),
+                    })
                     .child(
                         div()
                             .id("composer-send")
@@ -537,12 +702,27 @@ impl Render for Composer {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .when(!can_send, |d| d.opacity(0.45))
-                            .when(can_send, |d| d.cursor_pointer())
-                            .child(icon("icons/send.svg").size(px(17.)).text_color(palette.text_on_accent))
-                            .on_click(cx.listener(|this, _, window, cx| this.send(window, cx))),
-                    ),
-            )
+                            .when(recording && !sendable, |d| d.opacity(0.45))
+                            .when(!recording || sendable, |d| d.cursor_pointer())
+                            .tooltip(move |window, cx| {
+                                let words = if recording { "send the voice message" } else if can_send { "send" } else { "record a voice message" };
+                                gpui_component::tooltip::Tooltip::new(words).build(window, cx)
+                            })
+                            // Empty, it records; recording, it sends that.
+                            .child(icon(if can_send || recording { "icons/send.svg" } else { "icons/mic.svg" }).size(px(17.)).text_color(palette.text_on_accent))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                // While recording it sends, once it's been
+                                // going long enough (send_recording checks).
+                                if recording {
+                                    this.send_recording(window, cx)
+                                } else if can_send {
+                                    this.send(window, cx)
+                                } else {
+                                    this.start_recording(cx)
+                                }
+                            })),
+                    )
+)
             .children(self.picker.as_ref().map(|(at, picker)| {
                 gpui::deferred(
                     gpui::anchored()

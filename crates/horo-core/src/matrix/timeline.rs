@@ -601,6 +601,47 @@ pub async fn send_attachment_data(
     Ok(())
 }
 
+/// Send a recorded voice message (an Ogg/Opus file): marked as voice
+/// (MSC3245) with its length and waveform (MSC3246, values 0 to 1), so
+/// clients draw it as a voice message rather than an audio file.
+pub async fn send_voice(
+    core: &MatrixCore,
+    room_id: &RoomId,
+    thread_root: Option<&str>,
+    bytes: Vec<u8>,
+    duration: std::time::Duration,
+    waveform: Vec<f32>,
+) -> Result<()> {
+    use matrix_sdk::attachment::{AttachmentInfo, BaseAudioInfo};
+    use matrix_sdk_ui::timeline::{AttachmentConfig, AttachmentSource};
+
+    if bytes.is_empty() {
+        return Err(Error::Other("the recording was empty".into()));
+    }
+    let size = matrix_sdk::ruma::UInt::new(bytes.len() as u64);
+    let info = BaseAudioInfo {
+        duration: Some(duration),
+        size,
+        waveform: Some(waveform.into_iter().map(|w| w.clamp(0., 1.)).collect()),
+    };
+    let config = AttachmentConfig { info: Some(AttachmentInfo::Voice(info)), ..Default::default() };
+    let filename = format!("voice-message-{}.ogg", chrono_stamp());
+    let mime: mime::Mime = "audio/ogg".parse().map_err(|e| Error::Other(format!("{e}")))?;
+
+    let timeline = get(core, room_id, thread_root).await?;
+    timeline
+        .send_attachment(AttachmentSource::Data { bytes, filename }, mime, config)
+        .use_send_queue()
+        .await
+        .map_err(|e| Error::Other(format!("upload failed: {e}")))?;
+    Ok(())
+}
+
+/// Seconds since the epoch, to tell one recording's file name from the next.
+fn chrono_stamp() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default()
+}
+
 /// Reduce a caller-supplied name to something safe to use as a filename.
 fn safe_filename(filename: &str) -> String {
     let trimmed = filename
