@@ -42,6 +42,10 @@ const PAGINATE_WITHIN: usize = 8;
 
 pub struct Timeline {
     room_id: OwnedRoomId,
+    /// The thread this is, or `None` for the room's main timeline.
+    thread_root: Option<String>,
+    /// What the core's updates for this timeline are addressed to.
+    key: String,
     store: Entity<Store>,
     /// Parsed `formatted_body`s, by their HTML.
     rich: HashMap<String, Rc<Vec<Block>>>,
@@ -73,7 +77,8 @@ pub enum TimelineAction {
 impl EventEmitter<TimelineAction> for Timeline {}
 
 impl Timeline {
-    pub fn new(room_id: OwnedRoomId, store: &Entity<Store>, cx: &mut Context<Self>) -> Timeline {
+    pub fn new(room_id: OwnedRoomId, thread_root: Option<String>, store: &Entity<Store>, cx: &mut Context<Self>) -> Timeline {
+        let key = timeline::timeline_key(&room_id, thread_root.as_deref());
         let list = ListState::new(0, ListAlignment::Bottom, px(400.));
         let this = cx.weak_entity();
         list.set_scroll_handler(move |event, _, cx| {
@@ -84,7 +89,7 @@ impl Timeline {
         // Presence dots change with the store.
         cx.observe(store, |_, _, cx| cx.notify()).detach();
         cx.subscribe(store, |this, _, update: &TimelineUpdate, cx| {
-            if update.room_id == this.room_id.as_str() {
+            if update.room_id == this.key {
                 this.on_update(update.diffs.clone(), cx);
             }
         })
@@ -92,6 +97,8 @@ impl Timeline {
 
         let timeline = Timeline {
             room_id: room_id.clone(),
+            thread_root: thread_root.clone(),
+            key,
             store: store.clone(),
             rich: HashMap::new(),
             items: Vec::new(),
@@ -108,7 +115,7 @@ impl Timeline {
         let backend = Backend::global(cx);
         let task = backend.run({
             let (host, state) = (backend.host.clone(), backend.state.clone());
-            async move { timeline::open(&host, &state.core().await?, &room_id, None).await }
+            async move { timeline::open(&host, &state.core().await?, &room_id, thread_root).await }
         });
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
@@ -196,8 +203,8 @@ impl Timeline {
         self.paginating = true;
         let backend = Backend::global(cx);
         let task = backend.run({
-            let (state, room_id) = (backend.state.clone(), self.room_id.clone());
-            async move { timeline::paginate_back(&*state.core().await?, &room_id, None).await }
+            let (state, room_id, thread) = (backend.state.clone(), self.room_id.clone(), self.thread_root.clone());
+            async move { timeline::paginate_back(&*state.core().await?, &room_id, thread.as_deref()).await }
         });
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
@@ -218,10 +225,10 @@ impl Timeline {
     /// Close the core's timeline: it streams until closed.
     pub fn close(&self, cx: &App) {
         let backend = Backend::global(cx);
-        let (state, room_id) = (backend.state.clone(), self.room_id.clone());
+        let (state, room_id, thread) = (backend.state.clone(), self.room_id.clone(), self.thread_root.clone());
         let task = backend.run(async move {
             if let Ok(core) = state.core().await {
-                let _ = timeline::close(&core, &room_id, None).await;
+                let _ = timeline::close(&core, &room_id, thread.as_deref()).await;
             }
         });
         drop(task);
@@ -322,6 +329,13 @@ impl Timeline {
                 cx.emit(TimelineAction::Reply { event_id: event_id.clone(), who: who.clone(), preview: preview.clone() })
             })));
         }
+        // Inside a thread every reply is already in it.
+        if self.thread_root.is_none() && reactable && !confirming {
+            let root = event.thread_root.clone().unwrap_or_else(|| id.clone());
+            bar = bar.child(button("thread", "thread", palette.text_secondary).on_click(cx.listener(move |this, _, _, cx| {
+                this.store.update(cx, |s, cx| s.open_thread(Some(root.clone()), cx))
+            })));
+        }
         if event.is_editable && !confirming
             && let Some(body) = editable_body(&event.content)
         {
@@ -385,8 +399,8 @@ impl Timeline {
         self.store.update(cx, |s, cx| s.update_prefs(|p| p.note_reaction(&key), cx));
         let backend = Backend::global(cx);
         let task = backend.run({
-            let (state, room_id) = (backend.state.clone(), self.room_id.clone());
-            async move { timeline::toggle_reaction(&*state.core().await?, &room_id, None, &event_id, &key).await }
+            let (state, room_id, thread) = (backend.state.clone(), self.room_id.clone(), self.thread_root.clone());
+            async move { timeline::toggle_reaction(&*state.core().await?, &room_id, thread.as_deref(), &event_id, &key).await }
         });
         cx.spawn(async move |this, cx| {
             let error = match task.await {
@@ -403,8 +417,8 @@ impl Timeline {
         self.confirm_delete = None;
         let backend = Backend::global(cx);
         let task = backend.run({
-            let (state, room_id) = (backend.state.clone(), self.room_id.clone());
-            async move { timeline::redact(&*state.core().await?, &room_id, None, &event_id, None).await }
+            let (state, room_id, thread) = (backend.state.clone(), self.room_id.clone(), self.thread_root.clone());
+            async move { timeline::redact(&*state.core().await?, &room_id, thread.as_deref(), &event_id, None).await }
         });
         cx.spawn(async move |this, cx| {
             let error = match task.await {
@@ -755,8 +769,19 @@ impl Timeline {
             h_flex().flex_wrap().gap(space(6.)).mt(px(7.)).children(chips)
         });
 
-        let thread = event.thread_summary.as_ref().map(|t| {
+        let thread_target = event.event_id.clone();
+        let thread = event.thread_summary.as_ref().filter(|_| self.thread_root.is_none()).map(|t| {
+            let latest = t.latest_body.clone().map(|b| b.replace('\n', " "));
             h_flex()
+                .id(SharedString::from(format!("thread-chip/{}", thread_target.clone().unwrap_or_default())))
+                .cursor_pointer()
+                .hover(|d| d.bg(palette.raised))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(root) = thread_target.clone() {
+                        this.store.update(cx, |s, cx| s.open_thread(Some(root), cx));
+                    }
+                }))
+                .max_w(px(460.))
                 .mt(px(8.))
                 .gap(space(8.))
                 .pl(space(8.))
@@ -769,7 +794,8 @@ impl Timeline {
                 .font_weight(FontWeight::BOLD)
                 .text_size(text(12.5))
                 .text_color(palette.accent_quaternary)
-                .child(format!("{} {} in thread", t.num_replies, if t.num_replies == 1 { "reply" } else { "replies" }))
+                .child(div().flex_none().child(format!("{} {} in thread", t.num_replies, if t.num_replies == 1 { "reply" } else { "replies" })))
+                .children(latest.map(|b| div().min_w_0().truncate().font_weight(FontWeight::NORMAL).text_color(palette.text_tertiary).child(b)))
         });
 
         let pending = event.send_state.as_ref().is_some_and(|s| matches!(s, horo_core::dto::SendStateDto::NotSentYet { .. }));

@@ -65,6 +65,10 @@ pub struct Store {
     /// The space open in the rail; `None` is home.
     pub space: Option<String>,
     pub room: Option<String>,
+    /// The thread open in that room, by its root event, in place of the
+    /// room's timeline; and the root's text, for the bar above it.
+    pub thread: Option<String>,
+    pub thread_preview: Option<String>,
     /// This device's cross-signing trust as the core reports it:
     /// `verified`, `unverified` or `unknown`.
     pub device_trust: Option<String>,
@@ -205,6 +209,8 @@ impl Store {
             sync: None,
             space: None,
             room: None,
+            thread: None,
+            thread_preview: None,
             device_trust: None,
             verification: None,
             verification_error: None,
@@ -510,8 +516,41 @@ impl Store {
     }
 
     pub fn open_room(&mut self, room: String, cx: &mut Context<Self>) {
+        if self.room.as_deref() != Some(room.as_str()) {
+            self.thread = None;
+            self.thread_preview = None;
+        }
         self.room = Some(room);
         cx.notify();
+    }
+
+    /// Show a thread of the open room in place of its timeline, or (`None`)
+    /// go back to the room.
+    pub fn open_thread(&mut self, root: Option<String>, cx: &mut Context<Self>) {
+        if self.thread == root {
+            return;
+        }
+        self.thread = root.clone();
+        self.thread_preview = None;
+        cx.notify();
+        let (Some(root), Some(room)) = (root, self.room.clone()) else { return };
+        let Ok(room_id) = matrix_sdk::ruma::OwnedRoomId::try_from(room.as_str()) else { return };
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let (state, root) = (backend.state.clone(), root.clone());
+            async move { horo_core::matrix::timeline::event_body(&*state.core().await?, &room_id, &root).await }
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(body))) = task.await {
+                let _ = this.update(cx, |store, cx| {
+                    if store.thread.as_deref() == Some(root.as_str()) {
+                        store.thread_preview = Some(body.replace('\n', " "));
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
     }
 
     /// Banners and a sound for what's new in the room list.

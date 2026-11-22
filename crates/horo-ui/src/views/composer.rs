@@ -44,6 +44,8 @@ pub enum Mode {
 
 pub struct Composer {
     room_id: OwnedRoomId,
+    /// Writing into this thread, or the room.
+    thread_root: Option<String>,
     timeline: WeakEntity<Timeline>,
     input: Entity<TextareaState>,
     mode: Mode,
@@ -57,7 +59,8 @@ pub struct Composer {
 
 impl Composer {
     pub fn new(
-        room_id: OwnedRoomId,
+        // The room, and the thread in it when writing into one.
+        (room_id, thread_root): (OwnedRoomId, Option<String>),
         room_name: &str,
         encrypted: bool,
         store: Entity<Store>,
@@ -65,7 +68,7 @@ impl Composer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Composer {
-        let placeholder = format!("say something cute in {room_name}~");
+        let placeholder = if thread_root.is_some() { "reply in the thread~".to_owned() } else { format!("say something cute in {room_name}~") };
         let input = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx);
             state.set_auto_grow(1, 10, cx);
@@ -81,7 +84,7 @@ impl Composer {
         .detach();
         input.update(cx, |state, cx| state.focus(window, cx));
         cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        Composer { room_id, timeline, input, mode: Mode::Write, error: None, encrypted, store, picker: None }
+        Composer { room_id, thread_root, timeline, input, mode: Mode::Write, error: None, encrypted, store, picker: None }
     }
 
     /// The picker, over the box; a pick goes in at the cursor.
@@ -129,8 +132,8 @@ impl Composer {
         };
         let backend = Backend::global(cx);
         let task = backend.run({
-            let (state, room_id) = (backend.state.clone(), self.room_id.clone());
-            async move { timeline::send_sticker(&*state.core().await?, &room_id, None, sticker).await }
+            let (state, room_id, thread) = (backend.state.clone(), self.room_id.clone(), self.thread_root.clone());
+            async move { timeline::send_sticker(&*state.core().await?, &room_id, thread.as_deref(), sticker).await }
         });
         cx.spawn(async move |this, cx| {
             let error = match task.await {
@@ -211,14 +214,15 @@ impl Composer {
     /// Pick files and send each as an attachment.
     fn attach(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(gpui::PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("attach".into()) });
-        let room_id = self.room_id.clone();
+        let (room_id, thread_root) = (self.room_id.clone(), self.thread_root.clone());
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = picked.await else { return };
             for path in paths {
                 let Ok(task) = this.update(cx, |_, cx| {
                     let backend = Backend::global(cx);
                     let (state, room_id, path) = (backend.state.clone(), room_id.clone(), path.to_string_lossy().into_owned());
-                    backend.run(async move { timeline::send_attachment(&*state.core().await?, &room_id, None, &path, None).await })
+                    let thread = thread_root.clone();
+                    backend.run(async move { timeline::send_attachment(&*state.core().await?, &room_id, thread.as_deref(), &path, None).await })
                 }) else {
                     return;
                 };
@@ -247,18 +251,19 @@ impl Composer {
         let backend = Backend::global(cx);
         let task = backend.run({
             let (state, room_id, body, mode) = (backend.state.clone(), self.room_id.clone(), body.clone(), mode.clone());
+            let thread_root = self.thread_root.clone();
             // Every emote we know; the backend puts in the ones the text uses.
             let emotes = packs::emote_refs(&self.store.read(cx).packs);
             async move {
                 let core = state.core().await?;
                 match mode {
-                    Mode::Edit { event_id } => timeline::edit(&core, &room_id, None, &event_id, &body, true).await,
+                    Mode::Edit { event_id } => timeline::edit(&core, &room_id, thread_root.as_deref(), &event_id, &body, true).await,
                     Mode::Write | Mode::Reply { .. } => {
                         let reply_to = match mode {
                             Mode::Reply { event_id, .. } => Some(event_id),
                             _ => None,
                         };
-                        let options = SendOptions { body, markdown: true, reply_to, thread_root: None, msgtype: None, emotes };
+                        let options = SendOptions { body, markdown: true, reply_to, thread_root, msgtype: None, emotes };
                         timeline::send(&core, &room_id, options).await
                     }
                 }
@@ -312,10 +317,12 @@ impl Render for Composer {
                     .py(space(7.))
                     .rounded(corner(14.))
                     .bg(palette.card)
+                    .relative()
+                    .overflow_hidden()
                     .border_1()
                     .border_color(palette.border_subtle)
-                    .border_l_2()
-                    .border_color(colour)
+                    // The coloured left edge: gpui borders take one colour.
+                    .child(div().absolute().left_0().top_0().bottom_0().w(px(2.)).bg(colour))
                     .text_size(text(12.5))
                     .child(div().flex_none().text_color(colour).child(title))
                     .child(div().flex_1().min_w_0().truncate().text_color(palette.text_tertiary).child(detail))

@@ -70,7 +70,13 @@ impl Shell {
     fn follow_room(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let store = self.store.read(cx);
         let selected = store.room.clone();
-        if self.timeline.as_ref().map(|(id, ..)| id) == selected.as_ref() {
+        let thread = store.thread.clone();
+        // The timeline is the room's, or one thread's of it.
+        let wanted = selected.as_ref().map(|room| match &thread {
+            Some(root) => format!("{room}|{root}"),
+            None => room.clone(),
+        });
+        if self.timeline.as_ref().map(|(key, ..)| key) == wanted.as_ref() {
             return;
         }
         let (name, encrypted) = selected
@@ -81,17 +87,22 @@ impl Shell {
         if let Some((_, old, _)) = self.timeline.take() {
             old.read(cx).close(cx);
         }
-        self.info = None;
-        let Some(id) = selected else { return };
-        let store = self.store.clone();
-        let room_id = id.clone();
-        self.info = Some(cx.new(|cx| RoomInfo::new(store, room_id, cx)));
+        let Some(id) = selected else {
+            self.info = None;
+            return;
+        };
+        // The info panel is the room's, whichever thread is open.
+        if self.info.as_ref().is_none_or(|info| info.read(cx).room_id != id) {
+            let store = self.store.clone();
+            let room_id = id.clone();
+            self.info = Some(cx.new(|cx| RoomInfo::new(store, room_id, cx)));
+        }
         let Ok(room_id) = OwnedRoomId::try_from(id.as_str()) else { return };
         self.store.update(cx, |s, cx| s.load_packs(&id, cx));
         let store = self.store.clone();
-        let timeline = cx.new(|cx| Timeline::new(room_id.clone(), &store, cx));
+        let timeline = cx.new(|cx| Timeline::new(room_id.clone(), thread.clone(), &store, cx));
         let weak = timeline.downgrade();
-        let composer = cx.new(|cx| Composer::new(room_id, &name, encrypted, store.clone(), weak, window, cx));
+        let composer = cx.new(|cx| Composer::new((room_id, thread), &name, encrypted, store.clone(), weak, window, cx));
         // Reply and edit buttons on a message go to the composer under it.
         cx.subscribe_in(&timeline, window, |this, _, action: &TimelineAction, window, cx| {
             if let Some((_, _, composer)) = &this.timeline {
@@ -99,7 +110,7 @@ impl Shell {
             }
         })
         .detach();
-        self.timeline = Some((id, timeline, composer));
+        self.timeline = wanted.map(|key| (key, timeline, composer));
     }
 
     /// Build the profile card for whoever the store says, or drop it.
@@ -689,12 +700,58 @@ impl Shell {
     fn room_pane(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
         let room = store.room.as_ref().and_then(|id| store.rooms.iter().find(|r| r.id == *id)).cloned();
+        let (thread, thread_preview) = (store.thread.clone(), store.thread_preview.clone());
         let strip = room.as_ref().and_then(|r| voice::strip(&r.id, &self.store, palette, cx));
         let header = room.as_ref().map(|r| self.room_header(r, palette, cx));
+        // A thread replaces the room's timeline, said in a bar above it
+        // with the way back, as ChatPane.tsx's ThreadHeader.
+        let thread_bar = thread.as_ref().map(|_| {
+            let preview = thread_preview.clone();
+            h_flex()
+                .flex_none()
+                .mx(space(22.))
+                .mt(space(14.))
+                .gap(space(10.))
+                .px(space(14.))
+                .py(space(10.))
+                .rounded(corner(16.))
+                .bg(palette.card)
+                .relative()
+                .overflow_hidden()
+                .border_1()
+                .border_color(palette.border_subtle)
+                // The coloured left edge: gpui borders take one colour.
+                .child(div().absolute().left_0().top_0().bottom_0().w(px(2.)).bg(palette.accent_quaternary))
+                .child(voice::icon("icons/messages-square.svg").size(px(15.)).text_color(palette.accent_quaternary))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(text(13.))
+                        .text_color(palette.text_secondary)
+                        .child(match preview {
+                            Some(p) => format!("thread · {p}"),
+                            None => "thread".to_owned(),
+                        }),
+                )
+                .child(
+                    div()
+                        .id("thread-close")
+                        .px_1()
+                        .cursor_pointer()
+                        .text_color(palette.text_tertiary)
+                        .hover(|d| d.text_color(palette.text))
+                        .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("back to the room").build(window, cx))
+                        .child("✕")
+                        .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.open_thread(None, cx)))),
+                )
+        });
         let body = match (&room, &self.timeline) {
             (Some(_), Some((_, timeline, composer))) => v_flex()
                 .flex_1()
                 .min_h_0()
+                .children(thread_bar)
                 .children(strip)
                 .child(div().flex_1().min_h_0().child(timeline.clone()))
                 .child(composer.clone()),
