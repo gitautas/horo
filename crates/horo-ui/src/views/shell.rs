@@ -21,7 +21,7 @@ use crate::{
     rooms::{self, Filter, View},
     store::{Phase, SettingsSection, Store},
     theme::{Palette, corner, heading, label, space, text},
-    views::{avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target}, room_info::RoomInfo,
+    views::{avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target}, room_info::RoomInfo, explore::{Explore, Closed}, create_room::CreateRoom,
         settings::Settings, timeline::{Timeline, TimelineAction}, verification, lightbox, voice},
 };
 
@@ -31,6 +31,9 @@ pub struct Shell {
     timeline: Option<(String, Entity<Timeline>, Entity<Composer>)>,
     /// The open room's info panel, built while the room is open.
     info: Option<Entity<RoomInfo>>,
+    /// Explore spaces, and make-or-join a room, while open.
+    explore: Option<Entity<Explore>>,
+    create: Option<Entity<CreateRoom>>,
     /// Settings, while they're open.
     settings: Option<Entity<Settings>>,
     /// The profile card, while one is open.
@@ -57,7 +60,7 @@ impl Shell {
         focus.focus(window, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("find a room or friend~"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        let mut shell = Shell { store, timeline: None, info: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false };
+        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false };
         shell.follow_room(window, cx);
         shell.follow_settings(window, cx);
         shell
@@ -124,6 +127,30 @@ impl Shell {
         } else if !open {
             self.settings = None;
         }
+    }
+
+    fn open_explore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        let explore = cx.new(|cx| Explore::new(store, window, cx));
+        cx.subscribe(&explore, |this, _, _: &Closed, cx| {
+            this.explore = None;
+            cx.notify();
+        })
+        .detach();
+        self.explore = Some(explore);
+        cx.notify();
+    }
+
+    fn open_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        let create = cx.new(|cx| CreateRoom::new(store, window, cx));
+        cx.subscribe(&create, |this, _, _: &Closed, cx| {
+            this.create = None;
+            cx.notify();
+        })
+        .detach();
+        self.create = Some(create);
+        cx.notify();
     }
 
     /// The spaces rail, as SpacesRail.tsx: the wordmark, "all", the
@@ -195,7 +222,25 @@ impl Shell {
                     .items_center()
                     .gap(space(12.))
                     .overflow_y_scroll()
-                    .children(tiles),
+                    .children(tiles)
+                    .child(
+                        div()
+                            .id("rail-explore")
+                            .size(px(46.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(corner(16.))
+                            .cursor_pointer()
+                            .border_1()
+                            .border_dashed()
+                            .border_color(palette.border)
+                            .hover(|d| d.bg(palette.raised))
+                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("explore spaces").build(window, cx))
+                            .child(voice::icon("icons/compass.svg").size(px(20.)).text_color(palette.text_tertiary))
+                            .on_click(cx.listener(|this, _, window, cx| this.open_explore(window, cx))),
+                    ),
             )
             .child(
                 v_flex()
@@ -477,13 +522,34 @@ impl Shell {
                                     .child(format!("{title}~")),
                             )
                             .child(
-                                div()
+                                h_flex()
                                     .flex_none()
-                                    .pb(px(4.))
-                                    .font_family(palette.mono_font.clone())
-                                    .text_size(text(11.))
-                                    .text_color(if status.is_some() { palette.idle } else { palette.text_tertiary })
-                                    .child(caught_up),
+                                    .gap(space(10.))
+                                    .pb(px(2.))
+                                    .child(
+                                        div()
+                                            .font_family(palette.mono_font.clone())
+                                            .text_size(text(11.))
+                                            .text_color(if status.is_some() { palette.idle } else { palette.text_tertiary })
+                                            .child(caught_up),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("create-room")
+                                            .size(px(26.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_full()
+                                            .cursor_pointer()
+                                            .bg(palette.card)
+                                            .border_1()
+                                            .border_color(palette.border)
+                                            .hover(|d| d.bg(palette.raised))
+                                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("make or join a room").build(window, cx))
+                                            .child(voice::icon("icons/plus.svg").size(px(13.)).text_color(palette.text_secondary))
+                                            .on_click(cx.listener(|this, _, window, cx| this.open_create(window, cx))),
+                                    ),
                             ),
                     )
                     .child(search_box)
@@ -669,6 +735,8 @@ impl Render for Shell {
             .children(self.settings.clone())
             .children(lightbox::lightbox(&self.store, &palette, cx))
             .children(voice::ringing(&self.store, &palette, cx))
+            .children(self.explore.clone())
+            .children(self.create.clone())
             .children(self.profile.clone())
             // Above everything, the security panel included: the other
             // device's timeout is running, and a dialog hidden behind

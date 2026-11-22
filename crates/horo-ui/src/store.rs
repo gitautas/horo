@@ -452,6 +452,13 @@ impl Store {
         .detach();
     }
 
+    /// Re-read the spaces now, past the throttle: a space just joined or
+    /// created should be in the rail without waiting for the next poll.
+    pub fn refresh_spaces_now(&mut self, cx: &mut Context<Self>) {
+        self.spaces_fetched = None;
+        self.refresh_spaces(cx);
+    }
+
     pub fn open_space(&mut self, space: Option<String>, cx: &mut Context<Self>) {
         self.space = space;
         cx.notify();
