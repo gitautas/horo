@@ -8,7 +8,7 @@
 //! every frame.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -18,8 +18,10 @@ use horo_core::matrix::media;
 
 use crate::backend::Backend;
 
-/// How many pictures stay decoded-ready in memory.
-const KEEP: usize = 400;
+/// How many pictures stay decoded-ready in memory. Past this, the least
+/// recently drawn go first; one still loading is never dropped, or a
+/// screenful bigger than this would refetch itself forever.
+const KEEP: usize = 800;
 const RETRY_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -36,8 +38,9 @@ enum Entry {
 
 #[derive(Default)]
 pub struct Media {
-    entries: HashMap<Key, Entry>,
-    order: VecDeque<Key>,
+    /// Each with when it was last asked for, on [`Media::clock`].
+    entries: HashMap<Key, (Entry, u64)>,
+    clock: u64,
 }
 
 impl Global for Media {}
@@ -51,11 +54,16 @@ impl Media {
         }
         let key = Key { mxc: mxc.to_owned(), size };
         let media = cx.default_global::<Media>();
-        match media.entries.get(&key) {
-            Some(Entry::Ready(image)) => return Some(image.clone()),
-            Some(Entry::Loading) => return None,
-            Some(Entry::Failed(at)) if at.elapsed() < RETRY_AFTER => return None,
-            _ => {}
+        media.clock += 1;
+        let now = media.clock;
+        if let Some((entry, used)) = media.entries.get_mut(&key) {
+            *used = now;
+            match entry {
+                Entry::Ready(image) => return Some(image.clone()),
+                Entry::Loading => return None,
+                Entry::Failed(at) if at.elapsed() < RETRY_AFTER => return None,
+                Entry::Failed(_) => {}
+            }
         }
         media.insert(key.clone(), Entry::Loading);
 
@@ -95,13 +103,22 @@ impl Media {
     }
 
     fn insert(&mut self, key: Key, entry: Entry) {
-        if self.entries.insert(key.clone(), entry).is_none() {
-            self.order.push_back(key);
-            while self.order.len() > KEEP {
-                if let Some(old) = self.order.pop_front() {
-                    self.entries.remove(&old);
-                }
-            }
+        let used = self.entries.get(&key).map_or(self.clock, |(_, used)| *used);
+        let fresh = self.entries.insert(key, (entry, used)).is_none();
+        if fresh && self.entries.len() > KEEP {
+            self.evict();
+        }
+    }
+
+    /// Down to nine tenths of [`KEEP`], least recently asked for first, so
+    /// this runs once per many inserts rather than on every one.
+    fn evict(&mut self) {
+        let mut idle: Vec<(u64, Key)> =
+            self.entries.iter().filter(|(_, (entry, _))| !matches!(entry, Entry::Loading)).map(|(key, (_, used))| (*used, key.clone())).collect();
+        idle.sort_unstable_by_key(|(used, _)| *used);
+        let excess = self.entries.len().saturating_sub(KEEP * 9 / 10);
+        for (_, key) in idle.into_iter().take(excess) {
+            self.entries.remove(&key);
         }
     }
 }
@@ -133,6 +150,21 @@ pub fn fit(width: Option<u64>, height: Option<u64>, max: (f32, f32), min: f32) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eviction_drops_the_least_recently_used_and_keeps_what_is_loading() {
+        let mut media = Media::default();
+        let key = |i: usize| Key { mxc: format!("mxc://x/{i}"), size: None };
+        media.insert(key(0), Entry::Loading);
+        for i in 1..=KEEP {
+            media.clock += 1;
+            media.insert(key(i), Entry::Failed(Instant::now()));
+        }
+        assert!(media.entries.len() <= KEEP);
+        assert!(media.entries.contains_key(&key(0)), "a picture still loading stays");
+        assert!(media.entries.contains_key(&key(KEEP)), "the newest stays");
+        assert!(!media.entries.contains_key(&key(1)), "the oldest goes");
+    }
 
     #[test]
     fn pictures_shrink_to_fit_and_keep_their_shape() {

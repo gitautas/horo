@@ -27,6 +27,8 @@ pub struct Prefs {
     pub audio_input: Option<String>,
     /// The speaker for calls; `None` follows the system default.
     pub audio_output: Option<String>,
+    /// The room info panel beside the timeline.
+    pub show_info_panel: bool,
 }
 
 impl Default for Prefs {
@@ -40,6 +42,7 @@ impl Default for Prefs {
             notification_volume: 0.7,
             audio_input: None,
             audio_output: None,
+            show_info_panel: true,
         }
     }
 }

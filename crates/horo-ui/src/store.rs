@@ -86,6 +86,8 @@ pub struct Store {
     presence_watched: HashSet<String>,
     /// People on screen besides DM partners: the open timeline's senders.
     presence_on_screen: HashSet<String>,
+    /// The members listed in the room info panel.
+    presence_in_panel: HashSet<String>,
     /// When the window was last touched, for going away when idle.
     last_activity: Instant,
     /// We've told the server we're away.
@@ -207,6 +209,7 @@ impl Store {
             presence_supported: false,
             presence_watched: HashSet::new(),
             presence_on_screen: HashSet::new(),
+            presence_in_panel: HashSet::new(),
             last_activity: Instant::now(),
             away: false,
             profile_card: None,
@@ -344,6 +347,7 @@ impl Store {
         self.presence.clear();
         self.presence_watched.clear();
         self.presence_on_screen.clear();
+        self.presence_in_panel.clear();
         self.profile_card = None;
         self.incoming = None;
         self.leave_call(cx);
@@ -546,12 +550,21 @@ impl Store {
 
     /// Tell the core whose presence to poll: DM partners, people on screen,
     /// and whoever's card is open. Only when the set changes.
+    /// Who the room info panel lists, for their presence dots.
+    pub fn set_people_in_panel(&mut self, people: HashSet<String>, cx: &mut Context<Self>) {
+        if people != self.presence_in_panel {
+            self.presence_in_panel = people;
+            self.watch_presence(cx);
+        }
+    }
+
     fn watch_presence(&mut self, cx: &mut Context<Self>) {
         if !matches!(self.phase, Phase::SignedIn(_)) {
             return;
         }
         let mut wanted: HashSet<String> = self.rooms.iter().filter_map(|r| r.dm_user_id.clone()).collect();
         wanted.extend(self.presence_on_screen.iter().cloned());
+        wanted.extend(self.presence_in_panel.iter().cloned());
         wanted.extend(self.profile_card.as_ref().map(|c| c.user_id.clone()));
         if wanted == self.presence_watched {
             return;

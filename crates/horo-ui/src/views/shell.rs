@@ -21,7 +21,7 @@ use crate::{
     rooms::{self, Filter, View},
     store::{Phase, SettingsSection, Store},
     theme::{Palette, corner, heading, label, space, text},
-    views::{avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target},
+    views::{avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target}, room_info::RoomInfo,
         settings::Settings, timeline::{Timeline, TimelineAction}, verification, lightbox, voice},
 };
 
@@ -29,6 +29,8 @@ pub struct Shell {
     store: Entity<Store>,
     /// The open room: which, its timeline and its composer.
     timeline: Option<(String, Entity<Timeline>, Entity<Composer>)>,
+    /// The open room's info panel, built while the room is open.
+    info: Option<Entity<RoomInfo>>,
     /// Settings, while they're open.
     settings: Option<Entity<Settings>>,
     /// The profile card, while one is open.
@@ -55,7 +57,7 @@ impl Shell {
         focus.focus(window, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("find a room or friend~"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        let mut shell = Shell { store, timeline: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false };
+        let mut shell = Shell { store, timeline: None, info: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false };
         shell.follow_room(window, cx);
         shell.follow_settings(window, cx);
         shell
@@ -76,7 +78,11 @@ impl Shell {
         if let Some((_, old, _)) = self.timeline.take() {
             old.read(cx).close(cx);
         }
+        self.info = None;
         let Some(id) = selected else { return };
+        let store = self.store.clone();
+        let room_id = id.clone();
+        self.info = Some(cx.new(|cx| RoomInfo::new(store, room_id, cx)));
         let Ok(room_id) = OwnedRoomId::try_from(id.as_str()) else { return };
         let store = self.store.clone();
         let timeline = cx.new(|cx| Timeline::new(room_id.clone(), &store, cx));
@@ -560,6 +566,18 @@ impl Shell {
                 store.update(cx, |s, cx| if in_this_call { s.leave_call(cx) } else { s.join_call(room_id, cx) })
             });
 
+        let info_open = self.store.read(cx).prefs.show_info_panel;
+        let store = self.store.clone();
+        let info_button = div()
+            .id("header-info")
+            .p(space(9.))
+            .rounded(corner(12.))
+            .cursor_pointer()
+            .bg(palette.raised)
+            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("room info").build(window, cx))
+            .child(voice::icon("icons/info.svg").size(px(17.)).text_color(if info_open { palette.accent } else { palette.text_secondary }))
+            .on_click(move |_, _, cx| store.update(cx, |s, cx| s.update_prefs(|p| p.show_info_panel = !p.show_info_panel, cx)));
+
         h_flex()
             .relative()
             .flex_none()
@@ -595,7 +613,8 @@ impl Shell {
                     .ml_auto()
                     .gap(space(8.))
                     .child(div().mr(px(4.)).font_family(palette.mono_font.clone()).text_size(text(11.)).text_color(palette.text_tertiary).child(room.member_count.to_string()))
-                    .child(call_button),
+                    .child(call_button)
+                    .child(info_button),
             )
             .into_any_element()
     }
@@ -616,6 +635,7 @@ impl Shell {
         };
         v_flex()
             .flex_1()
+            .min_w_0()
             .h_full()
             .bg(palette.app)
             .children(header)
@@ -644,6 +664,7 @@ impl Render for Shell {
             .child(self.rail(&palette, cx))
             .child(self.room_list(&palette, cx))
             .child(self.room_pane(&palette, cx))
+            .when(self.store.read(cx).prefs.show_info_panel, |d| d.children(self.info.clone()))
             .relative()
             .children(self.settings.clone())
             .children(lightbox::lightbox(&self.store, &palette, cx))
