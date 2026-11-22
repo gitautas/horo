@@ -80,6 +80,9 @@ pub struct Store {
     pub settings: Option<SettingsSection>,
     /// The picture open full-size over everything.
     pub lightbox: Option<Lightbox>,
+    /// A line at the foot of the window saying how something went, until
+    /// it's dismissed.
+    pub banner: Option<Banner>,
     /// The app's own settings, saved in the data directory.
     pub prefs: Prefs,
     /// What the room list looked like, to tell what's new.
@@ -139,6 +142,18 @@ pub struct ProfileTarget {
 
 /// The least time between two sounds of a kind.
 const SOUND_GAP: Duration = Duration::from_millis(800);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Error,
+    Info,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Banner {
+    pub tone: Tone,
+    pub message: SharedString,
+}
 
 /// A picture to show full-size.
 #[derive(Debug, Clone)]
@@ -224,6 +239,7 @@ impl Store {
             verification_error: None,
             settings: None,
             lightbox: None,
+            banner: None,
             prefs: Prefs::load(&Backend::global(cx).data_dir),
             watch: Watch::default(),
             window_active: true,
@@ -768,6 +784,17 @@ impl Store {
         change(&mut self.prefs);
         self.prefs.save(&Backend::global(cx).data_dir);
         cx.notify();
+    }
+
+    pub fn show_banner(&mut self, tone: Tone, message: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.banner = Some(Banner { tone, message: message.into() });
+        cx.notify();
+    }
+
+    pub fn dismiss_banner(&mut self, cx: &mut Context<Self>) {
+        if self.banner.take().is_some() {
+            cx.notify();
+        }
     }
 
     pub fn open_lightbox(&mut self, lightbox: Lightbox, cx: &mut Context<Self>) {

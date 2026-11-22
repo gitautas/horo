@@ -25,7 +25,7 @@ use crate::{
     presence,
     media::Media,
     rooms::{self, Filter, View},
-    store::{Phase, SettingsSection, Store},
+    store::{Phase, SettingsSection, Store, Tone},
     theme::{Palette, corner, heading, label, space, text},
     views::{avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target}, room_info::{OpenRoomSettings, RoomInfo}, room_settings::RoomSettings, invite_pane::InvitePane, invite_to_space::InviteToSpace, leave_space::LeaveSpace, explore::{Explore, Closed}, create_room::CreateRoom,
         settings::Settings, timeline::{Timeline, TimelineAction}, verification, lightbox, voice},
@@ -204,7 +204,8 @@ impl Shell {
 
     fn open_invite_to_space(&mut self, space_id: String, name: String, window: &mut Window, cx: &mut Context<Self>) {
         self.space_menu = None;
-        let dialog = cx.new(|cx| InviteToSpace::new(space_id, name, window, cx));
+        let store = self.store.clone();
+        let dialog = cx.new(|cx| InviteToSpace::new(store, space_id, name, window, cx));
         cx.subscribe(&dialog, |this, _, _: &Closed, cx| {
             this.invite_to_space = None;
             cx.notify();
@@ -258,16 +259,26 @@ impl Shell {
             let state = backend.state.clone();
             async move {
                 let core = state.core().await?;
+                // One room that won't is reported, not a reason to stop.
+                let mut failed = None;
                 for id in ids {
                     if let Err(e) = job(core.clone(), id.clone()).await {
                         tracing::warn!("{id}: {e}");
+                        failed.get_or_insert(e.to_string());
                     }
                 }
-                Ok::<_, horo_core::Error>(())
+                Ok::<_, horo_core::Error>(failed)
             }
         });
-        cx.background_spawn(async move {
-            let _ = task.await;
+        cx.spawn(async move |this, cx| {
+            let failed = match task.await {
+                Ok(Ok(failed)) => failed,
+                Ok(Err(e)) => Some(e.to_string()),
+                Err(e) => Some(e.to_string()),
+            };
+            if let Some(e) = failed {
+                let _ = this.update(cx, |this, cx| this.store.update(cx, |s, cx| s.show_banner(Tone::Error, e, cx)));
+            }
         })
         .detach();
         cx.notify();
@@ -343,12 +354,13 @@ impl Shell {
                         let state = backend.state.clone();
                         async move { core_rooms::open_space_rooms(&*state.core().await?, &space_room).await }
                     });
-                    cx.background_spawn(async move {
-                        match task.await {
-                            Ok(Ok(r)) => tracing::info!("opened {} rooms to the space; {} need more power", r.opened, r.not_allowed),
-                            Ok(Err(e)) => tracing::warn!("couldn't open the space's rooms: {e}"),
-                            Err(e) => tracing::warn!("couldn't open the space's rooms: {e}"),
-                        }
+                    cx.spawn(async move |this, cx| {
+                        let (tone, message) = match task.await {
+                            Ok(Ok(r)) => (Tone::Info, opened_message(r.opened, r.not_allowed)),
+                            Ok(Err(e)) => (Tone::Error, e.to_string()),
+                            Err(e) => (Tone::Error, e.to_string()),
+                        };
+                        let _ = this.update(cx, |this, cx| this.store.update(cx, |s, cx| s.show_banner(tone, message, cx)));
                     })
                     .detach();
                     cx.notify();
@@ -407,6 +419,7 @@ impl Shell {
         menu = menu.child(item("sm-copy".into(), "copy space id".into(), true, None).on_click(cx.listener(move |this, _, _, cx| {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(sid.clone()));
             this.space_menu = None;
+            this.store.update(cx, |s, cx| s.show_banner(Tone::Info, "space id copied", cx));
             cx.notify();
         })));
 
@@ -1078,6 +1091,7 @@ impl Render for Shell {
             .children(self.browse.clone())
             .children(self.space_menu(&palette, cx))
             .children(self.profile.clone())
+            .children(banner(&self.store, &palette, cx))
             // Above everything, the security panel included: the other
             // device's timeout is running, and a dialog hidden behind
             // another one is a verification that fails.
@@ -1087,6 +1101,66 @@ impl Render for Shell {
 
 /// An empty strip at the top of a column that drags the window, since the
 /// title bar is hidden; a double click zooms, as a title bar's would.
+/// What "let members into its rooms" did, as SpacesRail.tsx says it.
+fn opened_message(opened: u32, not_allowed: u32) -> String {
+    let rooms = |n: u32| if n == 1 { "1 room".to_owned() } else { format!("{n} rooms") };
+    match (opened, not_allowed) {
+        (0, 0) => "everyone in the space can already get into its rooms".into(),
+        (0, 1) => "you can't change who gets into its invite-only room".into(),
+        (0, n) => format!("you can't change who gets into its {n} invite-only rooms"),
+        (o, 0) => format!("opened {} to the space", rooms(o)),
+        (o, n) => format!("opened {} to the space; {} need someone with more power", rooms(o), rooms(n)),
+    }
+}
+
+/// The line at the foot of the window, as App.tsx draws it.
+fn banner(store: &Entity<Store>, palette: &Palette, cx: &mut Context<Shell>) -> Option<AnyElement> {
+    let banner = store.read(cx).banner.clone()?;
+    let error = banner.tone == Tone::Error;
+    let store = store.clone();
+    Some(
+        div()
+            .absolute()
+            .bottom(px(22.))
+            .left_0()
+            .right_0()
+            .flex()
+            .justify_center()
+            .child(
+                h_flex()
+                    .occlude()
+                    .max_w(px(520.))
+                    .gap(space(12.))
+                    .px(space(18.))
+                    .py(space(12.))
+                    .rounded(corner(18.))
+                    .bg(palette.raised)
+                    .border_1()
+                    .border_color(if error { Hsla { a: 0.4, ..palette.danger } } else { palette.border })
+                    .shadow_lg()
+                    .child(
+                        voice::icon(if error { "icons/circle-alert.svg" } else { "icons/info.svg" })
+                            .flex_none()
+                            .size(px(16.))
+                            .text_color(if error { palette.danger } else { palette.accent_quaternary }),
+                    )
+                    .child(div().text_size(text(13.)).line_height(gpui::relative(1.45)).text_color(palette.text_secondary).child(banner.message))
+                    .child(
+                        div()
+                            .id("banner-dismiss")
+                            .flex_none()
+                            .px_1()
+                            .cursor_pointer()
+                            .text_color(palette.text_tertiary)
+                            .hover(|d| d.text_color(palette.text))
+                            .child("✕")
+                            .on_click(move |_, _, cx| store.update(cx, |s, cx| s.dismiss_banner(cx))),
+                    ),
+            )
+            .into_any_element(),
+    )
+}
+
 fn drag_strip(height: gpui::Pixels) -> impl IntoElement {
     div()
         .absolute()
@@ -1230,5 +1304,18 @@ fn filter_name(filter: Filter) -> &'static str {
         Filter::Unread => "unread",
         Filter::Dms => "dms",
         Filter::Muted => "muted",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::opened_message;
+
+    #[test]
+    fn opening_a_spaces_rooms_says_what_happened() {
+        assert_eq!(opened_message(0, 0), "everyone in the space can already get into its rooms");
+        assert_eq!(opened_message(0, 1), "you can't change who gets into its invite-only room");
+        assert_eq!(opened_message(2, 0), "opened 2 rooms to the space");
+        assert_eq!(opened_message(1, 3), "opened 1 room to the space; 3 rooms need someone with more power");
     }
 }

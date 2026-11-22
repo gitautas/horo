@@ -86,7 +86,9 @@ impl InvitePane {
                                 s.open_space(Some(id.clone()), cx);
                             });
                             if left_out > 0 {
-                                tracing::info!("joined {}; {left_out} of its rooms are invite-only", room.name);
+                                let which = if left_out == 1 { "one room is".to_owned() } else { format!("{left_out} rooms are") };
+                                let message = format!("you're in {}. {which} invite-only — ask someone there to let you in", room.name);
+                                this.store.update(cx, |s, cx| s.show_banner(crate::store::Tone::Info, message, cx));
                             }
                         }
                         // A room: the list now says joined, and the shell

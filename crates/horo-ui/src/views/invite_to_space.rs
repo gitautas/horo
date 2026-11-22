@@ -24,6 +24,7 @@ use matrix_sdk::ruma::OwnedRoomId;
 
 use crate::{
     backend::Backend,
+    store::{Store, Tone},
     theme::{Palette, corner, space, text},
     views::{
         avatar::avatar,
@@ -44,6 +45,7 @@ fn plausible(user_id: &str) -> bool {
 }
 
 pub struct InviteToSpace {
+    store: Entity<Store>,
     space_id: String,
     name: String,
     focus: FocusHandle,
@@ -62,13 +64,12 @@ pub struct InviteToSpace {
     pending_value: Option<String>,
     busy: bool,
     error: Option<SharedString>,
-    done: Option<SharedString>,
 }
 
 impl EventEmitter<Closed> for InviteToSpace {}
 
 impl InviteToSpace {
-    pub fn new(space_id: String, name: String, window: &mut Window, cx: &mut Context<Self>) -> InviteToSpace {
+    pub fn new(store: Entity<Store>, space_id: String, name: String, window: &mut Window, cx: &mut Context<Self>) -> InviteToSpace {
         let who = cx.new(|cx| InputState::new(window, cx).placeholder("a name, or @someone:server.tld"));
         cx.subscribe_in(&who, window, |this, _, event: &InputEvent, _, cx| match event {
             InputEvent::Change => this.typed(cx),
@@ -102,6 +103,7 @@ impl InviteToSpace {
         }
 
         InviteToSpace {
+            store,
             space_id,
             name,
             focus: cx.focus_handle(),
@@ -115,7 +117,6 @@ impl InviteToSpace {
             pending_value: None,
             busy: false,
             error: None,
-            done: None,
         }
     }
 
@@ -127,7 +128,6 @@ impl InviteToSpace {
     /// answer just means no suggestions.
     fn typed(&mut self, cx: &mut Context<Self>) {
         self.error = None;
-        self.done = None;
         let term = self.term(cx);
         if term.chars().count() < 2 || self.picked.as_deref() == Some(term.as_str()) {
             self.suggestions.clear();
@@ -209,8 +209,9 @@ impl InviteToSpace {
                 this.busy = false;
                 match error {
                     None => {
-                        this.members.insert(user.clone(), "invite".into());
-                        this.done = Some(format!("invited {user} to {}", this.name).into());
+                        let message = format!("invited {user} to {}", this.name);
+                        this.store.update(cx, |s, cx| s.show_banner(Tone::Info, message, cx));
+                        cx.emit(Closed);
                     }
                     Some(e) => this.error = Some(e.into()),
                 }
@@ -275,8 +276,6 @@ impl Render for InviteToSpace {
 
         let (line, colour) = if let Some(e) = &self.error {
             (e.to_string(), palette.danger)
-        } else if let Some(d) = &self.done {
-            (d.to_string(), palette.online)
         } else if !self.can_invite {
             (format!("you can't invite people to {} — that takes more power than you have there. ask one of its admins.", self.name), palette.danger)
         } else {

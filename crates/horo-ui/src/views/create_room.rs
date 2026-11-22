@@ -168,7 +168,7 @@ impl CreateRoom {
                     Ok((room_id, warning)) => {
                         this.store.update(cx, |s, cx| s.open_room(room_id, cx));
                         if let Some(warning) = warning {
-                            tracing::warn!("{warning}");
+                            this.store.update(cx, |s, cx| s.show_banner(crate::store::Tone::Error, warning, cx));
                         }
                         this.close(cx);
                     }

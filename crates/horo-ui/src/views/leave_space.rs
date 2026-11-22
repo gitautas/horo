@@ -84,7 +84,10 @@ impl LeaveSpace {
                 match outcome {
                     Ok(stuck) => {
                         if stuck > 0 {
-                            tracing::warn!("left the space, but {stuck} of its rooms wouldn't let go");
+                            let name = this.store.read(cx).spaces.iter().find(|s| s.id == this.space_id).map(|s| s.name.clone()).unwrap_or_default();
+                            let (which, them) = if stuck == 1 { ("one room".to_owned(), "it") } else { (format!("{stuck} rooms"), "them") };
+                            let message = format!("left {name}, but {which} wouldn't let go — try leaving {them} from room settings");
+                            this.store.update(cx, |s, cx| s.show_banner(crate::store::Tone::Error, message, cx));
                         }
                         let space_id = this.space_id.clone();
                         this.store.update(cx, |s, cx| {
