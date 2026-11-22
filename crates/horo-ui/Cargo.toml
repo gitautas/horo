@@ -29,3 +29,14 @@ horo-rtc = { workspace = true, features = ["media"] }
 # Native banners: Notification Center, the Windows toast, the freedesktop
 # notification service. The same version the Tauri shell's plugin uses.
 notify-rust = "4.18"
+
+# Video played in the timeline: AVFoundation decodes it and plays its
+# sound; its frames come back as CVPixelBuffers, which gpui draws with its
+# `surface` element. macOS only, as that element is.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-video = "0.3"
+objc2-core-media = "0.3"
+objc2-av-foundation = { version = "0.3", features = ["objc2-core-media", "objc2-core-video"] }

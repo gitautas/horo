@@ -19,6 +19,8 @@ pub mod sounds;
 pub mod store;
 pub mod theme;
 pub mod verify;
+#[cfg(target_os = "macos")]
+pub mod video;
 pub mod views;
 
 pub use backend::Backend;

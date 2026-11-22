@@ -5,6 +5,8 @@
 
 use std::path::PathBuf;
 
+use gpui::AppContext as _;
+
 use gpui::{
     AnyElement, App, ElementId, Entity, FontStyle, FontWeight, Hsla, InteractiveElement, InteractiveText, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, StrikethroughStyle, StyledImage, Styled, StyledText, TextRun, UnderlineStyle, div, font, img, prelude::FluentBuilder,
@@ -237,11 +239,16 @@ pub fn picture(id: &str, body: &str, media: &MediaInfoDto, sticker: bool, store:
         .into_any_element()
 }
 
+/// Something to do in place of the system's player.
+pub type PlayHere = std::rc::Rc<dyn Fn(&mut App)>;
+
 /// What a card's click does.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum Open {
     /// Play it in the system's player (video, audio).
     Play,
+    /// Play it in the window (a video in the timeline).
+    PlayHere(PlayHere),
     /// Ask where, then save it.
     Save,
 }
@@ -258,7 +265,7 @@ pub fn card(id: &str, glyph: &str, body: &str, media: &MediaInfoDto, open: Open,
         });
     let details = [media.duration_ms.map(duration), media.size.map(bytes)].into_iter().flatten().collect::<Vec<_>>().join(" · ");
     let action = match open {
-        Open::Play => "play",
+        Open::Play | Open::PlayHere(_) => "play",
         Open::Save => "save",
     };
     let (mxc, name, mime) = (media.mxc.clone(), body.to_owned(), media.mimetype.clone());
@@ -296,7 +303,8 @@ pub fn card(id: &str, glyph: &str, body: &str, media: &MediaInfoDto, open: Open,
         )
         .on_click(move |_, _, cx| {
             let Some(mxc) = mxc.clone() else { return };
-            match open {
+            match &open {
+                Open::PlayHere(play_here) => play_here(cx),
                 Open::Play => play(mxc, name.clone(), mime.clone(), cx),
                 Open::Save => save(mxc, name.clone(), cx),
             }
@@ -304,10 +312,10 @@ pub fn card(id: &str, glyph: &str, body: &str, media: &MediaInfoDto, open: Open,
         .into_any_element()
 }
 
-/// Fetch it into a temporary file and hand it to the system's player.
-fn play(mxc: String, name: String, mime: Option<String>, cx: &mut App) {
+/// Fetch it (decrypted, for an encrypted room) into a temporary file.
+pub fn download_temp(mxc: String, name: &str, mime: Option<&str>, cx: &mut App) -> gpui::Task<Result<PathBuf, String>> {
     let dir = std::env::temp_dir().join("horo-media");
-    let path = dir.join(safe_name(&name, mime.as_deref()));
+    let path = dir.join(safe_name(name, mime));
     let backend = Backend::global(cx);
     let task = backend.run({
         let (state, path) = (backend.state.clone(), path.clone());
@@ -317,11 +325,20 @@ fn play(mxc: String, name: String, mime: Option<String>, cx: &mut App) {
             core_media::save_to(&core.client, &mxc, &path.to_string_lossy()).await
         }
     });
-    cx.spawn(async move |cx| match task.await {
-        Ok(Ok(())) => {
-            cx.update(|cx| cx.open_with_system(&path));
+    cx.background_spawn(async move {
+        match task.await {
+            Ok(Ok(())) => Ok(path),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(e) => Err(e.to_string()),
         }
-        Ok(Err(e)) => tracing::warn!("couldn't open {name}: {e}"),
+    })
+}
+
+/// Fetch it into a temporary file and hand it to the system's player.
+fn play(mxc: String, name: String, mime: Option<String>, cx: &mut App) {
+    let download = download_temp(mxc, &name, mime.as_deref(), cx);
+    cx.spawn(async move |cx| match download.await {
+        Ok(path) => cx.update(|cx| cx.open_with_system(&path)),
         Err(e) => tracing::warn!("couldn't open {name}: {e}"),
     })
     .detach();
