@@ -288,8 +288,10 @@ impl Shell {
         let first = joined.first().map(|r| r.notify_mode.unwrap_or(NotifyMode::All));
         let mode = first.filter(|m| joined.iter().all(|r| r.notify_mode.unwrap_or(NotifyMode::All) == *m));
 
-        let item = |key: SharedString, words: String, enabled: bool| {
-            div()
+        // `check`: a toggle or a choice, with its tick (or the space for
+        // one) in a column of its own so the words line up.
+        let item = |key: SharedString, words: String, enabled: bool, check: Option<bool>| {
+            h_flex()
                 .id(key)
                 .px(space(12.))
                 .py(space(7.))
@@ -297,9 +299,9 @@ impl Shell {
                 .text_size(text(13.))
                 .when(enabled, |d| d.cursor_pointer().hover(|d| d.bg(palette.inset)))
                 .when(!enabled, |d| d.text_color(palette.text_tertiary))
+                .children(check.map(|on| div().flex_none().w(px(18.)).text_color(palette.accent).child(if on { "✓" } else { "" })))
                 .child(words)
         };
-        let mark = |on: bool| if on { "✓  " } else { "    " };
         let separator = || div().my(space(4.)).mx(space(8.)).h(px(1.)).bg(palette.border_subtle);
 
         let mut menu = v_flex()
@@ -320,20 +322,20 @@ impl Shell {
             .child(div().px(space(12.)).pt(space(6.)).pb(space(4.)).text_size(text(11.)).text_color(palette.text_tertiary).truncate().child(name.clone()));
 
         let sid = id.clone();
-        menu = menu.child(item("sm-read".into(), "mark as read".into(), any_unread).on_click(cx.listener(move |this, _, _, cx| {
+        menu = menu.child(item("sm-read".into(), "mark as read".into(), any_unread, None).on_click(cx.listener(move |this, _, _, cx| {
             if any_unread {
                 this.on_space_rooms(&sid, cx, |core, id| Box::pin(async move { core_rooms::mark_read(&core, &id).await }));
             }
         })));
         menu = menu.child(separator());
         let (sid, sname) = (id.clone(), name.clone());
-        menu = menu.child(item("sm-invite".into(), "invite to space".into(), true).on_click(cx.listener(move |this, _, window, cx| {
+        menu = menu.child(item("sm-invite".into(), "invite to space".into(), true, None).on_click(cx.listener(move |this, _, window, cx| {
             this.open_invite_to_space(sid.clone(), sname.clone(), window, cx)
         })));
         let sid = id.clone();
         menu = menu.child(
             v_flex()
-                .child(item("sm-open-rooms".into(), "let members into its rooms".into(), true).on_click(cx.listener(move |this, _, _, cx| {
+                .child(item("sm-open-rooms".into(), "let members into its rooms".into(), true, None).on_click(cx.listener(move |this, _, _, cx| {
                     this.space_menu = None;
                     let Ok(space_room) = OwnedRoomId::try_from(sid.as_str()) else { return };
                     let backend = Backend::global(cx);
@@ -355,7 +357,7 @@ impl Shell {
         );
         menu = menu.child(separator());
         let sid = id.clone();
-        menu = menu.child(item("sm-mute".into(), format!("{}mute space", mark(all_muted)), !joined.is_empty()).on_click(cx.listener(move |this, _, _, cx| {
+        menu = menu.child(item("sm-mute".into(), "mute space".into(), !joined.is_empty(), Some(all_muted)).on_click(cx.listener(move |this, _, _, cx| {
             let mute = !all_muted;
             this.on_space_rooms(&sid, cx, move |core, id| {
                 Box::pin(async move { if mute { core_rooms::set_notify_mode(&core, &id, NotifyMode::Mute).await } else { core_rooms::set_muted(&core, &id, false).await } })
@@ -373,12 +375,13 @@ impl Shell {
         for (m, words) in [(NotifyMode::All, "all messages"), (NotifyMode::Mentions, "only @mentions"), (NotifyMode::Mute, "nothing")] {
             let sid = id.clone();
             menu = menu.child(
-                item(SharedString::from(format!("sm-notify-{words}")), format!("{}{words}", mark(mode == Some(m))), !joined.is_empty())
+                item(SharedString::from(format!("sm-notify-{words}")), words.into(), !joined.is_empty(), Some(mode == Some(m)))
                     .on_click(cx.listener(move |this, _, _, cx| this.on_space_rooms(&sid, cx, move |core, id| Box::pin(async move { core_rooms::set_notify_mode(&core, &id, m).await })))),
             );
         }
+        menu = menu.child(separator());
         let sid = id.clone();
-        menu = menu.child(item("sm-hide-muted".into(), format!("{}hide muted rooms", mark(hide_muted)), true).on_click(cx.listener(move |this, _, _, cx| {
+        menu = menu.child(item("sm-hide-muted".into(), "hide muted rooms".into(), true, Some(hide_muted)).on_click(cx.listener(move |this, _, _, cx| {
             this.space_menu = None;
             let sid = sid.clone();
             this.store.update(cx, |s, cx| {
@@ -395,13 +398,13 @@ impl Shell {
             });
         })));
         let (sid, sname) = (id.clone(), name.clone());
-        menu = menu.child(item("sm-browse".into(), "browse rooms".into(), true).on_click(cx.listener(move |this, _, window, cx| this.open_browse(sid.clone(), sname.clone(), window, cx))));
+        menu = menu.child(item("sm-browse".into(), "browse rooms".into(), true, None).on_click(cx.listener(move |this, _, window, cx| this.open_browse(sid.clone(), sname.clone(), window, cx))));
         menu = menu.child(separator());
         let sid = id.clone();
-        menu = menu.child(item("sm-leave".into(), "leave space".into(), true).text_color(palette.danger).on_click(cx.listener(move |this, _, window, cx| this.open_leave_space(sid.clone(), window, cx))));
+        menu = menu.child(item("sm-leave".into(), "leave space".into(), true, None).text_color(palette.danger).on_click(cx.listener(move |this, _, window, cx| this.open_leave_space(sid.clone(), window, cx))));
         menu = menu.child(separator());
         let sid = id.clone();
-        menu = menu.child(item("sm-copy".into(), "copy space id".into(), true).on_click(cx.listener(move |this, _, _, cx| {
+        menu = menu.child(item("sm-copy".into(), "copy space id".into(), true, None).on_click(cx.listener(move |this, _, _, cx| {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(sid.clone()));
             this.space_menu = None;
             cx.notify();
@@ -1041,6 +1044,13 @@ impl Render for Shell {
             .track_focus(&self.focus)
             // ⌘, from anywhere in the window, the menu included. Already
             // open, it stays where it is.
+            // Escape closes a space's menu, as a click elsewhere does.
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" && this.space_menu.take().is_some() {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
                 if this.store.read(cx).settings.is_none() {
                     this.open_settings(cx);
