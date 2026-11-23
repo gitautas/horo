@@ -564,15 +564,55 @@ impl Composer {
     /// Pick files and send each as an attachment.
     fn attach(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(gpui::PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("attach".into()) });
-        let (room_id, thread_root) = (self.room_id.clone(), self.thread_root.clone());
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = picked.await else { return };
-            for path in paths {
+            let _ = this.update(cx, |composer, cx| composer.send_files(paths.into_iter().map(Outgoing::Path).collect(), cx));
+        })
+        .detach();
+    }
+
+    /// Files dropped on the room: each goes to it (or the open thread).
+    pub fn send_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        self.send_files(paths.into_iter().map(Outgoing::Path).collect(), cx);
+    }
+
+    /// A paste: files copied in Finder or a picture go to the room, in
+    /// place of being pasted as text. `false` when it's text after all.
+    fn paste(&mut self, item: &gpui::ClipboardItem, cx: &mut Context<Self>) -> bool {
+        let files = pasted(item, chrono::Local::now());
+        if files.is_empty() {
+            return false;
+        }
+        self.send_files(files, cx);
+        true
+    }
+
+    /// Send each file in turn, saying under the box which ones failed.
+    fn send_files(&mut self, files: Vec<Outgoing>, cx: &mut Context<Self>) {
+        let (room_id, thread_root) = (self.room_id.clone(), self.thread_root.clone());
+        self.error = None;
+        cx.spawn(async move |this, cx| {
+            for file in files {
+                let name = file.name();
+                if let Outgoing::Path(path) = &file
+                    && std::fs::metadata(path).is_ok_and(|m| m.len() > MAX_ATTACHMENT_BYTES)
+                {
+                    let _ = this.update(cx, |composer, cx| {
+                        composer.error = Some(format!("{name} is too big to send — 100mb is the limit here").into());
+                        cx.notify();
+                    });
+                    continue;
+                }
                 let Ok(task) = this.update(cx, |_, cx| {
                     let backend = Backend::global(cx);
-                    let (state, room_id, path) = (backend.state.clone(), room_id.clone(), path.to_string_lossy().into_owned());
-                    let thread = thread_root.clone();
-                    backend.run(async move { timeline::send_attachment(&*state.core().await?, &room_id, thread.as_deref(), &path, None).await })
+                    let (state, room_id, thread) = (backend.state.clone(), room_id.clone(), thread_root.clone());
+                    backend.run(async move {
+                        let core = state.core().await?;
+                        match file {
+                            Outgoing::Path(path) => timeline::send_attachment(&core, &room_id, thread.as_deref(), &path.to_string_lossy(), None).await,
+                            Outgoing::Bytes { bytes, mime, name } => timeline::send_attachment_data(&core, &room_id, thread.as_deref(), &name, Some(mime), bytes, None).await,
+                        }
+                    })
                 }) else {
                     return;
                 };
@@ -582,12 +622,13 @@ impl Composer {
                     Err(e) => e.to_string(),
                 };
                 let _ = this.update(cx, |composer, cx| {
-                    composer.error = Some(format!("couldn't send {}: {error}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).into());
+                    composer.error = Some(format!("couldn't send {name}: {error}").into());
                     cx.notify();
                 });
             }
         })
         .detach();
+        cx.notify();
     }
 
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -659,6 +700,70 @@ fn send_typing(room_id: OwnedRoomId, typing: bool, cx: &mut App) {
             let _ = horo_core::matrix::rooms::set_typing(&core, &room_id, typing).await;
         }
     });
+}
+
+/// The most a file may be (the usual server upload limit).
+const MAX_ATTACHMENT_BYTES: u64 = 100 * 1024 * 1024;
+
+/// A file on its way to the room.
+#[derive(Debug, PartialEq)]
+enum Outgoing {
+    Path(std::path::PathBuf),
+    /// A picture from the clipboard.
+    Bytes { bytes: Vec<u8>, mime: &'static str, name: String },
+}
+
+impl Outgoing {
+    fn name(&self) -> String {
+        match self {
+            Outgoing::Path(path) => path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            Outgoing::Bytes { name, .. } => name.clone(),
+        }
+    }
+}
+
+/// What in a paste should be sent as files, `now` naming pictures.
+///
+/// Files copied in Finder come with their icon as a picture and their
+/// name as text: the files are what's meant. A picture comes with text
+/// when it's copied from a browser (its address) — but also when rich
+/// text is copied from an editor that offers a rendering of it, so a
+/// picture beside any other text is left to paste as that text.
+fn pasted(item: &gpui::ClipboardItem, now: chrono::DateTime<chrono::Local>) -> Vec<Outgoing> {
+    use gpui::ClipboardEntry;
+    let paths: Vec<Outgoing> = item
+        .entries()
+        .iter()
+        .filter_map(|e| match e {
+            ClipboardEntry::ExternalPaths(p) => Some(p.paths().iter().cloned().map(Outgoing::Path)),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    if !paths.is_empty() {
+        return paths;
+    }
+    let text = item.text().unwrap_or_default();
+    let text = text.trim();
+    let just_an_address = !text.contains(char::is_whitespace) && (text.starts_with("http://") || text.starts_with("https://"));
+    if !text.is_empty() && !just_an_address {
+        return Vec::new();
+    }
+    let stamp = now.format("%Y%m%d-%H%M%S");
+    item.entries()
+        .iter()
+        .filter_map(|e| match e {
+            ClipboardEntry::Image(image) => Some(image),
+            _ => None,
+        })
+        .enumerate()
+        .map(|(i, image)| {
+            let mime = image.format.mime_type();
+            let extension = mime.rsplit('/').next().unwrap_or("png").split('+').next().unwrap_or("png");
+            let name = if i == 0 { format!("pasted-{stamp}.{extension}") } else { format!("pasted-{stamp}-{i}.{extension}") };
+            Outgoing::Bytes { bytes: image.bytes.clone(), mime, name }
+        })
+        .collect()
 }
 
 impl Render for Composer {
@@ -812,7 +917,10 @@ impl Render for Composer {
                                 .child(icon("icons/circle-plus.svg").size(px(22.)).text_color(palette.text_tertiary))
                                 .on_click(cx.listener(|this, _, window, cx| this.attach(window, cx))),
                         )
-                        .child(div().flex_1().min_w_0().py(space(4.)).text_size(px(14.5)).child(Textarea::new(&self.input).appearance(false)))
+                        .child(div().flex_1().min_w_0().py(space(4.)).text_size(px(14.5)).child(Textarea::new(&self.input).appearance(false).on_paste({
+                            let this = cx.weak_entity();
+                            move |item, _, cx| this.update(cx, |composer, cx| composer.paste(item, cx)).unwrap_or(false)
+                        })))
                         .child(
                             div()
                                 .id("composer-emoji")
@@ -890,5 +998,42 @@ impl Render for Composer {
                         .child("not encrypted · your homeserver can read this"),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+    use gpui::{ClipboardEntry, ClipboardItem, ClipboardString, ExternalPaths, Image, ImageFormat};
+
+    use super::*;
+
+    fn now() -> chrono::DateTime<chrono::Local> {
+        chrono::Local.with_ymd_and_hms(2026, 11, 23, 17, 40, 5).unwrap()
+    }
+
+    fn picture() -> ClipboardEntry {
+        ClipboardEntry::Image(Image::from_bytes(ImageFormat::Png, vec![1, 2, 3]))
+    }
+
+    #[test]
+    fn a_screenshot_is_sent_as_a_named_picture() {
+        let item = ClipboardItem { entries: vec![picture()] };
+        assert_eq!(pasted(&item, now()), vec![Outgoing::Bytes { bytes: vec![1, 2, 3], mime: "image/png", name: "pasted-20261123-174005.png".into() }]);
+    }
+
+    #[test]
+    fn finder_files_win_over_their_icon_and_text_stays_text() {
+        let file = ClipboardEntry::ExternalPaths(ExternalPaths(vec![std::path::PathBuf::from("/tmp/a.jpg")].into()));
+        let name = ClipboardEntry::String(ClipboardString::new("a.jpg".into()));
+        let item = ClipboardItem { entries: vec![name.clone(), picture(), file] };
+        assert_eq!(pasted(&item, now()), vec![Outgoing::Path("/tmp/a.jpg".into())]);
+        // Rich text with a rendering of itself: still text.
+        let words = ClipboardEntry::String(ClipboardString::new("some words".into()));
+        assert!(pasted(&ClipboardItem { entries: vec![words, picture()] }, now()).is_empty());
+        // A browser's "copy image": the picture.
+        let address = ClipboardEntry::String(ClipboardString::new("https://x.org/cat.png".into()));
+        assert_eq!(pasted(&ClipboardItem { entries: vec![address, picture()] }, now()).len(), 1);
+        assert!(pasted(&ClipboardItem { entries: vec![name] }, now()).is_empty());
     }
 }

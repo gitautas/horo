@@ -1028,14 +1028,17 @@ impl Shell {
                         .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.open_thread(None, cx)))),
                 )
         });
+        let in_thread = self.store.read(cx).thread.is_some();
         let body = match (&room, &self.timeline) {
-            (Some(_), Some((_, timeline, composer))) => v_flex()
+            (Some(room), Some((_, timeline, composer))) => v_flex()
+                .relative()
                 .flex_1()
                 .min_h_0()
                 .children(thread_bar)
                 .children(strip)
                 .child(div().flex_1().min_h_0().child(timeline.clone()))
-                .child(composer.clone()),
+                .child(composer.clone())
+                .child(drop_zone(&room.name, in_thread, composer.clone(), palette)),
             _ => v_flex().m_auto().text_color(palette.text_tertiary).child("pick a room"),
         };
         v_flex()
@@ -1317,6 +1320,42 @@ fn filter_name(filter: Filter) -> &'static str {
     }
 }
 
+/// Files dragged over the room: a card saying where they'll go, shown
+/// only while a drag from outside the app hovers; dropping sends them.
+/// Unseen and click-through the rest of the time.
+fn drop_zone(room: &str, in_thread: bool, composer: Entity<Composer>, palette: &Palette) -> impl IntoElement {
+    let where_to = if in_thread { format!("it'll go to the thread you have open in {room}") } else { format!("it'll go straight to {room}") };
+    div()
+        .id("drop-zone")
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .opacity(0.)
+        .drag_over::<gpui::ExternalPaths>(|style, _, _, _| style.opacity(1.))
+        .bg(gpui::Hsla { a: 0.78, ..palette.app })
+        .on_drop(move |paths: &gpui::ExternalPaths, _, cx| {
+            let paths = paths.paths().to_vec();
+            composer.update(cx, |c, cx| c.send_paths(paths, cx));
+        })
+        .child(
+            v_flex()
+                .items_center()
+                .gap(px(14.))
+                .px(px(64.))
+                .py(px(44.))
+                .rounded(px(28.))
+                .border_2()
+                .border_dashed()
+                .border_color(palette.accent)
+                .bg(palette.raised)
+                .shadow_lg()
+                .child(div().font_family(palette.heading_font.clone()).font_weight(gpui::FontWeight::EXTRA_BOLD).text_size(px(22.)).child("drop it here~"))
+                .child(div().max_w(px(320.)).text_center().text_size(px(13.)).text_color(palette.text_secondary).child(where_to)),
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::opened_message;
@@ -1329,3 +1368,4 @@ mod tests {
         assert_eq!(opened_message(1, 3), "opened 1 room to the space; 3 rooms need someone with more power");
     }
 }
+
