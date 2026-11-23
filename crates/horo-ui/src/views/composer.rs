@@ -9,7 +9,7 @@
 //! pack autocomplete, attachments and stickers follow.)
 
 use gpui::{
-    App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    AnyElement, App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     StyledImage, WeakEntity, Window, div, img, prelude::FluentBuilder, px,
 };
 use gpui_component::{
@@ -71,6 +71,43 @@ pub struct Composer {
     people_loading: bool,
     /// People picked from the suggestions for the message being written.
     mentions: Vec<MentionRef>,
+    /// Files pasted in, waiting to go with the message.
+    staged: Vec<Staged>,
+}
+
+/// A file waiting in the box, and what to show for it.
+struct Staged {
+    file: Outgoing,
+    /// The picture itself, when it is one.
+    preview: Option<gpui::ImageSource>,
+}
+
+impl Staged {
+    fn new(file: Outgoing) -> Staged {
+        let preview = match &file {
+            Outgoing::Bytes { bytes, mime, .. } => {
+                image_format(mime).map(|format| gpui::ImageSource::Image(std::sync::Arc::new(gpui::Image::from_bytes(format, bytes.clone()))))
+            }
+            Outgoing::Path(path) => packs::mime_from_path(&path.to_string_lossy())
+                .is_some_and(|m| m.starts_with("image/"))
+                .then(|| gpui::ImageSource::from(path.clone())),
+        };
+        Staged { file, preview }
+    }
+}
+
+/// The picture format a clipboard type names.
+fn image_format(mime: &str) -> Option<gpui::ImageFormat> {
+    use gpui::ImageFormat::*;
+    Some(match mime {
+        "image/png" => Png,
+        "image/jpeg" => Jpeg,
+        "image/webp" => Webp,
+        "image/gif" => Gif,
+        "image/bmp" => Bmp,
+        "image/tiff" => Tiff,
+        _ => return None,
+    })
 }
 
 /// How long a typing notice stands before it's refreshed (the server
@@ -175,6 +212,7 @@ impl Composer {
             people: None,
             people_loading: false,
             mentions: Vec::new(),
+            staged: Vec::new(),
         }
     }
 
@@ -583,12 +621,19 @@ impl Composer {
         if files.is_empty() {
             return false;
         }
-        self.send_files(files, cx);
+        self.staged.extend(files.into_iter().map(Staged::new));
+        cx.notify();
         true
     }
 
     /// Send each file in turn, saying under the box which ones failed.
     fn send_files(&mut self, files: Vec<Outgoing>, cx: &mut Context<Self>) {
+        self.upload(files, cx).detach();
+        cx.notify();
+    }
+
+    /// Queue each file in turn; done when the last is queued (or failed).
+    fn upload(&mut self, files: Vec<Outgoing>, cx: &mut Context<Self>) -> gpui::Task<()> {
         let (room_id, thread_root) = (self.room_id.clone(), self.thread_root.clone());
         self.error = None;
         cx.spawn(async move |this, cx| {
@@ -627,13 +672,18 @@ impl Composer {
                 });
             }
         })
-        .detach();
-        cx.notify();
     }
 
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let body = self.input.read(cx).value().trim().to_owned();
+        // Pasted files go first, then the words, as their own message.
+        let files: Vec<Outgoing> = std::mem::take(&mut self.staged).into_iter().map(|s| s.file).collect();
+        let uploaded = (!files.is_empty()).then(|| self.upload(files, cx));
         if body.is_empty() {
+            if let Some(uploaded) = uploaded {
+                uploaded.detach();
+            }
+            cx.notify();
             return;
         }
         let mode = std::mem::replace(&mut self.mode, Mode::Write);
@@ -642,7 +692,7 @@ impl Composer {
         self.error = None;
         let mentions = std::mem::take(&mut self.mentions);
         let backend = Backend::global(cx);
-        let task = backend.run({
+        let job = {
             let (state, room_id, body, mode) = (backend.state.clone(), self.room_id.clone(), body.clone(), mode.clone());
             let thread_root = self.thread_root.clone();
             // Every emote we know; the backend puts in the ones the text uses.
@@ -663,11 +713,16 @@ impl Composer {
                     }
                 }
             }
-        });
+        };
         // The message shows in the timeline as soon as the SDK queues it;
         // only a failure needs telling here, with the text and the mode
         // given back.
         cx.spawn_in(window, async move |this, cx| {
+            // After the files are queued, so it lands under them.
+            if let Some(uploaded) = uploaded {
+                uploaded.await;
+            }
+            let Ok(task) = this.update(cx, |_, cx| Backend::global(cx).run(job)) else { return };
             let failure = match task.await {
                 Ok(Ok(())) => None,
                 Ok(Err(e)) => Some(e.to_string()),
@@ -689,6 +744,73 @@ impl Composer {
         cx.notify();
     }
 }
+
+impl Composer {
+    /// The files waiting to go: a picture of each (or its name), each
+    /// with a button to take it out again.
+    fn staged_strip(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.staged.is_empty() {
+            return None;
+        }
+        let tiles = self.staged.iter().enumerate().map(|(i, staged)| {
+            let face: AnyElement = match &staged.preview {
+                Some(source) => img(source.clone()).size_full().object_fit(gpui::ObjectFit::Cover).into_any_element(),
+                None => v_flex()
+                    .size_full()
+                    .p(px(6.))
+                    .gap_1()
+                    .items_center()
+                    .justify_center()
+                    .child(icon("icons/file.svg").size(px(20.)).text_color(palette.text_tertiary))
+                    .child(div().w_full().truncate().text_center().text_size(text(10.)).text_color(palette.text_secondary).child(staged.file.name()))
+                    .into_any_element(),
+            };
+            div()
+                .id(("staged", i))
+                .relative()
+                .flex_none()
+                .size(px(STAGED_SIZE))
+                .rounded(corner(14.))
+                .overflow_hidden()
+                .bg(palette.card)
+                .border_1()
+                .border_color(palette.border_subtle)
+                .tooltip({
+                    let name = SharedString::from(staged.file.name());
+                    move |window, cx| gpui_component::tooltip::Tooltip::new(name.clone()).build(window, cx)
+                })
+                .child(face)
+                .child(
+                    div()
+                        .id(("unstage", i))
+                        .absolute()
+                        .top(px(4.))
+                        .right(px(4.))
+                        .size(px(20.))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(gpui::Hsla { a: 0.8, ..palette.app })
+                        .text_size(px(11.))
+                        .text_color(palette.text)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(palette.danger))
+                        .child("✕")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if i < this.staged.len() {
+                                this.staged.remove(i);
+                            }
+                            cx.notify();
+                        })),
+                )
+        });
+        Some(h_flex().mb(px(8.)).gap(space(8.)).flex_wrap().children(tiles).into_any_element())
+    }
+}
+
+/// How big a waiting file's tile is.
+const STAGED_SIZE: f32 = 84.;
 
 /// A typing notice, sent and forgotten: one that fails only means the
 /// dots don't show for someone.
@@ -778,7 +900,8 @@ impl Render for Composer {
             Mode::Reply { who, preview, .. } => Some((palette.accent_tertiary, format!("replying to {who}"), preview.clone())),
             Mode::Edit { .. } => Some((palette.accent, "editing your message".to_owned(), "escape to cancel".to_owned())),
         };
-        let can_send = !self.input.read(cx).value().trim().is_empty();
+        let can_send = !self.input.read(cx).value().trim().is_empty() || !self.staged.is_empty();
+        let staged = self.staged_strip(&palette, cx);
         let recording = self.recording.is_some();
         let sendable = self.recording.as_ref().is_some_and(Recording::sendable);
         let strip = recording.then(|| self.recording_strip(&palette, cx));
@@ -874,6 +997,7 @@ impl Render for Composer {
                             .on_click(cx.listener(|this, _, window, cx| this.cancel(window, cx))),
                     )
             }))
+            .children(staged)
             .child(
                 h_flex()
                     .relative()
