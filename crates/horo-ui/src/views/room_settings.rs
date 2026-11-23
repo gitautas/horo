@@ -144,6 +144,12 @@ impl RoomSettings {
         cx.notify();
     }
 
+    /// Open at the "leave?" question (from a room's right-click menu).
+    pub fn ask_to_leave(&mut self, cx: &mut Context<Self>) {
+        self.asked = true;
+        cx.notify();
+    }
+
     fn leave(&mut self, cx: &mut Context<Self>) {
         if self.leaving {
             return;

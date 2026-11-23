@@ -12,6 +12,7 @@ pub mod invite_to_space;
 pub mod leave_space;
 pub mod lightbox;
 pub mod login;
+pub mod menu;
 pub mod modal;
 pub mod pack_settings;
 pub mod profile;

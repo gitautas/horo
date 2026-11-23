@@ -29,6 +29,7 @@ use crate::{
     theme::{Palette, corner, space, text},
     views::{
         avatar::{accent_for, avatar},
+        menu,
         content::{self, Open},
         emoji_picker::{EmojiPicker, PickerEvent},
         voice::icon,
@@ -67,6 +68,8 @@ pub struct Timeline {
     picker: Option<(String, gpui::Point<gpui::Pixels>, Entity<EmojiPicker>)>,
     /// The video or sound playing in its message (one at a time).
     playing: Option<InlineMedia>,
+    /// A message's right-click menu: which, and where.
+    menu: Option<(String, gpui::Point<gpui::Pixels>)>,
 }
 
 /// A video or a sound played inside its message: fetched to a file, then
@@ -172,7 +175,7 @@ impl Timeline {
             error: None,
             marking_read: false,
             confirm_delete: None,
-            notice: None, picker: None, playing: None };
+            notice: None, picker: None, playing: None, menu: None };
 
         let backend = Backend::global(cx);
         let task = backend.run({
@@ -617,6 +620,7 @@ impl Render for Timeline {
                 .w_full(),
             )
             .child(self.footer(&palette, cx))
+            .children(self.message_menu(&palette, cx))
             .children(self.picker.as_ref().map(|(_, at, picker)| {
                 gpui::deferred(
                     gpui::anchored()
@@ -648,6 +652,87 @@ impl Render for Timeline {
                     }))
             }))
             .into_any_element()
+    }
+}
+
+impl Timeline {
+    /// Close the message menu; whether one was open.
+    pub fn close_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        let open = self.menu.take().is_some();
+        if open {
+            cx.notify();
+        }
+        open
+    }
+
+    /// A message's right-click menu: the hover bar's actions, and copying.
+    fn message_menu(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (id, at) = self.menu.clone()?;
+        let event = self.items.iter().filter_map(|i| i.event.as_deref()).find(|e| e.event_id.as_deref() == Some(id.as_str()))?.clone();
+        let close = |this: &mut Timeline, cx: &mut Context<Timeline>| {
+            this.menu = None;
+            cx.notify();
+        };
+        let reactable = !matches!(event.content, ContentDto::Redacted);
+        let body = editable_body(&event.content);
+        let name = event.sender_name.clone().unwrap_or_else(|| event.sender.clone());
+        let mut list = menu::frame("message-menu", palette).on_mouse_down_out(cx.listener(move |this, _, _, cx| close(this, cx)));
+
+        if reactable {
+            let event_id = id.clone();
+            list = list.child(menu::item("mm-react", "react…", true, None, palette).on_click(cx.listener(move |this, _, window, cx| {
+                close(this, cx);
+                this.open_picker(event_id.clone(), at, window, cx);
+            })));
+        }
+        if event.can_reply {
+            let (event_id, who, preview) = (id.clone(), name.clone(), reply_preview(&event.content));
+            list = list.child(menu::item("mm-reply", "reply", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+                close(this, cx);
+                cx.emit(TimelineAction::Reply { event_id: event_id.clone(), who: who.clone(), preview: preview.clone() });
+            })));
+        }
+        if self.thread_root.is_none() && reactable {
+            let root = event.thread_root.clone().unwrap_or_else(|| id.clone());
+            list = list.child(menu::item("mm-thread", "reply in thread", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+                close(this, cx);
+                this.store.update(cx, |s, cx| s.open_thread(Some(root.clone()), cx));
+            })));
+        }
+        if event.is_editable
+            && let Some(body) = body.clone()
+        {
+            let event_id = id.clone();
+            list = list.child(menu::item("mm-edit", "edit", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+                close(this, cx);
+                cx.emit(TimelineAction::Edit { event_id: event_id.clone(), body: body.clone() });
+            })));
+        }
+        list = list.child(menu::separator(palette));
+        if let Some(body) = body {
+            list = list.child(menu::item("mm-copy", "copy text", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(body.clone()));
+                close(this, cx);
+            })));
+        }
+        let link = format!("https://matrix.to/#/{}/{}", self.room_id, id);
+        list = list.child(menu::item("mm-link", "copy link", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(link.clone()));
+            close(this, cx);
+        })));
+        if event.is_own && reactable {
+            let event_id = id.clone();
+            list = list.child(menu::separator(palette)).child(menu::item("mm-delete", "delete", true, None, palette).text_color(palette.danger).on_click(
+                // The bar on the message asks "delete it?", as its own
+                // delete button does.
+                cx.listener(move |this, _, _, cx| {
+                    this.menu = None;
+                    this.confirm_delete = Some(event_id.clone());
+                    cx.notify();
+                }),
+            ));
+        }
+        Some(menu::place(at, list))
     }
 }
 
@@ -1395,6 +1480,16 @@ impl Timeline {
                     .when(!event.is_highlighted, |row| row.hover(|row| row.bg(gpui::Hsla { a: 0.035, ..gpui::white() })))
                     .when(event.is_highlighted, |row| row.bg(gpui::Hsla { a: 0.08, ..palette.accent_secondary }))
                     .when(pending, |row| row.opacity(0.72))
+                    .when_some(event.event_id.clone(), |row, id| {
+                        row.on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(move |this, down: &gpui::MouseDownEvent, _, cx| {
+                                this.menu = Some((id.clone(), down.position));
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        )
+                    })
                     .children(actions)
                     .child(column)
                     .child(content),

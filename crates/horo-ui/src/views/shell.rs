@@ -27,7 +27,7 @@ use crate::{
     rooms::{self, Filter, View},
     store::{Phase, SettingsSection, Store, Tone},
     theme::{Palette, corner, heading, label, space, text},
-    views::{avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target}, room_info::{OpenRoomSettings, RoomInfo}, room_settings::RoomSettings, invite_pane::InvitePane, invite_to_space::InviteToSpace, leave_space::LeaveSpace, explore::{Explore, Closed}, create_room::CreateRoom,
+    views::{menu, avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target}, room_info::{OpenRoomSettings, RoomInfo}, room_settings::RoomSettings, invite_pane::InvitePane, invite_to_space::InviteToSpace, leave_space::LeaveSpace, explore::{Explore, Closed}, create_room::CreateRoom,
         settings::Settings, timeline::{Timeline, TimelineAction}, verification, lightbox, voice},
 };
 
@@ -45,6 +45,8 @@ pub struct Shell {
     invite: Option<Entity<InvitePane>>,
     /// A space's right-click menu: which space, its name, and where.
     space_menu: Option<(String, String, gpui::Point<gpui::Pixels>)>,
+    /// A room's right-click menu: which, and where.
+    room_menu: Option<(String, gpui::Point<gpui::Pixels>)>,
     invite_to_space: Option<Entity<InviteToSpace>>,
     leave_space: Option<Entity<LeaveSpace>>,
     browse: Option<Entity<Explore>>,
@@ -74,7 +76,7 @@ impl Shell {
         focus.focus(window, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("find a room or friend~"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, invite_to_space: None, leave_space: None, browse: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false };
+        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, invite_to_space: None, leave_space: None, browse: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false };
         shell.follow_room(window, cx);
         shell.follow_settings(window, cx);
         shell
@@ -250,10 +252,22 @@ impl Shell {
         job: impl Fn(Arc<MatrixCore>, OwnedRoomId) -> Pin<Box<dyn Future<Output = horo_core::Result<()>> + Send>> + Send + 'static,
     ) {
         self.space_menu = None;
-        let ids: Vec<OwnedRoomId> = {
+        let ids: Vec<String> = {
             let store = self.store.read(cx);
-            rooms::in_space(&store.rooms, &store.spaces, space_id).into_iter().filter_map(|r| OwnedRoomId::try_from(r.id.as_str()).ok()).collect()
+            rooms::in_space(&store.rooms, &store.spaces, space_id).into_iter().map(|r| r.id.clone()).collect()
         };
+        self.on_rooms(ids, cx, job);
+    }
+
+    /// Something done to each of `ids`, one at a time, off the UI thread;
+    /// the first failure is said in the banner.
+    fn on_rooms(
+        &mut self,
+        ids: Vec<String>,
+        cx: &mut Context<Self>,
+        job: impl Fn(Arc<MatrixCore>, OwnedRoomId) -> Pin<Box<dyn Future<Output = horo_core::Result<()>> + Send>> + Send + 'static,
+    ) {
+        let ids: Vec<OwnedRoomId> = ids.iter().filter_map(|id| OwnedRoomId::try_from(id.as_str()).ok()).collect();
         let backend = Backend::global(cx);
         let task = backend.run({
             let state = backend.state.clone();
@@ -301,36 +315,15 @@ impl Shell {
 
         // `check`: a toggle or a choice, with its tick (or the space for
         // one) in a column of its own so the words line up.
-        let item = |key: SharedString, words: String, enabled: bool, check: Option<bool>| {
-            h_flex()
-                .id(key)
-                .px(space(12.))
-                .py(space(7.))
-                .rounded(corner(10.))
-                .text_size(text(13.))
-                .when(enabled, |d| d.cursor_pointer().hover(|d| d.bg(palette.inset)))
-                .when(!enabled, |d| d.text_color(palette.text_tertiary))
-                .children(check.map(|on| div().flex_none().w(px(18.)).text_color(palette.accent).child(if on { "✓" } else { "" })))
-                .child(words)
-        };
-        let separator = || div().my(space(4.)).mx(space(8.)).h(px(1.)).bg(palette.border_subtle);
+        let item = |key: SharedString, words: String, enabled: bool, check: Option<bool>| menu::item(key, words, enabled, check, palette);
+        let separator = || menu::separator(palette);
 
-        let mut menu = v_flex()
-            .id("space-menu")
-            .occlude()
-            .min_w(px(220.))
-            .p(space(4.))
-            .rounded(corner(14.))
-            .bg(palette.raised)
-            .border_1()
-            .border_color(palette.border)
-            .shadow_lg()
-            .text_color(palette.text)
+        let mut menu = menu::frame("space-menu", palette)
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.space_menu = None;
                 cx.notify();
             }))
-            .child(div().px(space(12.)).pt(space(6.)).pb(space(4.)).text_size(text(11.)).text_color(palette.text_tertiary).truncate().child(name.clone()));
+            .child(menu::caption(name.clone(), palette));
 
         let sid = id.clone();
         menu = menu.child(item("sm-read".into(), "mark as read".into(), any_unread, None).on_click(cx.listener(move |this, _, _, cx| {
@@ -423,7 +416,91 @@ impl Shell {
             cx.notify();
         })));
 
-        Some(gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(px(8.)).child(menu)).with_priority(2).into_any_element())
+        Some(menu::place(at, menu))
+    }
+
+    /// A room's right-click menu, as RoomList.tsx's.
+    fn room_menu(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (id, at) = self.room_menu.clone()?;
+        let room = self.store.read(cx).rooms.iter().find(|r| r.id == id).cloned()?;
+        let close = |this: &mut Shell, cx: &mut Context<Shell>| {
+            this.room_menu = None;
+            cx.notify();
+        };
+        let mut list = menu::frame("room-menu", palette)
+            .on_mouse_down_out(cx.listener(move |this, _, _, cx| close(this, cx)))
+            .child(menu::caption(room.name.clone(), palette));
+
+        if room.membership == horo_core::dto::RoomMembership::Invited {
+            let rid = id.clone();
+            list = list.child(menu::item("rm-decline", "decline invite", true, None, palette).text_color(palette.danger).on_click(cx.listener(
+                move |this, _, window, cx| {
+                    close(this, cx);
+                    this.open_room_settings(rid.clone(), window, cx);
+                    this.ask_to_leave(cx);
+                },
+            )));
+        } else {
+            let (rid, unread) = (id.clone(), room.has_unread);
+            list = list.child(menu::item("rm-read", "mark as read", unread, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+                close(this, cx);
+                if unread {
+                    this.on_rooms(vec![rid.clone()], cx, |core, id| Box::pin(async move { core_rooms::mark_read(&core, &id).await }));
+                }
+            })));
+            list = list.child(menu::separator(palette));
+            let (rid, muted) = (id.clone(), room.is_muted);
+            let mute_words = if room.is_direct { "mute chat" } else { "mute room" };
+            list = list.child(menu::item("rm-mute", mute_words, true, Some(muted), palette).on_click(cx.listener(move |this, _, _, cx| {
+                close(this, cx);
+                this.on_rooms(vec![rid.clone()], cx, move |core, id| {
+                    Box::pin(async move { if muted { core_rooms::set_muted(&core, &id, false).await } else { core_rooms::set_notify_mode(&core, &id, NotifyMode::Mute).await } })
+                });
+            })));
+            list = list.child(menu::caption("notifications", palette));
+            let mode = room.notify_mode.unwrap_or(NotifyMode::All);
+            for (m, words) in [(NotifyMode::All, "all messages"), (NotifyMode::Mentions, "only @mentions"), (NotifyMode::Mute, "nothing")] {
+                let rid = id.clone();
+                list = list.child(menu::item(SharedString::from(format!("rm-notify-{words}")), words, true, Some(mode == m), palette).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        close(this, cx);
+                        this.on_rooms(vec![rid.clone()], cx, move |core, id| Box::pin(async move { core_rooms::set_notify_mode(&core, &id, m).await }));
+                    },
+                )));
+            }
+            list = list.child(menu::separator(palette));
+            let rid = id.clone();
+            let settings_words = if room.is_direct { "chat settings" } else { "edit room" };
+            list = list.child(menu::item("rm-settings", settings_words, true, None, palette).on_click(cx.listener(move |this, _, window, cx| {
+                close(this, cx);
+                this.open_room_settings(rid.clone(), window, cx);
+            })));
+            let rid = id.clone();
+            let leave_words = if room.is_direct { "leave chat" } else { "leave room" };
+            list = list.child(menu::item("rm-leave", leave_words, true, None, palette).text_color(palette.danger).on_click(cx.listener(
+                move |this, _, window, cx| {
+                    close(this, cx);
+                    this.open_room_settings(rid.clone(), window, cx);
+                    this.ask_to_leave(cx);
+                },
+            )));
+        }
+        list = list.child(menu::separator(palette));
+        let rid = id.clone();
+        list = list.child(menu::item("rm-copy", "copy room id", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(rid.clone()));
+            close(this, cx);
+            this.store.update(cx, |s, cx| s.show_banner(Tone::Info, "room id copied", cx));
+        })));
+        Some(menu::place(at, list))
+    }
+
+    /// The room settings just opened, at "leave?" — leaving (and declining
+    /// an invite) is confirmed there.
+    fn ask_to_leave(&mut self, cx: &mut Context<Self>) {
+        if let Some(settings) = &self.room_settings {
+            settings.update(cx, |s, cx| s.ask_to_leave(cx));
+        }
     }
 
     fn open_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -658,6 +735,15 @@ impl Shell {
                     .child(div().font_family(palette.mono_font.clone()).text_size(text(10.)).text_color(palette.text_tertiary).child(stamp))
                     .children(badge),
             )
+            .on_mouse_down(gpui::MouseButton::Right, {
+                let id = room.id.clone();
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    this.space_menu = None;
+                    this.room_menu = Some((id.clone(), event.position));
+                    cx.stop_propagation();
+                    cx.notify();
+                })
+            })
             .on_click(cx.listener(move |this, _, _, cx| {
                 let id = id.clone();
                 this.store.update(cx, |s, cx| {
@@ -1077,10 +1163,17 @@ impl Render for Shell {
                     this.store.update(cx, |s, cx| s.close_lightbox(cx));
                     cx.stop_propagation();
                 }
+                // And a message's menu before the composer's reply.
+                else if event.keystroke.key == "escape"
+                    && let Some((_, timeline, _)) = &this.timeline
+                    && timeline.update(cx, |t, cx| t.close_menu(cx))
+                {
+                    cx.stop_propagation();
+                }
             }))
             // Escape closes a space's menu, as a click elsewhere does.
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" && this.space_menu.take().is_some() {
+                if event.keystroke.key == "escape" && (this.space_menu.take().is_some() | this.room_menu.take().is_some()) {
                     cx.stop_propagation();
                     cx.notify();
                 }
@@ -1111,6 +1204,7 @@ impl Render for Shell {
             .children(self.leave_space.clone())
             .children(self.browse.clone())
             .children(self.space_menu(&palette, cx))
+            .children(self.room_menu(&palette, cx))
             .children(self.profile.clone())
             .children(banner(&self.store, &palette, cx))
             // Above everything, the security panel included: the other
