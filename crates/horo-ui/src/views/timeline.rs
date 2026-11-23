@@ -11,7 +11,7 @@ use std::{collections::HashMap, rc::Rc};
 use chrono::{DateTime, Local, TimeZone};
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, Hsla, EventEmitter, InteractiveElement, StatefulInteractiveElement, FontWeight, IntoElement, ListAlignment, ListState, ParentElement, Render, SharedString, Styled,
-    WeakEntity, Window, div, img, list, prelude::FluentBuilder, px, StyledImage,
+    WeakEntity, Window, div, img, list, AnimationExt, prelude::FluentBuilder, px, StyledImage,
 };
 use gpui_component::{h_flex, v_flex};
 use horo_core::{
@@ -616,6 +616,7 @@ impl Render for Timeline {
                 .min_h_0()
                 .w_full(),
             )
+            .child(self.footer(&palette, cx))
             .children(self.picker.as_ref().map(|(_, at, picker)| {
                 gpui::deferred(
                     gpui::anchored()
@@ -650,7 +651,96 @@ impl Render for Timeline {
     }
 }
 
+/// How many readers' faces show before it's just a number.
+const MAX_FACES: usize = 5;
+
 impl Timeline {
+    /// Under the messages: who's typing, and who has read the last one.
+    fn footer(&self, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let store = self.store.read(cx);
+        let own = store.own_user_id().map(str::to_owned);
+        // Typing is per room; a thread shows the room's typists too.
+        let typing: Vec<String> = store
+            .typing
+            .get(self.room_id.as_str())
+            .map(|users| users.iter().map(|u| u.display_name.clone().unwrap_or_else(|| localpart(&u.user_id).to_owned())).collect())
+            .unwrap_or_default();
+        let readers: Vec<String> = self
+            .items
+            .iter()
+            .rev()
+            // Receipts hang on messages, not on joins and name changes
+            // (the core tracks them that way), so the newest message.
+            .filter_map(|i| i.event.as_deref())
+            .find(|e| !is_system(&e.content))
+            .map(|e| e.read_receipts.iter().filter(|u| own.as_deref() != Some(u.as_str())).cloned().collect())
+            .unwrap_or_default();
+
+        let left = (!typing.is_empty()).then(|| {
+            let dots = h_flex().gap(space(3.)).children((0..3).map(|i| {
+                div()
+                    .size(px(5.))
+                    .rounded_full()
+                    .bg(palette.accent_secondary)
+                    .with_animation(
+                        SharedString::from(format!("typing-dot-{i}")),
+                        gpui::Animation::new(std::time::Duration::from_millis(1000)).repeat(),
+                        move |dot, t| {
+                            // Each dot a fifth of a second behind the last.
+                            let phase = (t - i as f32 * 0.2).rem_euclid(1.);
+                            dot.opacity(0.3 + 0.7 * (phase * std::f32::consts::PI).sin())
+                        },
+                    )
+            }));
+            let verb = if typing.len() == 1 { "is" } else { "are" };
+            h_flex()
+                .gap(space(9.))
+                .text_size(text(12.5))
+                .text_color(palette.text_secondary)
+                .child(dots)
+                .child(format!("{} {verb} typing~", join_names(&typing)))
+        });
+
+        let right = (!readers.is_empty()).then(|| {
+            // Anyone who has spoken in view brings their own face.
+            let known = |user: &str| {
+                self.items.iter().rev().filter_map(|i| i.event.as_deref()).find(|e| e.sender == user).map(|e| (e.sender_name.clone(), e.sender_avatar.clone()))
+            };
+            let faces: Vec<AnyElement> = readers
+                .iter()
+                .take(MAX_FACES)
+                .map(|user| {
+                    let (name, picture) = known(user).unwrap_or_default();
+                    let name = name.unwrap_or_else(|| localpart(user).to_owned());
+                    avatar(user, &name, picture.as_deref(), px(18.), cx)
+                })
+                .collect();
+            let overflow = readers.len().saturating_sub(MAX_FACES);
+            h_flex()
+                .id("read-receipts")
+                .gap(space(4.))
+                .children(faces)
+                .when(overflow > 0, |row| {
+                    row.child(div().font_family(palette.mono_font.clone()).text_size(text(10.5)).text_color(palette.text_tertiary).child(format!("+{overflow}")))
+                })
+                .tooltip({
+                    let label = SharedString::from(format!("seen by {}", readers.len()));
+                    move |window, cx| gpui_component::tooltip::Tooltip::new(label.clone()).build(window, cx)
+                })
+        });
+
+        h_flex()
+            .flex_none()
+            .h(px(28.))
+            .pl(px(40.) + space(30.))
+            .pr(space(30.))
+            .gap(space(12.))
+            .children(left)
+            .child(div().flex_1())
+            .children(right)
+            .into_any_element()
+    }
+
     fn render_item(&mut self, ix: usize, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let Some(item) = self.items.get(ix).cloned() else { return div().into_any_element() };
         let row = match item.kind {
@@ -703,6 +793,21 @@ fn continues_group(prev: &EventItemDto, event: &EventItemDto) -> bool {
 /// Membership, profile and state changes: a quiet line, not a message.
 fn is_system(content: &ContentDto) -> bool {
     matches!(content, ContentDto::Membership { .. } | ContentDto::ProfileChange { .. } | ContentDto::State { .. } | ContentDto::CallInvite)
+}
+
+fn localpart(user_id: &str) -> &str {
+    user_id.trim_start_matches('@').split(':').next().unwrap_or(user_id)
+}
+
+/// "a", "a and b", "a, b and c", "a, b and 2 others".
+fn join_names(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [a] => a.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [a, b, c] => format!("{a}, {b} and {c}"),
+        [a, b, rest @ ..] => format!("{a}, {b} and {} others", rest.len()),
+    }
 }
 
 fn local(ms: u64) -> Option<DateTime<Local>> {

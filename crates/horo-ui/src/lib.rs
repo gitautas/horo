@@ -10,6 +10,7 @@ pub mod backend;
 pub mod call;
 pub mod emoji;
 pub mod media;
+pub mod mentions;
 pub mod packs;
 pub mod prefs;
 pub mod presence;

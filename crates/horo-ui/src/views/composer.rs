@@ -9,7 +9,7 @@
 //! pack autocomplete, attachments and stickers follow.)
 
 use gpui::{
-    AppContext, Context, Entity, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     StyledImage, WeakEntity, Window, div, img, prelude::FluentBuilder, px,
 };
 use gpui_component::{
@@ -17,7 +17,7 @@ use gpui_component::{
     input::{IndentInline, InputEvent, MoveDown, MoveUp, Position, Textarea, TextareaState},
 };
 use horo_core::{
-    dto::{SendOptions, StickerOptions},
+    dto::{MentionRef, SendOptions, StickerOptions},
     matrix::timeline,
 };
 use matrix_sdk::ruma::OwnedRoomId;
@@ -25,10 +25,12 @@ use matrix_sdk::ruma::OwnedRoomId;
 use crate::{
     backend::Backend,
     media::Media,
+    mentions::{self, Person},
     packs::{self, Picked},
     store::Store,
     theme::{Palette, corner, space, text},
     views::{
+        avatar::avatar,
         emoji_picker::{EmojiPicker, PickerEvent},
         timeline::{Timeline, TimelineAction},
         voice::icon,
@@ -61,7 +63,19 @@ pub struct Composer {
     /// A voice message being recorded, and its recent levels for the meter.
     recording: Option<Recording>,
     levels: std::collections::VecDeque<f32>,
+    /// When we last told the room we're typing; `None` when we aren't.
+    typing_sent: Option<std::time::Instant>,
+    /// The room's members, for `@` suggestions: fetched the first time
+    /// they're wanted.
+    people: Option<Vec<Person>>,
+    people_loading: bool,
+    /// People picked from the suggestions for the message being written.
+    mentions: Vec<MentionRef>,
 }
+
+/// How long a typing notice stands before it's refreshed (the server
+/// forgets one after about 30 s).
+const TYPING_REFRESH: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// How many recent levels the recording meter shows.
 const METER_BARS: usize = 36;
@@ -88,8 +102,14 @@ impl Recording {
 /// starts (a byte offset), and which match Enter or Tab would put in.
 struct Completing {
     start: usize,
-    matches: Vec<horo_core::matrix::packs::PackImageDto>,
+    matches: Vec<Suggestion>,
     active: usize,
+}
+
+/// One line of the suggestions menu.
+enum Suggestion {
+    Emote(horo_core::matrix::packs::PackImageDto),
+    Person(Person),
 }
 
 /// How many matches the menu offers.
@@ -120,14 +140,60 @@ impl Composer {
                 // sending `:blobc` as a message.
                 InputEvent::PressEnter { shift: false, .. } if this.completing.is_some() => this.complete(None, window, cx),
                 InputEvent::PressEnter { shift: false, .. } => this.send(window, cx),
-                InputEvent::Change => this.update_completion(cx),
+                InputEvent::Change => {
+                    this.update_completion(cx);
+                    this.note_typing(cx);
+                }
                 _ => {}
             }
         })
         .detach();
         input.update(cx, |state, cx| state.focus(window, cx));
         cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        Composer { room_id, thread_root, timeline, input, mode: Mode::Write, error: None, encrypted, store, picker: None, completing: None, recording: None, levels: Default::default() }
+        // Leaving the room mustn't leave us "typing" there for everyone
+        // until the server times it out.
+        cx.on_release(|this: &mut Composer, cx| {
+            if this.typing_sent.is_some() {
+                send_typing(this.room_id.clone(), false, cx);
+            }
+        })
+        .detach();
+        Composer {
+            room_id,
+            thread_root,
+            timeline,
+            input,
+            mode: Mode::Write,
+            error: None,
+            encrypted,
+            store,
+            picker: None,
+            completing: None,
+            recording: None,
+            levels: Default::default(),
+            typing_sent: None,
+            people: None,
+            people_loading: false,
+            mentions: Vec::new(),
+        }
+    }
+
+    /// Tell the room we're typing while there's text, at most every few
+    /// seconds; and that we've stopped when the box empties.
+    fn note_typing(&mut self, cx: &mut Context<Self>) {
+        let empty = self.input.read(cx).value().trim().is_empty();
+        if empty {
+            self.stop_typing(cx);
+        } else if self.typing_sent.is_none_or(|at| at.elapsed() >= TYPING_REFRESH) {
+            self.typing_sent = Some(std::time::Instant::now());
+            send_typing(self.room_id.clone(), true, cx);
+        }
+    }
+
+    fn stop_typing(&mut self, cx: &mut Context<Self>) {
+        if self.typing_sent.take().is_some() {
+            send_typing(self.room_id.clone(), false, cx);
+        }
     }
 
     /// The picker, over the box; a pick goes in at the cursor.
@@ -238,19 +304,73 @@ impl Composer {
             let input = self.input.read(cx);
             (input.value().to_string(), input.cursor())
         };
-        self.completing = packs::typing_shortcode(&text, caret).and_then(|(query, start)| {
-            let matches = packs::match_emotes(&packs::emote_lookup(&self.store.read(cx).packs), &query, COMPLETIONS);
-            (!matches.is_empty()).then_some(Completing { start, matches, active: 0 })
-        });
+        self.completing = if let Some((query, start)) = mentions::typing_mention(&text, caret) {
+            match &self.people {
+                Some(people) => {
+                    let matches: Vec<Suggestion> = mentions::match_people(people, &query, COMPLETIONS).into_iter().map(Suggestion::Person).collect();
+                    (!matches.is_empty()).then_some(Completing { start, matches, active: 0 })
+                }
+                None => {
+                    self.load_people(cx);
+                    None
+                }
+            }
+        } else {
+            packs::typing_shortcode(&text, caret).and_then(|(query, start)| {
+                let matches: Vec<Suggestion> =
+                    packs::match_emotes(&packs::emote_lookup(&self.store.read(cx).packs), &query, COMPLETIONS).into_iter().map(Suggestion::Emote).collect();
+                (!matches.is_empty()).then_some(Completing { start, matches, active: 0 })
+            })
+        };
         cx.notify();
+    }
+
+    /// Fetch the room's members for suggestions; the menu opens when
+    /// they're in, if an `@name` is still being typed.
+    fn load_people(&mut self, cx: &mut Context<Self>) {
+        if self.people_loading {
+            return;
+        }
+        self.people_loading = true;
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let (state, room_id) = (backend.state.clone(), self.room_id.clone());
+            async move { horo_core::matrix::rooms::members(&*state.core().await?, &room_id).await }
+        });
+        cx.spawn(async move |this, cx| {
+            let members = match task.await {
+                Ok(Ok(members)) => members,
+                _ => Vec::new(),
+            };
+            let _ = this.update(cx, |composer, cx| {
+                let own = composer.store.read(cx).own_user_id().map(str::to_owned);
+                let people = members
+                    .iter()
+                    .filter(|m| m.membership == "join" && !m.is_ignored && own.as_deref() != Some(m.user_id.as_str()))
+                    .map(Person::from_member)
+                    .collect();
+                composer.people = Some(people);
+                composer.people_loading = false;
+                composer.update_completion(cx);
+            });
+        })
+        .detach();
     }
 
     /// Put in the chosen match (the highlighted one unless `pick` says),
     /// replacing the `:code` typed so far.
     fn complete(&mut self, pick: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(completing) = self.completing.take() else { return };
-        let Some(image) = completing.matches.get(pick.unwrap_or(completing.active)) else { return };
-        let text = format!(":{}: ", image.shortcode);
+        let Some(pick) = completing.matches.get(pick.unwrap_or(completing.active)) else { return };
+        let text = match pick {
+            Suggestion::Emote(image) => format!(":{}: ", image.shortcode),
+            Suggestion::Person(person) => {
+                if !self.mentions.iter().any(|m| m.user_id == person.user_id) {
+                    self.mentions.push(MentionRef { user_id: person.user_id.clone(), name: person.name.clone() });
+                }
+                format!("{} ", person.name)
+            }
+        };
         self.input.update(cx, |state, cx| {
             let caret = state.cursor();
             state.set_selected_range(completing.start..caret, cx);
@@ -477,13 +597,17 @@ impl Composer {
         }
         let mode = std::mem::replace(&mut self.mode, Mode::Write);
         self.input.update(cx, |state, cx| state.set_value("", window, cx));
+        self.stop_typing(cx);
         self.error = None;
+        let mentions = std::mem::take(&mut self.mentions);
         let backend = Backend::global(cx);
         let task = backend.run({
             let (state, room_id, body, mode) = (backend.state.clone(), self.room_id.clone(), body.clone(), mode.clone());
             let thread_root = self.thread_root.clone();
             // Every emote we know; the backend puts in the ones the text uses.
             let emotes = packs::emote_refs(&self.store.read(cx).packs);
+            // The core keeps only the ones still named in the text.
+            let mentions = mentions.clone();
             async move {
                 let core = state.core().await?;
                 match mode {
@@ -493,7 +617,7 @@ impl Composer {
                             Mode::Reply { event_id, .. } => Some(event_id),
                             _ => None,
                         };
-                        let options = SendOptions { body, markdown: true, reply_to, thread_root, msgtype: None, emotes };
+                        let options = SendOptions { body, markdown: true, reply_to, thread_root, msgtype: None, emotes, mentions };
                         timeline::send(&core, &room_id, options).await
                     }
                 }
@@ -514,6 +638,7 @@ impl Composer {
                     if composer.input.read(cx).value().is_empty() {
                         composer.input.update(cx, |state, cx| state.set_value(body, window, cx));
                         composer.mode = mode;
+                        composer.mentions = mentions;
                     }
                     cx.notify();
                 });
@@ -522,6 +647,18 @@ impl Composer {
         .detach();
         cx.notify();
     }
+}
+
+/// A typing notice, sent and forgotten: one that fails only means the
+/// dots don't show for someone.
+fn send_typing(room_id: OwnedRoomId, typing: bool, cx: &mut App) {
+    let backend = Backend::global(cx);
+    let state = backend.state.clone();
+    backend.spawn(async move {
+        if let Ok(core) = state.core().await {
+            let _ = horo_core::matrix::rooms::set_typing(&core, &room_id, typing).await;
+        }
+    });
 }
 
 impl Render for Composer {
@@ -556,11 +693,22 @@ impl Render for Composer {
                 .border_1()
                 .border_color(palette.border)
                 .shadow_lg();
-            for (i, image) in completing.matches.iter().enumerate() {
+            for (i, suggestion) in completing.matches.iter().enumerate() {
                 let on = i == completing.active;
-                let picture = match Media::image(&image.url, Some((48, 48)), cx) {
-                    Some(picture) => img(picture).size(px(22.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
-                    None => div().size(px(22.)).into_any_element(),
+                let (picture, label, detail) = match suggestion {
+                    Suggestion::Emote(image) => (
+                        match Media::image(&image.url, Some((48, 48)), cx) {
+                            Some(picture) => img(picture).size(px(22.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
+                            None => div().size(px(22.)).into_any_element(),
+                        },
+                        div().font_family(palette.mono_font.clone()).child(format!(":{}:", image.shortcode)),
+                        None,
+                    ),
+                    Suggestion::Person(person) => (
+                        avatar(&person.user_id, &person.name, person.avatar.as_deref(), px(22.), cx),
+                        div().child(person.name.clone()),
+                        Some(person.user_id.clone()),
+                    ),
                 };
                 list = list.child(
                     h_flex()
@@ -573,14 +721,10 @@ impl Render for Composer {
                         .when(on, |d| d.bg(gpui::Hsla { a: 0.08, ..gpui::white() }))
                         .hover(|d| d.bg(gpui::Hsla { a: 0.08, ..gpui::white() }))
                         .child(picture)
-                        .child(
-                            div()
-                                .truncate()
-                                .font_family(palette.mono_font.clone())
-                                .text_size(text(12.))
-                                .text_color(if on { palette.text } else { palette.text_secondary })
-                                .child(format!(":{}:", image.shortcode)),
-                        )
+                        .child(label.truncate().text_size(text(12.)).text_color(if on { palette.text } else { palette.text_secondary }))
+                        .children(detail.map(|id| {
+                            div().flex_1().truncate().font_family(palette.mono_font.clone()).text_size(text(10.5)).text_color(palette.text_tertiary).child(id)
+                        }))
                         // On press, so the field keeps its focus and caret.
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
                             cx.stop_propagation();

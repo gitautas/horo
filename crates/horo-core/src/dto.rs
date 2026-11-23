@@ -600,6 +600,22 @@ pub struct SendOptions {
     #[serde(default)]
     #[ts(as = "Option<_>", optional)]
     pub emotes: Vec<EmoteRef>,
+    /// People picked from the composer's suggestions, by the name put in
+    /// the text: each that's still there becomes a pill and is listed in
+    /// `m.mentions`, which is what notifies them.
+    #[serde(default)]
+    #[ts(as = "Option<_>", optional)]
+    pub mentions: Vec<MentionRef>,
+}
+
+/// Someone mentioned in an outgoing message.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct MentionRef {
+    pub user_id: String,
+    /// As written in the body.
+    pub name: String,
 }
 
 /// One custom emote the composer can substitute into an outgoing message.

@@ -16,6 +16,7 @@ export type * from "./JoinSpaceResult";
 export type * from "./LatestEvent";
 export type * from "./LatestRelease";
 export type * from "./MediaInfo";
+export type * from "./MentionRef";
 export type * from "./NewRoom";
 export type * from "./NewRoomResult";
 export type * from "./NotifyMode";

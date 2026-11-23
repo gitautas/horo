@@ -25,7 +25,7 @@ use matrix_sdk_ui::timeline::{
 
 use crate::{
     dto::{
-        Diff, EmoteRef, SendOptions, StickerOptions, TimelineItemDto, TimelineUpdate,
+        Diff, EmoteRef, MentionRef, SendOptions, StickerOptions, TimelineItemDto, TimelineUpdate,
         convert_timeline_item,
     },
     error::{Error, Result},
@@ -235,7 +235,105 @@ fn convert_diff(
 
 fn build_message(options: &SendOptions) -> RoomMessageEventContent {
     let content = build_plain_message(options);
-    with_emotes(content, &options.emotes)
+    let content = with_emotes(content, &options.emotes);
+    with_mentions(content, &options.mentions)
+}
+
+/// Make each mentioned name still in the text a pill (a `matrix.to` link)
+/// and list who's in it in `m.mentions`, so their clients notify them.
+///
+/// The name is matched as a whole word, so mentioning "Al" doesn't turn
+/// the start of "Also" into a link; and, as with emotes, only outside tags.
+fn with_mentions(mut content: RoomMessageEventContent, mentions: &[MentionRef]) -> RoomMessageEventContent {
+    use matrix_sdk::ruma::{OwnedUserId, events::{Mentions, room::message::FormattedBody}};
+
+    let (body, formatted) = match &content.msgtype {
+        MessageType::Text(m) => (m.body.clone(), m.formatted.clone()),
+        MessageType::Emote(m) => (m.body.clone(), m.formatted.clone()),
+        MessageType::Notice(m) => (m.body.clone(), m.formatted.clone()),
+        _ => return content,
+    };
+    let present: Vec<(&MentionRef, OwnedUserId)> = mentions
+        .iter()
+        .filter(|m| !m.name.is_empty() && find_word(&body, &m.name, 0).is_some())
+        .filter_map(|m| OwnedUserId::try_from(m.user_id.as_str()).ok().map(|id| (m, id)))
+        .collect();
+    if present.is_empty() {
+        return content;
+    }
+
+    let mut html = match &formatted {
+        Some(f) => f.body.clone(),
+        None => escape_html(&body),
+    };
+    // Longest first, so "Ann Lee" is linked before "Ann" could split it.
+    let mut by_length: Vec<&(&MentionRef, OwnedUserId)> = present.iter().collect();
+    by_length.sort_by_key(|(m, _)| std::cmp::Reverse(m.name.len()));
+    for (mention, id) in by_length {
+        html = link_name(&html, &escape_html(&mention.name), id.as_str());
+    }
+    let formatted = FormattedBody::html(html);
+    match &mut content.msgtype {
+        MessageType::Text(m) => m.formatted = Some(formatted),
+        MessageType::Emote(m) => m.formatted = Some(formatted),
+        MessageType::Notice(m) => m.formatted = Some(formatted),
+        _ => {}
+    }
+
+    let mut ids: Vec<OwnedUserId> = present.into_iter().map(|(_, id)| id).collect();
+    ids.dedup();
+    content.add_mentions(Mentions::with_user_ids(ids))
+}
+
+/// Where `word` next appears in `text` from `from`, not inside a longer
+/// word.
+fn find_word(text: &str, word: &str, from: usize) -> Option<usize> {
+    let mut at = from;
+    while let Some(found) = text.get(at..)?.find(word) {
+        let start = at + found;
+        let end = start + word.len();
+        let before = text[..start].chars().next_back();
+        let after = text[end..].chars().next();
+        let joined = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        if !joined(before) && !joined(after) {
+            return Some(start);
+        }
+        at = start + word.chars().next().map_or(1, char::len_utf8);
+    }
+    None
+}
+
+/// Wrap each whole-word `name` outside a tag (and outside an existing
+/// link) in a link to `user_id`.
+fn link_name(html: &str, name: &str, user_id: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut at = 0;
+    let mut in_tag = false;
+    let mut in_link = 0usize;
+    while at < html.len() {
+        let rest = &html[at..];
+        let c = rest.chars().next().expect("at is a char boundary");
+        if c == '<' {
+            let lower = rest.get(..3).unwrap_or("").to_ascii_lowercase();
+            if lower.starts_with("<a ") || lower == "<a>" {
+                in_link += 1;
+            } else if lower.starts_with("</a") {
+                in_link = in_link.saturating_sub(1);
+            }
+            in_tag = true;
+        }
+        if !in_tag && in_link == 0 && rest.starts_with(name) && find_word(html, name, at) == Some(at) {
+            out.push_str(&format!("<a href=\"https://matrix.to/#/{user_id}\">{name}</a>"));
+            at += name.len();
+            continue;
+        }
+        if in_tag && c == '>' {
+            in_tag = false;
+        }
+        out.push(c);
+        at += c.len_utf8();
+    }
+    out
 }
 
 fn build_plain_message(options: &SendOptions) -> RoomMessageEventContent {
@@ -391,12 +489,9 @@ pub async fn send(
     match &options.reply_to {
         Some(event_id) => {
             let event_id = EventId::parse(event_id)?;
-            timeline
-                .send_reply(
-                    RoomMessageEventContentWithoutRelation::new(content.msgtype),
-                    event_id,
-                )
-                .await?;
+            let mut reply = RoomMessageEventContentWithoutRelation::new(content.msgtype);
+            reply.mentions = content.mentions;
+            timeline.send_reply(reply, event_id).await?;
         }
         None => {
             timeline.send(content.into()).await?;
@@ -731,6 +826,53 @@ mod emote_tests {
 #[cfg(test)]
 mod tests {
     use super::safe_filename;
+
+    mod mentions {
+        use matrix_sdk::ruma::events::room::message::MessageType;
+
+        use super::super::{build_message, find_word, link_name};
+        use crate::dto::{MentionRef, SendOptions};
+
+        fn options(body: &str, mentions: &[(&str, &str)]) -> SendOptions {
+            SendOptions {
+                body: body.into(),
+                markdown: true,
+                reply_to: None,
+                thread_root: None,
+                msgtype: None,
+                emotes: vec![],
+                mentions: mentions.iter().map(|(id, name)| MentionRef { user_id: (*id).into(), name: (*name).into() }).collect(),
+            }
+        }
+
+        #[test]
+        fn names_become_pills_and_mentions() {
+            let content = build_message(&options("hi Bob, see *this*", &[("@bob:x.org", "Bob"), ("@gone:x.org", "Gone")]));
+            let MessageType::Text(text) = &content.msgtype else { panic!() };
+            let html = &text.formatted.as_ref().unwrap().body;
+            assert!(html.contains("<a href=\"https://matrix.to/#/@bob:x.org\">Bob</a>"), "{html}");
+            assert!(html.contains("<em>this</em>"), "{html}");
+            let ids: Vec<String> = content.mentions.unwrap().user_ids.iter().map(ToString::to_string).collect();
+            // Someone whose name was deleted from the text isn't notified.
+            assert_eq!(ids, vec!["@bob:x.org".to_owned()]);
+        }
+
+        #[test]
+        fn plain_text_without_mentions_stays_plain() {
+            let content = build_message(&options("hello", &[]));
+            let MessageType::Text(text) = &content.msgtype else { panic!() };
+            assert!(text.formatted.is_none());
+            assert!(content.mentions.is_none());
+        }
+
+        #[test]
+        fn only_whole_words_outside_tags_and_links() {
+            assert_eq!(find_word("Also Al", "Al", 0), Some(5));
+            assert_eq!(find_word("Alan", "Al", 0), None);
+            let html = link_name("Al <img alt=\"Al\"> <a href=\"x\">Al</a>", "Al", "@al:x");
+            assert_eq!(html, "<a href=\"https://matrix.to/#/@al:x\">Al</a> <img alt=\"Al\"> <a href=\"x\">Al</a>");
+        }
+    }
 
     #[test]
     fn keeps_an_ordinary_name() {

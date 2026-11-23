@@ -23,6 +23,15 @@ pub struct Marks {
     pub spoiler: bool,
     /// A link or a mention; `Inline::links` says where to.
     pub link: bool,
+    /// A link to a person (`https://matrix.to/#/@user:server`): a pill.
+    pub mention: bool,
+}
+
+/// The user a `matrix.to` link points at, if it points at one.
+pub fn mentioned_user(href: &str) -> Option<&str> {
+    let rest = href.strip_prefix("https://matrix.to/#/")?;
+    let id = rest.split(['?', '/']).next()?;
+    (id.starts_with('@') || id.starts_with("%40")).then_some(id)
 }
 
 /// One paragraph's worth of text with its styles.
@@ -226,7 +235,8 @@ impl Builder {
                     "code" => self.children(node, Marks { code: true, ..marks }),
                     "a" => {
                         let start = self.current.text.len();
-                        self.children(node, Marks { link: true, ..marks });
+                        let mention = attr("href").is_some_and(|h| mentioned_user(&h).is_some());
+                        self.children(node, Marks { link: !mention, mention, ..marks });
                         let end = self.current.text.len();
                         if let Some(href) = attr("href").filter(|_| end > start) {
                             self.current.links.push((start..end, href));
@@ -318,6 +328,17 @@ mod tests {
     fn the_reply_fallback_is_dropped() {
         let blocks = parse("<mx-reply><blockquote>quoted <a href=\"x\">in reply to</a></blockquote></mx-reply>the answer");
         assert_eq!(plain(&blocks), "the answer");
+    }
+
+    #[test]
+    fn people_links_are_mentions() {
+        let blocks = parse("hi <a href=\"https://matrix.to/#/@bob:x\">bob</a> and <a href=\"https://example.org\">a site</a>");
+        let Block::Paragraph(p) = &blocks[0] else { panic!("{blocks:?}") };
+        let marks: Vec<Marks> = p.spans.iter().map(|(_, m)| *m).collect();
+        assert!(marks.iter().any(|m| m.mention && !m.link));
+        assert!(marks.iter().any(|m| m.link && !m.mention));
+        assert_eq!(mentioned_user("https://matrix.to/#/@bob:x?via=x"), Some("@bob:x"));
+        assert_eq!(mentioned_user("https://matrix.to/#/#room:x"), None);
     }
 
     #[test]

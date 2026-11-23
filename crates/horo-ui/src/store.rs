@@ -114,6 +114,8 @@ pub struct Store {
     pub(crate) call_live: Option<crate::call::Live>,
     /// A DM calling us, ringing until answered, declined or given up.
     pub incoming: Option<Incoming>,
+    /// Who's typing in each open room, as the server last said (never us).
+    pub typing: HashMap<String, Vec<horo_core::dto::TypingUser>>,
 }
 
 /// A call ringing here.
@@ -249,6 +251,7 @@ impl Store {
             presence_watched: HashSet::new(),
             presence_on_screen: HashSet::new(),
             presence_in_panel: HashSet::new(),
+            typing: HashMap::new(),
             last_activity: Instant::now(),
             away: false,
             profile_card: None,
@@ -318,14 +321,28 @@ impl Store {
             }
             Event::VerificationRequestUpdate(request) => verify::update_request(&mut self.verification, request),
             Event::SasUpdate(sas) => verify::update_sas(&mut self.verification, sas),
+            Event::Typing(update) => {
+                if update.users.is_empty() {
+                    self.typing.remove(&update.room_id);
+                } else {
+                    self.typing.insert(update.room_id, update.users);
+                }
+            }
             // For whichever timeline view has that room open.
             Event::Timeline(update) => {
                 cx.emit(update);
                 return;
             }
-            _ => return,
         }
         cx.notify();
+    }
+
+    /// Who we're signed in as.
+    pub fn own_user_id(&self) -> Option<&str> {
+        match &self.phase {
+            Phase::SignedIn(info) => Some(&info.user_id),
+            _ => None,
+        }
     }
 
     fn restore(&mut self, cx: &mut Context<Self>) {

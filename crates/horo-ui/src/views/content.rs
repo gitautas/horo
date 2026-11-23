@@ -158,6 +158,7 @@ fn words(id: &str, inline: &Inline, colour: Hsla, palette: &Palette) -> AnyEleme
     div()
         .child(InteractiveText::new(ElementId::Name(SharedString::from(id.to_owned())), styled).on_click(ranges, move |ix, _, cx| {
             if let Some(href) = targets.get(ix)
+                && crate::rich::mentioned_user(href).is_none()
                 && (href.starts_with("https://") || href.starts_with("http://") || href.starts_with("mailto:"))
             {
                 cx.open_url(href);
@@ -170,13 +171,19 @@ fn words(id: &str, inline: &Inline, colour: Hsla, palette: &Palette) -> AnyEleme
 fn runs(inline: &Inline, colour: Hsla, palette: &Palette) -> Vec<TextRun> {
     let plain = |len: usize, marks: Marks| {
         let mut f = font(if marks.code { palette.mono_font.clone() } else { palette.body_font.clone() });
-        if marks.bold {
+        if marks.bold || marks.mention {
             f.weight = FontWeight::SEMIBOLD;
         }
         if marks.italic {
             f.style = FontStyle::Italic;
         }
-        let ink = if marks.link { palette.accent } else { colour };
+        let ink = if marks.mention {
+            palette.accent_secondary
+        } else if marks.link {
+            palette.accent
+        } else {
+            colour
+        };
         TextRun {
             len,
             font: f,
@@ -187,6 +194,8 @@ fn runs(inline: &Inline, colour: Hsla, palette: &Palette) -> Vec<TextRun> {
                 Some(ink)
             } else if marks.code {
                 Some(palette.inset)
+            } else if marks.mention {
+                Some(Hsla { a: 0.16, ..palette.accent_secondary })
             } else {
                 None
             },
