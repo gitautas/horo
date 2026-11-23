@@ -1070,6 +1070,14 @@ impl Render for Shell {
             .track_focus(&self.focus)
             // ⌘, from anywhere in the window, the menu included. Already
             // open, it stays where it is.
+            // Escape closes the picture open over everything before
+            // anything under it (the composer's reply, say) hears it.
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" && this.store.read(cx).lightbox.is_some() {
+                    this.store.update(cx, |s, cx| s.close_lightbox(cx));
+                    cx.stop_propagation();
+                }
+            }))
             // Escape closes a space's menu, as a click elsewhere does.
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" && this.space_menu.take().is_some() {
