@@ -178,6 +178,10 @@ pub enum PeerEvent {
     MediaAdded { mid: Mid, kind: MediaKind },
     /// One encoded audio frame (Opus), with its RTP time at 48 kHz.
     Audio { mid: Mid, rtp_time: u64, data: Arc<[u8]> },
+    /// One whole encoded video frame (VP8), with its RTP time at 90 kHz.
+    /// `contiguous` is false when packets before it went missing: the
+    /// picture can't be trusted until the next keyframe.
+    Video { mid: Mid, rtp_time: u64, data: Arc<[u8]>, keyframe: bool, contiguous: bool },
     /// A TURN relay failed after the call started; ICE may still have others.
     RelayLost(String),
     /// Nothing has arrived from the remote for [`PATH_TIMEOUT`] (`alive:
@@ -195,6 +199,7 @@ enum Command {
     AcceptOffer { sdp: String, reply: oneshot::Sender<Result<String>> },
     RemoteCandidate(String),
     WriteAudio { mid: Mid, rtp_time: u64, data: Vec<u8> },
+    RequestKeyframe { mid: Mid },
     Restart { config: Box<PeerConfig>, offer: bool, reply: oneshot::Sender<Result<Option<String>>> },
     Sever,
     Close,
@@ -276,6 +281,11 @@ impl Peer {
     /// Send one encoded Opus frame; `rtp_time` counts samples at 48 kHz.
     pub fn write_audio(&self, mid: Mid, rtp_time: u64, data: Vec<u8>) -> Result<()> {
         self.commands.send(Command::WriteAudio { mid, rtp_time, data }).map_err(|_| PeerError::Closed)
+    }
+
+    /// Ask the sender of a received video track for a full picture (PLI).
+    pub fn request_keyframe(&self, mid: Mid) -> Result<()> {
+        self.commands.send(Command::RequestKeyframe { mid }).map_err(|_| PeerError::Closed)
     }
 
     /// The network changed: gather afresh from `config` (new TURN
@@ -686,6 +696,11 @@ impl Driver {
                 let rtp_time = data.time.rebase(str0m::media::Frequency::FORTY_EIGHT_KHZ).numer();
                 PeerEvent::Audio { mid: data.mid, rtp_time, data: data.data }
             }
+            Event::MediaData(data) if data.params.spec().codec == Codec::Vp8 => {
+                let rtp_time = data.time.rebase(str0m::media::Frequency::NINETY_KHZ).numer();
+                let keyframe = data.is_keyframe();
+                PeerEvent::Video { mid: data.mid, rtp_time, keyframe, contiguous: data.contiguous, data: data.data }
+            }
             _ => return,
         };
         let _ = self.events.send(out);
@@ -745,6 +760,14 @@ impl Driver {
                     return Ok(()); // not negotiated yet
                 };
                 writer.write(pt, Instant::now(), MediaTime::new(rtp_time, str0m::media::Frequency::FORTY_EIGHT_KHZ), data)?;
+                self.drain()?;
+            }
+            Command::RequestKeyframe { mid } => {
+                if let Some(mut writer) = self.rtc.writer(mid)
+                    && let Err(e) = writer.request_keyframe(None, str0m::media::KeyframeRequestKind::Pli)
+                {
+                    tracing::debug!("{}: keyframe request on {mid}: {e}", self.name);
+                }
                 self.drain()?;
             }
             Command::Sever => {

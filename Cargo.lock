@@ -4301,6 +4301,7 @@ dependencies = [
  "matrix-sdk",
  "md-5",
  "opus",
+ "pkg-config",
  "prost",
  "rand 0.9.5",
  "reqwest 0.12.28",

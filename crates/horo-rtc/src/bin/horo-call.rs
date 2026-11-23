@@ -233,7 +233,7 @@ async fn join(room: &str, flags: CallFlags) -> Fallible {
 /// call ends, the time is up, or the user leaves.
 async fn talk(url: &str, token: &str, refresh_token: Option<TokenSource>, flags: CallFlags) -> Fallible {
     let options = CallOptions { gate_threshold: flags.gate, muted: flags.muted, refresh_token, ..Default::default() };
-    let Joined { call, microphone, speaker, mut events } = Call::connect(url, token, options).await?;
+    let Joined { call, microphone, speaker, mut events, .. } = Call::connect(url, token, options).await?;
     let audio = devices::start(microphone, speaker, flags.devices)?;
     eprintln!(
         "in the room as {}{}; m⏎ toggles mute, q⏎ leaves",

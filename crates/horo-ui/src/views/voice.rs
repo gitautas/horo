@@ -37,6 +37,10 @@ pub fn icon(path: &'static str) -> Icon {
 /// Someone in a call, as listed.
 struct Person {
     user_id: String,
+    /// Their identity in the call (one device), when known.
+    identity: Option<String>,
+    /// Their camera is on.
+    camera: bool,
     /// Their name, or "you".
     name: String,
     /// Their own name, for the monogram, and their picture.
@@ -55,12 +59,14 @@ fn localpart(user_id: &str) -> &str {
 /// devices of one person are one person).
 fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
     let mut out: Vec<Person> = Vec::new();
-    let mut add = |identity: &str, name: &str, muted: bool, me: bool| {
+    let mut add = |identity: &str, name: &str, muted: bool, me: bool, camera: bool| {
         let user = user_of(identity).to_owned();
         if out.iter().any(|p| p.user_id == user) {
             return;
         }
         let mut person = person(&user, profiles, call.is_speaking(&user), muted);
+        person.identity = Some(identity.to_owned());
+        person.camera = camera;
         if me {
             person.name = "you".into();
         } else if !profiles.get(&user).is_some_and(|k| k.name.is_some()) && !name.is_empty() && name != identity {
@@ -71,10 +77,10 @@ fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
         out.push(person);
     };
     if let Some(me) = &call.identity {
-        add(me, "", call.muted, true);
+        add(me, "", call.muted, true, false);
     }
     for p in &call.participants {
-        add(&p.identity, &p.name, false, false);
+        add(&p.identity, &p.name, false, false, p.camera);
     }
     out
 }
@@ -83,7 +89,7 @@ fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
 fn person(user: &str, profiles: &HashMap<String, Known>, speaking: bool, muted: bool) -> Person {
     let known = profiles.get(user);
     let name = known.and_then(|k| k.name.clone()).unwrap_or_else(|| localpart(user).to_owned());
-    Person { user_id: user.to_owned(), real_name: name.clone(), name, avatar: known.and_then(|k| k.avatar.clone()), speaking, muted }
+    Person { user_id: user.to_owned(), identity: None, camera: false, real_name: name.clone(), name, avatar: known.and_then(|k| k.avatar.clone()), speaking, muted }
 }
 
 /// Ask for the profiles of the people shown that we don't know yet.
@@ -204,7 +210,14 @@ pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut A
     let mut tiles = Vec::new();
     let everyone = people(&call, &store.read(cx).profiles);
     want(store, &everyone, cx);
+    let screens = store.read(cx).call_live.as_ref().map(|l| l.screens.clone());
     for person in everyone {
+        if person.camera
+            && let Some(picture) = person.identity.as_deref().and_then(|id| camera_picture(screens.as_ref()?, id))
+        {
+            tiles.push(video_tile(picture, &person, palette).into_any_element());
+            continue;
+        }
         let face = avatar(&person.user_id, &person.real_name, person.avatar.as_deref(), px(56.), cx);
         tiles.push(
             v_flex()
@@ -224,7 +237,8 @@ pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut A
                 )
                 .child(h_flex().gap_1().max_w(px(88.)).child(div().truncate().text_xs().child(person.name)).when(person.muted, |row| {
                     row.child(icon("icons/mic-off.svg").size(px(12.)).text_color(palette.danger))
-                })),
+                }))
+                .into_any_element(),
         );
     }
     Some(
@@ -239,6 +253,73 @@ pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut A
             .children(tiles)
             .into_any_element(),
     )
+}
+
+/// How big a camera's tile is: 16:9.
+const VIDEO_W: f32 = 240.;
+const VIDEO_H: f32 = 135.;
+
+/// Someone's camera, as an element: on macOS a surface over the newest
+/// picture (converted once per picture, not once per redraw).
+#[cfg(target_os = "macos")]
+fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str) -> Option<AnyElement> {
+    use std::{cell::RefCell, collections::HashMap};
+    type Converted = (u64, objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>);
+    thread_local! {
+        static CONVERTED: RefCell<HashMap<String, Converted>> = RefCell::new(HashMap::new());
+    }
+    let picture = screens.get(identity)?;
+    let buffer = CONVERTED.with_borrow_mut(|cache| {
+        match cache.get(identity) {
+            Some((seq, buffer)) if *seq == picture.seq => Some(buffer.clone()),
+            _ => {
+                let buffer = crate::video::pixel_buffer(&picture.frame)?;
+                cache.insert(identity.to_owned(), (picture.seq, buffer.clone()));
+                Some(buffer)
+            }
+        }
+    })?;
+    Some(gpui::surface(buffer).w(px(VIDEO_W)).h(px(VIDEO_H)).object_fit(gpui::ObjectFit::Cover).into_any_element())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn camera_picture(_screens: &horo_rtc::call::Screens, _identity: &str) -> Option<AnyElement> {
+    None
+}
+
+/// A tile with someone's camera in it, their name over the corner.
+fn video_tile(picture: AnyElement, person: &Person, palette: &Palette) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(gpui::SharedString::from(format!("video-{}", person.user_id)))
+        .relative()
+        .w(px(VIDEO_W))
+        .h(px(VIDEO_H))
+        .rounded(px(16.))
+        .overflow_hidden()
+        .bg(palette.inset)
+        .border_2()
+        .border_color(if person.speaking { palette.online } else { gpui::transparent_black() })
+        .child(picture)
+        .child(
+            h_flex()
+                .absolute()
+                .left(px(6.))
+                .bottom(px(6.))
+                .gap_1()
+                .px(px(6.))
+                .py(px(2.))
+                .rounded(px(8.))
+                .bg(Hsla { a: 0.65, ..palette.app })
+                .max_w(px(VIDEO_W - 12.))
+                .child(div().truncate().text_xs().child(person.name.clone()))
+                .when(person.muted, |row| row.child(icon("icons/mic-off.svg").size(px(12.)).text_color(palette.danger))),
+        )
+}
+
+/// Whether anyone in our call has a camera on (the window then redraws
+/// every frame for them).
+pub fn any_camera(store: &Entity<Store>, cx: &App) -> bool {
+    store.read(cx).call.as_ref().is_some_and(|c| c.participants.iter().any(|p| p.camera))
 }
 
 /// Someone calling you: answer or decline, over everything.

@@ -43,7 +43,7 @@ async fn main() {
     let listen_hz: f64 = args.get(4).and_then(|a| a.parse().ok()).unwrap_or(660.0);
     let seconds: f64 = args.get(5).and_then(|a| a.parse().ok()).unwrap_or(30.0);
 
-    let Joined { call, mut microphone, mut speaker, mut events } =
+    let Joined { call, mut microphone, mut speaker, mut events, .. } =
         Call::connect(url, token, CallOptions::default()).await.expect("join");
     eprintln!("in the room as {}, sending {send_hz} Hz, listening for {listen_hz} Hz", call.identity);
 

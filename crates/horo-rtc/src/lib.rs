@@ -9,6 +9,8 @@
 //! - [`turn`]: the sans-I/O TURN client behind the relayed candidates.
 //! - [`audio`]: Opus, echo cancellation, the jitter buffer, the mixer and the
 //!   noise gate.
+//! - [`video`]: VP8 through libvpx, decoding what LiveKit's web clients
+//!   send and encoding what we send.
 //! - [`devices`]: microphones and loudspeakers through cpal, converted to the
 //!   audio path's 48 kHz mono 20 ms frames.
 //! - [`call`]: the call engine, which puts the rest together into one
@@ -34,6 +36,8 @@ pub mod livekit;
 pub mod peer;
 #[cfg(feature = "media")]
 pub mod turn;
+#[cfg(feature = "media")]
+pub mod video;
 #[cfg(feature = "media")]
 pub mod voice;
 

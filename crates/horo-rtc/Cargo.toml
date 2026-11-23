@@ -127,3 +127,6 @@ required-features = ["media"]
 [[test]]
 name = "engine"
 required-features = ["media"]
+
+[build-dependencies]
+pkg-config = "0.3"

@@ -125,6 +125,49 @@ impl VideoPlayer {
     }
 }
 
+/// A decoded call picture (I420) as the bi-planar buffer gpui's
+/// `surface` draws: Y as it is, U and V interleaved.
+pub fn pixel_buffer(frame: &horo_rtc::video::Frame) -> Option<CFRetained<CVPixelBuffer>> {
+    use objc2_core_video::{CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress};
+    let (w, h) = (frame.width as usize, frame.height as usize);
+    let (cw, ch) = horo_rtc::video::Frame::chroma_size(frame.width, frame.height);
+    let (cw, ch) = (cw as usize, ch as usize);
+    // SAFETY: CoreVideo calls on a buffer we create and own; every write
+    // stays inside the plane's rows as CoreVideo reports them, between
+    // lock and unlock.
+    unsafe {
+        let metal = NSNumber::new_bool(true);
+        let attributes: Retained<NSDictionary<NSString, AnyObject>> = NSDictionary::from_slices(&[ns(kCVPixelBufferMetalCompatibilityKey)], &[metal.as_ref() as &AnyObject]);
+        let mut out: *mut CVPixelBuffer = std::ptr::null_mut();
+        let attrs = &*(Retained::as_ptr(&attributes) as *const objc2_core_foundation::CFDictionary);
+        let status = CVPixelBufferCreate(None, w, h, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, Some(attrs), std::ptr::NonNull::new(&mut out)?);
+        if status != 0 {
+            return None;
+        }
+        let buffer = CFRetained::from_raw(std::ptr::NonNull::new(out)?);
+        CVPixelBufferLockBaseAddress(&buffer, CVPixelBufferLockFlags(0));
+        let y_base = CVPixelBufferGetBaseAddressOfPlane(&buffer, 0) as *mut u8;
+        let y_stride = CVPixelBufferGetBytesPerRowOfPlane(&buffer, 0);
+        let uv_base = CVPixelBufferGetBaseAddressOfPlane(&buffer, 1) as *mut u8;
+        let uv_stride = CVPixelBufferGetBytesPerRowOfPlane(&buffer, 1);
+        if !y_base.is_null() && !uv_base.is_null() {
+            let (y, u, v) = (frame.y(), frame.u(), frame.v());
+            for row in 0..h {
+                std::ptr::copy_nonoverlapping(y[row * w..].as_ptr(), y_base.add(row * y_stride), w);
+            }
+            for row in 0..ch {
+                let line = std::slice::from_raw_parts_mut(uv_base.add(row * uv_stride), cw * 2);
+                for col in 0..cw {
+                    line[col * 2] = u[row * cw + col];
+                    line[col * 2 + 1] = v[row * cw + col];
+                }
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(&buffer, CVPixelBufferLockFlags(0));
+        Some(buffer)
+    }
+}
+
 impl Drop for VideoPlayer {
     fn drop(&mut self) {
         // SAFETY: a plain call; the sound stops with the view that shows it.

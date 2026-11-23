@@ -118,9 +118,9 @@ async fn what_alice_says_bob_hears_until_she_mutes() {
     let Some(url) = server() else { return };
     let room = format!("engine-{:x}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos());
 
-    let Joined { call: bob, microphone: _, speaker: mut bob_speaker, events: mut bob_events } =
+    let Joined { call: bob, microphone: _, speaker: mut bob_speaker, events: mut bob_events, .. } =
         Call::connect(&url, &token("bob", &room), options()).await.expect("bob joins");
-    let Joined { call: alice, microphone: mut alice_mic, speaker: _, events: mut alice_events } =
+    let Joined { call: alice, microphone: mut alice_mic, speaker: _, events: mut alice_events, .. } =
         Call::connect(&url, &token("alice", &room), options()).await.expect("alice joins");
     assert_eq!((alice.identity.as_str(), bob.identity.as_str()), ("alice", "bob"));
 

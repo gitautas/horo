@@ -1072,6 +1072,7 @@ impl Shell {
         let room = store.room.as_ref().and_then(|id| store.rooms.iter().find(|r| r.id == *id)).cloned();
         let (thread, thread_preview) = (store.thread.clone(), store.thread_preview.clone());
         let strip = room.as_ref().and_then(|r| voice::strip(&r.id, &self.store, palette, cx));
+
         let header = room.as_ref().map(|r| self.room_header(r, palette, cx));
         // A thread replaces the room's timeline, said in a bar above it
         // with the way back, as ChatPane.tsx's ThreadHeader.
@@ -1206,7 +1207,13 @@ impl Render for Shell {
             .child(self.room_list(&palette, cx))
             .map(|d| match self.invite.clone() {
                 Some(invite) => d.child(invite),
-                None => d.child(self.room_pane(&palette, cx)).when(self.store.read(cx).prefs.show_info_panel, |d| d.children(self.info.clone())),
+                None => d
+                    // Cameras move: draw again next frame while one is in the call.
+                    .when(voice::any_camera(&self.store, cx), |d| {
+                        window.request_animation_frame();
+                        d
+                    })
+                    .child(self.room_pane(&palette, cx)).when(self.store.read(cx).prefs.show_info_panel, |d| d.children(self.info.clone())),
             })
             .relative()
             .children(self.settings.clone())

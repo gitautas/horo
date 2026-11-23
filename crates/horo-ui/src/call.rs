@@ -61,6 +61,8 @@ pub struct Live {
     call: Call,
     audio: RunningAudio,
     refresher: Option<tokio::task::AbortHandle>,
+    /// Everyone's camera, newest picture each.
+    pub screens: horo_rtc::call::Screens,
 }
 
 /// The Matrix user in a MatrixRTC identity: `@user:server:DEVICE` minus
@@ -117,7 +119,7 @@ impl Store {
                         return Err(format!("couldn't connect to the call: {e}"));
                     }
                 };
-                let Joined { call, microphone, speaker, events } = joined;
+                let Joined { call, microphone, speaker, events, screens } = joined;
                 let audio = match devices::start(microphone, speaker, devices) {
                     Ok(audio) => audio,
                     Err(e) => {
@@ -126,7 +128,7 @@ impl Store {
                         return Err(format!("couldn't start your microphone or speaker: {e}"));
                     }
                 };
-                Ok((call, audio, events))
+                Ok((call, audio, events, screens))
             }
         });
 
@@ -135,7 +137,7 @@ impl Store {
             let Ok(Some(mut events)) = this.update(cx, |store, cx| {
                 let still_wanted = store.call.as_ref().is_some_and(|c| c.room_id == room_id);
                 match outcome {
-                    Ok((call, audio, events)) if still_wanted => {
+                    Ok((call, audio, events, screens)) if still_wanted => {
                         let backend = Backend::global(cx);
                         let refresher = backend.spawn({
                             let (state, room) = (backend.state.clone(), room.clone());
@@ -154,13 +156,13 @@ impl Store {
                         if let Some(view) = &mut store.call {
                             view.identity = Some(call.identity.clone());
                         }
-                        store.call_live = Some(Live { room_id: room, call, audio, refresher: Some(refresher) });
+                        store.call_live = Some(Live { room_id: room, call, audio, refresher: Some(refresher), screens });
                         cx.notify();
                         Some(events)
                     }
                     // Left (or moved on) while it was connecting.
-                    Ok((call, audio, _)) => {
-                        store.hang_up(Live { room_id: room, call, audio, refresher: None }, cx);
+                    Ok((call, audio, _, screens)) => {
+                        store.hang_up(Live { room_id: room, call, audio, refresher: None, screens }, cx);
                         None
                     }
                     Err(error) => {
@@ -227,7 +229,7 @@ impl Store {
 
     /// Hanging up as a future, for quitting, which waits for it.
     pub(crate) fn hang_up_task(live: Live, cx: &mut Context<Self>) -> impl std::future::Future<Output = ()> + use<> {
-        let Live { room_id, call, audio, refresher } = live;
+        let Live { room_id, call, audio, refresher, .. } = live;
         if let Some(refresher) = refresher {
             refresher.abort();
         }

@@ -43,6 +43,9 @@ use crate::{
 use tokio::sync::mpsc;
 
 pub mod devices;
+pub mod video;
+
+pub use video::{Picture, Screens};
 
 /// The client track id of our microphone, echoed back by the server.
 const MIC_CID: &str = "microphone";
@@ -103,6 +106,8 @@ pub struct Participant {
     /// Who they are: in a MatrixRTC call, `@user:server:DEVICE`.
     pub identity: String,
     pub name: String,
+    /// Their camera is on.
+    pub camera: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -160,6 +165,8 @@ pub struct Joined {
     pub microphone: Microphone,
     pub speaker: Speaker,
     pub events: mpsc::UnboundedReceiver<CallEvent>,
+    /// Everyone's camera, newest picture each.
+    pub screens: Screens,
 }
 
 /// The connection to the room: signalling and both peers, with their event
@@ -212,6 +219,8 @@ impl Call {
         let (commands, commands_rx) = mpsc::unbounded_channel();
         let muted = Arc::new(AtomicBool::new(options.muted));
         let remotes = Arc::new(Mutex::new(Remotes::default()));
+        let screens = Screens::default();
+        let (broken_tx, broken) = mpsc::unbounded_channel();
 
         let mut engine = Engine {
             url: livekit_url.to_owned(),
@@ -229,6 +238,8 @@ impl Call {
             ping: (0, 0),
             participants: HashMap::new(),
             remotes: remotes.clone(),
+            video: video::Receiver::new(screens.clone(), broken_tx),
+            owners: HashMap::new(),
             events: events_tx.clone(),
             pub_ice: IceConnectionState::New,
             sub_ice: IceConnectionState::New,
@@ -238,13 +249,13 @@ impl Call {
             route_checked: Instant::now(),
         };
         engine.joined(&join);
-        let task = tokio::spawn(engine.run(packets, commands_rx));
+        let task = tokio::spawn(engine.run(packets, commands_rx, broken));
 
         let mut gate = NoiseGate::new(crate::audio::SAMPLE_RATE);
         gate.set_threshold(options.gate_threshold);
         let microphone = Microphone { gate, encoder: Encoder::new()?, rtp: 0, packets: packets_tx, muted: muted.clone(), events: events_tx, echo: None };
         let speaker = Speaker { remotes, frames: Vec::new(), echo: None };
-        Ok(Joined { call: Call { commands, muted, identity, task }, microphone, speaker, events })
+        Ok(Joined { call: Call { commands, muted, identity, task }, microphone, speaker, events, screens })
     }
 
     /// Stop sending the microphone, and tell the room.
@@ -298,7 +309,8 @@ impl Drop for Call {
 }
 
 fn participant(p: &proto::ParticipantInfo) -> Participant {
-    Participant { sid: p.sid.clone(), identity: p.identity.clone(), name: p.name.clone() }
+    let camera = p.tracks.iter().any(|t| t.r#type == proto::TrackType::Video as i32 && t.source == proto::TrackSource::Camera as i32 && !t.muted);
+    Participant { sid: p.sid.clone(), identity: p.identity.clone(), name: p.name.clone(), camera }
 }
 
 fn sorted(participants: &HashMap<String, Participant>) -> Vec<Participant> {
@@ -358,6 +370,10 @@ struct Engine {
     ping: (i32, i32),
     participants: HashMap<String, Participant>,
     remotes: Arc<Mutex<Remotes>>,
+    /// Remote cameras.
+    video: video::Receiver,
+    /// Which participant each subscriber media line belongs to (by mid).
+    owners: HashMap<String, String>,
     events: mpsc::UnboundedSender<CallEvent>,
     pub_ice: IceConnectionState,
     sub_ice: IceConnectionState,
@@ -385,7 +401,7 @@ impl Engine {
         let _ = self.events.send(CallEvent::Participants(sorted(&self.participants)));
     }
 
-    async fn run(mut self, mut packets: mpsc::UnboundedReceiver<(u64, Vec<u8>)>, mut commands: mpsc::UnboundedReceiver<Command>) {
+    async fn run(mut self, mut packets: mpsc::UnboundedReceiver<(u64, Vec<u8>)>, mut commands: mpsc::UnboundedReceiver<Command>, mut broken: mpsc::UnboundedReceiver<Mid>) {
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         let reason = loop {
             let step: Result<(), Trouble> = tokio::select! {
@@ -394,6 +410,12 @@ impl Engine {
                     // Severed, or the pump died: the path is gone.
                     None => Err(Trouble::Lost("signalling lost".into(), ReconnectReason::RrSignalDisconnected)),
                 },
+                Some(mid) = broken.recv() => {
+                    if self.video.broke(mid) {
+                        let _ = self.link.subscriber.request_keyframe(mid);
+                    }
+                    Ok(())
+                }
                 event = self.link.pub_events.recv() => match event {
                     Some(event) => self.on_publisher(event),
                     None => Err(Trouble::Rejoin("publisher gone".into())),
@@ -553,6 +575,8 @@ impl Engine {
         self.turn = turn;
         self.mic_sid = None;
         self.remotes.lock().unwrap().tracks.clear();
+        self.video.reset();
+        self.owners.clear();
         self.joined(&join);
         Ok(())
     }
@@ -639,6 +663,7 @@ impl Engine {
                 }
             }
             SignalEvent::Offer(offer) => {
+                self.owners.extend(video::owners(&offer.sdp));
                 let answer = match self.link.subscriber.accept_offer(&offer.sdp).await {
                     Ok(answer) => answer,
                     Err(e) => return Err(Trouble::Rejoin(format!("subscriber offer: {e}"))),
@@ -671,10 +696,14 @@ impl Engine {
                         continue;
                     }
                     changed = true;
+                    let now = participant(&p);
+                    if p.state == proto::participant_info::State::Disconnected as i32 || !now.camera {
+                        self.video.gone(&now.identity);
+                    }
                     if p.state == proto::participant_info::State::Disconnected as i32 {
                         self.participants.remove(&p.sid);
                     } else {
-                        self.participants.insert(p.sid.clone(), participant(&p));
+                        self.participants.insert(p.sid.clone(), now);
                     }
                 }
                 if changed {
@@ -732,6 +761,14 @@ impl Engine {
                 }
                 remote.last_packet = now;
                 remote.buffer.push(rtp_time, data.to_vec(), now);
+            }
+            PeerEvent::Video { mid, data, keyframe, contiguous, .. } => {
+                let identity = self.owners.get(&mid.to_string()).and_then(|sid| self.participants.get(sid)).map(|p| p.identity.clone());
+                if let Some(identity) = identity
+                    && self.video.frame(mid, &identity, data, keyframe, contiguous)
+                {
+                    let _ = self.link.subscriber.request_keyframe(mid);
+                }
             }
             PeerEvent::IceState(state) => {
                 self.sub_ice = state;
