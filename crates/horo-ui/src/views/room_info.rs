@@ -457,10 +457,12 @@ impl Render for RoomInfo {
                 }))
         });
 
+        let width = crate::views::shell::store_width(&self.store, crate::views::shell::Pane::InfoPanel, cx);
         div()
             .relative()
             .flex_none()
-            .w(px(WIDTH))
+            .w(px(width))
+            .child(crate::views::shell::resize_handle(crate::views::shell::Pane::InfoPanel, &palette))
             .h_full()
             .border_l_1()
             .border_color(palette.border_subtle)

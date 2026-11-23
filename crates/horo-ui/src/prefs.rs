@@ -31,6 +31,11 @@ pub struct Prefs {
     pub video_input: Option<String>,
     /// The room info panel beside the timeline.
     pub show_info_panel: bool,
+    /// The room list's width, and the info panel's, as dragged.
+    pub room_list_width: f32,
+    pub info_panel_width: f32,
+    /// The release whose notice was waved away (a newer one speaks up).
+    pub dismissed_update: Option<String>,
     /// 0 (default yellow) to 5, for emoji that take one.
     pub skin_tone: u8,
     /// The reactions you reach for, newest first: the hover bar's quick
@@ -41,6 +46,12 @@ pub struct Prefs {
 }
 
 /// How many recent reactions are kept.
+/// The columns' widths to start with, and how far they can be dragged.
+pub const ROOM_LIST_WIDTH: f32 = 298.;
+pub const INFO_PANEL_WIDTH: f32 = 296.;
+pub const PANE_MIN: f32 = 240.;
+pub const PANE_MAX: f32 = 420.;
+
 pub const MAX_RECENT_REACTIONS: usize = 6;
 
 impl Default for Prefs {
@@ -52,6 +63,9 @@ impl Default for Prefs {
             message_sound: "blip".into(),
             call_sound: "ring".into(),
             notification_volume: 0.7,
+            room_list_width: ROOM_LIST_WIDTH,
+            info_panel_width: INFO_PANEL_WIDTH,
+            dismissed_update: None,
             audio_input: None,
             video_input: None,
             audio_output: None,

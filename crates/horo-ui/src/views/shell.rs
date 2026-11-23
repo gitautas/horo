@@ -5,7 +5,8 @@ use gpui::{
     Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    Icon, IconName,
+    Icon, IconName, Sizable,
+    button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState},
     v_flex,
@@ -872,12 +873,14 @@ impl Shell {
             }))
         });
 
+        let width = store_width(&self.store, Pane::RoomList, cx);
         v_flex()
             .relative()
-            .w(px(298.))
+            .w(px(width))
             .h_full()
             .flex_none()
             .bg(palette.card)
+            .child(resize_handle(Pane::RoomList, palette))
             .border_r_1()
             .border_color(palette.border_subtle)
             .child(drag_strip(px(18.)))
@@ -1187,6 +1190,18 @@ impl Render for Shell {
             .bg(palette.app)
             .text_color(palette.text)
             .font_family(palette.body_font.clone())
+            // A column's edge being dragged: follow the pointer, save the
+            // width when it's let go.
+            .on_drag_move(cx.listener(|this, event: &gpui::DragMoveEvent<Pane>, window, cx| {
+                let pane = *event.drag(cx);
+                let x = f32::from(event.event.position.x);
+                let width = match pane {
+                    Pane::RoomList => x - RAIL_WIDTH,
+                    Pane::InfoPanel => f32::from(window.viewport_size().width) - x,
+                };
+                this.store.update(cx, |s, cx| s.preview_prefs(|p| pane.set(p, clamp_pane(width)), cx));
+            }))
+            .on_drop(cx.listener(|this, _: &Pane, _, cx| this.store.update(cx, |s, cx| s.update_prefs(|_| {}, cx))))
             .child(self.rail(&palette, cx))
             .child(self.room_list(&palette, cx))
             .map(|d| match self.invite.clone() {
@@ -1207,6 +1222,7 @@ impl Render for Shell {
             .children(self.room_menu(&palette, cx))
             .children(self.profile.clone())
             .children(banner(&self.store, &palette, cx))
+            .children(update_banner(&self.store, &palette, cx))
             // Above everything, the security panel included: the other
             // device's timeout is running, and a dialog hidden behind
             // another one is a verification that fails.
@@ -1290,6 +1306,115 @@ fn drag_strip(height: gpui::Pixels) -> impl IntoElement {
                 window.start_window_move();
             }
         })
+}
+
+/// A new version is out: at the top, in the middle (the bottom is the
+/// app's own banner's), until it's waved away for that version.
+fn update_banner(store: &Entity<Store>, palette: &Palette, cx: &mut gpui::App) -> Option<AnyElement> {
+    let state = store.read(cx);
+    let crate::store::UpdateState::Available(release) = &state.update else { return None };
+    if state.prefs.dismissed_update.as_deref() == Some(release.version.as_str()) {
+        return None;
+    }
+    let (url, dismiss) = (release.url.clone(), store.clone());
+    Some(
+        div()
+            .absolute()
+            .top(px(14.))
+            .left_0()
+            .right_0()
+            .flex()
+            .justify_center()
+            .child(
+                h_flex()
+                    .id("update-banner")
+                    .occlude()
+                    .max_w(px(520.))
+                    .gap(space(12.))
+                    .px(space(16.))
+                    .py(space(10.))
+                    .rounded(corner(18.))
+                    .bg(palette.raised)
+                    .border_1()
+                    .border_color(palette.accent)
+                    .shadow_lg()
+                    .child(voice::icon("icons/sparkles.svg").size(px(15.)).text_color(palette.accent))
+                    .child(
+                        div()
+                            .text_size(text(13.))
+                            .line_height(gpui::relative(1.45))
+                            .text_color(palette.text_secondary)
+                            .child(format!("horo {} is out — this build updates from where you installed it", release.version)),
+                    )
+                    .child(Button::new("update-open").small().primary().label("open release").on_click(move |_, _, cx| cx.open_url(&url)))
+                    .child(
+                        div()
+                            .id("update-dismiss")
+                            .cursor_pointer()
+                            .text_size(text(12.))
+                            .text_color(palette.text_tertiary)
+                            .hover(|d| d.text_color(palette.text))
+                            .child("✕")
+                            .on_click(move |_, _, cx| dismiss.update(cx, |s, cx| s.dismiss_update(cx))),
+                    ),
+            )
+            .into_any_element(),
+    )
+}
+
+/// The rail's width: where the room list starts.
+const RAIL_WIDTH: f32 = 76.;
+
+/// A column whose width can be dragged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pane {
+    RoomList,
+    InfoPanel,
+}
+
+impl Pane {
+    fn set(self, prefs: &mut crate::prefs::Prefs, width: f32) {
+        match self {
+            Pane::RoomList => prefs.room_list_width = width,
+            Pane::InfoPanel => prefs.info_panel_width = width,
+        }
+    }
+}
+
+fn clamp_pane(width: f32) -> f32 {
+    width.clamp(crate::prefs::PANE_MIN, crate::prefs::PANE_MAX).round()
+}
+
+/// A column's width as saved, kept in range (an old or hand-edited
+/// prefs file can say anything).
+pub fn store_width(store: &Entity<Store>, pane: Pane, cx: &gpui::App) -> f32 {
+    let prefs = &store.read(cx).prefs;
+    clamp_pane(match pane {
+        Pane::RoomList => prefs.room_list_width,
+        Pane::InfoPanel => prefs.info_panel_width,
+    })
+}
+
+/// The grabbable strip on a column's inner edge.
+pub fn resize_handle(pane: Pane, palette: &Palette) -> impl IntoElement {
+    let strip = div()
+        .id(match pane {
+            Pane::RoomList => "resize-room-list",
+            Pane::InfoPanel => "resize-info-panel",
+        })
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .w(px(8.))
+        .cursor_col_resize()
+        .hover(|d| d.bg(Hsla { a: 0.35, ..palette.accent }))
+        .on_drag(pane, |_, _, _, cx| cx.new(|_| gpui::EmptyView))
+        // Not a click on whatever is under it.
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
+    match pane {
+        Pane::RoomList => strip.right(px(-4.)),
+        Pane::InfoPanel => strip.left(px(-4.)),
+    }
 }
 
 pub(crate) fn logo() -> std::sync::Arc<gpui::Image> {

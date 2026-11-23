@@ -9,6 +9,7 @@ pub mod dto;
 pub mod error;
 pub mod events;
 pub mod matrix;
+pub mod update;
 pub mod verification;
 
 pub use error::{Error, Result};

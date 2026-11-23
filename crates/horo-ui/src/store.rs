@@ -120,6 +120,22 @@ pub struct Store {
     /// by user ID; ourselves from sign-in.
     pub profiles: HashMap<String, Known>,
     profiles_asked: HashSet<String>,
+    /// What the last look for a new version found.
+    pub update: UpdateState,
+    /// The periodic look has been started.
+    update_watch: bool,
+}
+
+/// Looking for a newer horo.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum UpdateState {
+    #[default]
+    Idle,
+    Checking,
+    /// Newer than this build.
+    Available(horo_core::update::Release),
+    UpToDate,
+    Failed(String),
 }
 
 /// What we know of someone's profile.
@@ -152,6 +168,10 @@ pub struct ProfileTarget {
     /// shown when their global profile has none.
     pub avatar_hint: Option<String>,
 }
+
+/// When to first look for a new version, and how often after.
+const UPDATE_FIRST: Duration = Duration::from_secs(20);
+const UPDATE_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// The least time between two sounds of a kind.
 const SOUND_GAP: Duration = Duration::from_millis(800);
@@ -265,6 +285,8 @@ impl Store {
             typing: HashMap::new(),
             profiles: HashMap::new(),
             profiles_asked: HashSet::new(),
+            update: UpdateState::Idle,
+            update_watch: false,
             last_activity: Instant::now(),
             away: false,
             profile_card: None,
@@ -348,6 +370,67 @@ impl Store {
             }
         }
         cx.notify();
+    }
+
+    /// Look for a new version a little after starting, then every few
+    /// hours, as the WebView build does.
+    fn watch_updates(&mut self, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.update_watch, true) {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(UPDATE_FIRST).await;
+            loop {
+                if this.update(cx, |s, cx| s.check_for_update(false, cx)).is_err() {
+                    return;
+                }
+                cx.background_executor().timer(UPDATE_EVERY).await;
+            }
+        })
+        .detach();
+    }
+
+    /// Ask whether there's a newer release. `asked` is someone pressing
+    /// "check now": they hear "you're on the latest" and failures; a
+    /// background look that finds nothing says nothing.
+    pub fn check_for_update(&mut self, asked: bool, cx: &mut Context<Self>) {
+        if self.update == UpdateState::Checking {
+            return;
+        }
+        let before = std::mem::replace(&mut self.update, UpdateState::Checking);
+        cx.notify();
+        let task = Backend::global(cx).run(horo_core::update::latest_release());
+        cx.spawn(async move |this, cx| {
+            let found = match task.await {
+                Ok(found) => found.map_err(|e| e.to_string()),
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = this.update(cx, |s, cx| {
+                s.update = match found {
+                    Ok(release) if horo_core::update::is_newer(&release.version, env!("CARGO_PKG_VERSION")) => UpdateState::Available(release),
+                    Ok(_) => UpdateState::UpToDate,
+                    Err(e) if asked => UpdateState::Failed(e),
+                    // A quiet look that failed leaves what was known.
+                    Err(e) => {
+                        tracing::warn!("looking for a new version: {e}");
+                        match before {
+                            UpdateState::Available(r) => UpdateState::Available(r),
+                            _ => UpdateState::Idle,
+                        }
+                    }
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Hide the notice for the version on offer.
+    pub fn dismiss_update(&mut self, cx: &mut Context<Self>) {
+        if let UpdateState::Available(release) = &self.update {
+            let version = release.version.clone();
+            self.update_prefs(|p| p.dismissed_update = Some(version), cx);
+        }
     }
 
     /// Fetch the profiles of `users` we know nothing of yet, once each.
@@ -479,6 +562,7 @@ impl Store {
     /// Signed in: take the room list as it stands, then follow its diffs.
     pub fn signed_in(&mut self, info: SessionInfo, cx: &mut Context<Self>) {
         self.error = None;
+        self.watch_updates(cx);
         if info.avatar_url.is_some() {
             self.profiles.insert(info.user_id.clone(), Known { name: info.display_name.clone(), avatar: info.avatar_url.clone() });
         }
@@ -844,6 +928,13 @@ impl Store {
     }
 
     /// Change the app's settings and save them.
+    /// Change prefs for now, without writing them out (a column being
+    /// dragged: saved once, when it's let go).
+    pub fn preview_prefs(&mut self, change: impl FnOnce(&mut Prefs), cx: &mut Context<Self>) {
+        change(&mut self.prefs);
+        cx.notify();
+    }
+
     pub fn update_prefs(&mut self, change: impl FnOnce(&mut Prefs), cx: &mut Context<Self>) {
         change(&mut self.prefs);
         self.prefs.save(&Backend::global(cx).data_dir);

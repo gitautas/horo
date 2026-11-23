@@ -10,7 +10,7 @@ use gpui::{
     PathPromptOptions, Render, SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div, img, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    Disableable,
+    Disableable, Sizable,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
@@ -714,7 +714,49 @@ impl Settings {
         None
     }
 
-    fn about(&self, palette: &Palette) -> AnyElement {
+    /// The same news as the update banner, and a way to ask.
+    fn updates(&self, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        use crate::store::UpdateState;
+        let state = self.store.read(cx).update.clone();
+        let (line, warn) = match &state {
+            UpdateState::Checking => ("looking for a new version…".to_owned(), false),
+            UpdateState::Available(r) => (format!("horo {} is out — this build updates from where you installed it", r.version), false),
+            UpdateState::UpToDate => ("you're on the latest version~".to_owned(), false),
+            UpdateState::Failed(e) => (format!("couldn't look for a new version: {e}"), true),
+            UpdateState::Idle => ("checked automatically every few hours".to_owned(), false),
+        };
+        let action = match &state {
+            UpdateState::Available(r) => {
+                let url = r.url.clone();
+                Button::new("update-open").small().primary().label("open release").on_click(move |_, _, cx| cx.open_url(&url))
+            }
+            _ => {
+                let checking = state == UpdateState::Checking;
+                Button::new("update-check")
+                    .small()
+                    .ghost()
+                    .label(if checking { "checking…" } else { "check now" })
+                    .disabled(checking)
+                    .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.check_for_update(true, cx))))
+            }
+        };
+        card(palette)
+            .child(
+                h_flex()
+                    .gap_3()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_size(px(13.5)).text_color(palette.text).child("updates"))
+                            .child(div().mt_1().text_xs().line_height(gpui::relative(1.5)).text_color(if warn { palette.idle } else { palette.text_tertiary }).child(line)),
+                    )
+                    .child(action),
+            )
+            .into_any_element()
+    }
+
+    fn about(&self, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         v_flex()
             .gap_4()
             .child(heading(palette, "about"))
@@ -734,6 +776,7 @@ impl Settings {
                             .child("voice over matrixrtc + livekit, with horo's own media engine"),
                     ),
             )
+            .child(self.updates(palette, cx))
             .into_any_element()
     }
 }
@@ -812,7 +855,7 @@ impl Render for Settings {
                 self.notifications(&prefs, &palette, cx)
             }
             (SettingsSection::Packs, _) => self.packs.clone().map(|s| s.into_any_element()).unwrap_or_else(|| div().into_any_element()),
-            (SettingsSection::About, _) => self.about(&palette),
+            (SettingsSection::About, _) => self.about(&palette, cx),
             _ => div().into_any_element(),
         };
 
