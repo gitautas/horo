@@ -205,7 +205,7 @@ impl SettingsSection {
         match self {
             SettingsSection::Account => "account",
             SettingsSection::Security => "security",
-            SettingsSection::Voice => "voice",
+            SettingsSection::Voice => "media",
             SettingsSection::Notifications => "notifications",
             SettingsSection::Packs => "emotes & stickers",
             SettingsSection::About => "about",

@@ -560,7 +560,7 @@ impl Settings {
         let Some((inputs, outputs)) = self.devices.clone() else {
             return v_flex()
                 .gap_4()
-                .child(heading(palette, "voice"))
+                .child(heading(palette, "media"))
                 .child(card(palette).child(div().text_sm().text_color(palette.text_tertiary).child("looking for devices…")))
                 .into_any_element();
         };
@@ -596,7 +596,7 @@ impl Settings {
         let in_call = self.store.read(cx).call.is_some();
         v_flex()
             .gap_4()
-            .child(heading(palette, "voice"))
+            .child(heading(palette, "media"))
             .child(
                 card(palette)
                     .child(field(palette, "output device", Some("where you hear everyone else.")))
@@ -783,7 +783,6 @@ impl Render for Settings {
             .bg(palette.card)
             .border_r_1()
             .border_color(palette.border_subtle)
-            .child(div().px_3().pb_2().font_family(palette.heading_font.clone()).text_size(px(15.)).text_color(palette.text_tertiary).child("settings"))
             .children(SettingsSection::ALL.into_iter().map(|entry| {
                 let selected = entry == section;
                 div()
