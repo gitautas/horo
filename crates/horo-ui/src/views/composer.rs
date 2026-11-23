@@ -599,19 +599,21 @@ impl Composer {
         }
     }
 
-    /// Pick files and send each as an attachment.
+    /// Pick files to attach; they wait in the box with the rest.
     fn attach(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(gpui::PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("attach".into()) });
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = picked.await else { return };
-            let _ = this.update(cx, |composer, cx| composer.send_files(paths.into_iter().map(Outgoing::Path).collect(), cx));
+            let _ = this.update(cx, |composer, cx| composer.stage_paths(paths, cx));
         })
         .detach();
     }
 
-    /// Files dropped on the room: each goes to it (or the open thread).
-    pub fn send_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
-        self.send_files(paths.into_iter().map(Outgoing::Path).collect(), cx);
+    /// Files dropped on the room or picked to attach: they wait in the
+    /// box, to go with the next message.
+    pub fn stage_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        self.staged.extend(paths.into_iter().map(|p| Staged::new(Outgoing::Path(p))));
+        cx.notify();
     }
 
     /// A paste: files copied in Finder or a picture go to the room, in
@@ -626,13 +628,8 @@ impl Composer {
         true
     }
 
-    /// Send each file in turn, saying under the box which ones failed.
-    fn send_files(&mut self, files: Vec<Outgoing>, cx: &mut Context<Self>) {
-        self.upload(files, cx).detach();
-        cx.notify();
-    }
-
-    /// Queue each file in turn; done when the last is queued (or failed).
+    /// Queue each file in turn, saying under the box which ones failed;
+    /// done when the last is queued.
     fn upload(&mut self, files: Vec<Outgoing>, cx: &mut Context<Self>) -> gpui::Task<()> {
         let (room_id, thread_root) = (self.room_id.clone(), self.thread_root.clone());
         self.error = None;

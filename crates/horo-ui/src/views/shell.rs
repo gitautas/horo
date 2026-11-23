@@ -1329,10 +1329,15 @@ fn filter_name(filter: Filter) -> &'static str {
 }
 
 /// Files dragged over the room: a card saying where they'll go, shown
-/// only while a drag from outside the app hovers; dropping sends them.
+/// only while a drag from outside the app hovers; dropping puts them in
+/// the message box, to go with the next message.
 /// Unseen and click-through the rest of the time.
 fn drop_zone(room: &str, in_thread: bool, composer: Entity<Composer>, palette: &Palette) -> impl IntoElement {
-    let where_to = if in_thread { format!("it'll go to the thread you have open in {room}") } else { format!("it'll go straight to {room}") };
+    let where_to = if in_thread {
+        format!("it'll wait in the box, to go to the thread you have open in {room}")
+    } else {
+        format!("it'll wait in the box, to go to {room}")
+    };
     div()
         .id("drop-zone")
         .absolute()
@@ -1345,7 +1350,7 @@ fn drop_zone(room: &str, in_thread: bool, composer: Entity<Composer>, palette: &
         .bg(gpui::Hsla { a: 0.78, ..palette.app })
         .on_drop(move |paths: &gpui::ExternalPaths, _, cx| {
             let paths = paths.paths().to_vec();
-            composer.update(cx, |c, cx| c.send_paths(paths, cx));
+            composer.update(cx, |c, cx| c.stage_paths(paths, cx));
         })
         .child(
             v_flex()
