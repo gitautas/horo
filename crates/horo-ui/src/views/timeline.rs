@@ -788,18 +788,31 @@ impl Timeline {
 
         let right = (!readers.is_empty()).then(|| {
             // Anyone who has spoken in view brings their own face.
-            let known = |user: &str| {
-                self.items.iter().rev().filter_map(|i| i.event.as_deref()).find(|e| e.sender == user).map(|e| (e.sender_name.clone(), e.sender_avatar.clone()))
-            };
-            let faces: Vec<AnyElement> = readers
+            // Anyone who has spoken in view brings their own face; the rest
+            // come from their profiles, fetched once each.
+            let profiles = &self.store.read(cx).profiles;
+            let mut missing = Vec::new();
+            let shown: Vec<(String, String, Option<String>)> = readers
                 .iter()
                 .take(MAX_FACES)
                 .map(|user| {
-                    let (name, picture) = known(user).unwrap_or_default();
-                    let name = name.unwrap_or_else(|| localpart(user).to_owned());
-                    avatar(user, &name, picture.as_deref(), px(18.), cx)
+                    let spoke = self.items.iter().rev().filter_map(|i| i.event.as_deref()).find(|e| &e.sender == user);
+                    let (name, picture) = match (spoke, profiles.get(user)) {
+                        (Some(e), _) if e.sender_avatar.is_some() => (e.sender_name.clone(), e.sender_avatar.clone()),
+                        (spoke, Some(known)) => (known.name.clone().or_else(|| spoke.and_then(|e| e.sender_name.clone())), known.avatar.clone()),
+                        (spoke, None) => {
+                            missing.push(user.clone());
+                            (spoke.and_then(|e| e.sender_name.clone()), None)
+                        }
+                    };
+                    (user.clone(), name.unwrap_or_else(|| localpart(user).to_owned()), picture)
                 })
                 .collect();
+            if !missing.is_empty() {
+                let store = self.store.clone();
+                cx.defer(move |cx| store.update(cx, |s, cx| s.want_profiles(missing, cx)));
+            }
+            let faces: Vec<AnyElement> = shown.iter().map(|(user, name, picture)| avatar(user, name, picture.as_deref(), px(18.), cx)).collect();
             let overflow = readers.len().saturating_sub(MAX_FACES);
             h_flex()
                 .id("read-receipts")
