@@ -4329,7 +4329,9 @@ name = "horo-ui"
 version = "0.11.0"
 dependencies = [
  "anyhow",
+ "block2 0.6.2",
  "chrono",
+ "dispatch2",
  "gpui-component",
  "gpui-kit-assets",
  "gpui-pre",

@@ -124,6 +124,35 @@ impl Recorder {
     }
 }
 
+/// A microphone's level, for a meter: nothing is kept but how loud the
+/// last fraction of a second was.
+pub struct Meter {
+    _capture: Capture,
+    /// The loudest recent frame's RMS, as f32 bits.
+    peak: Arc<std::sync::atomic::AtomicU32>,
+}
+
+impl Meter {
+    /// Listen to `device` (the system default when `None`).
+    pub fn start(device: Option<&str>) -> Result<Meter> {
+        use std::sync::atomic::Ordering;
+        let peak = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let sink = peak.clone();
+        let capture = Capture::start(device, move |frame: &[f32; FRAME]| {
+            let rms = (frame.iter().map(|s| s * s).sum::<f32>() / FRAME as f32).sqrt();
+            // Falls by a fifth each 20 ms frame, so a word lingers a moment.
+            let held = f32::from_bits(sink.load(Ordering::Relaxed)) * 0.8;
+            sink.store(rms.max(held).to_bits(), Ordering::Relaxed);
+        })?;
+        Ok(Meter { _capture: capture, peak })
+    }
+
+    /// How loud, 0 to 1.
+    pub fn level(&self) -> f32 {
+        loudness(f32::from_bits(self.peak.load(std::sync::atomic::Ordering::Relaxed)))
+    }
+}
+
 /// An RMS level as a 0-to-1 loudness: a square root lifts quiet speech
 /// into view, the way voice-message waveforms are usually drawn.
 fn loudness(rms: f32) -> f32 {

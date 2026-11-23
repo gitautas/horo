@@ -755,11 +755,13 @@ impl Timeline {
                 .child("the start of the room")
                 .into_any_element(),
             TimelineRowKind::Event => match &item.event {
+                // Call bookkeeping: the call UI already says who's in it.
+                Some(event) if !worth_showing(&event.content) => div().into_any_element(),
                 Some(event) => {
                     let continues = self.items[..ix]
                         .iter()
                         .rev()
-                        .find(|i| i.kind != TimelineRowKind::ReadMarker)
+                        .find(|i| i.kind != TimelineRowKind::ReadMarker && i.event.as_deref().is_none_or(|e| worth_showing(&e.content)))
                         .and_then(|prev| prev.event.as_deref())
                         .is_some_and(|prev| continues_group(prev, event));
                     self.message(event, continues, palette, cx)
@@ -788,6 +790,19 @@ fn continues_group(prev: &EventItemDto, event: &EventItemDto) -> bool {
         && event.timestamp.saturating_sub(prev.timestamp) < GROUP_WINDOW_MS
         && !is_system(&prev.content)
         && !is_system(&event.content)
+}
+
+/// State events that are pure call bookkeeping: MatrixRTC republishes
+/// membership on every join, leave and refresh.
+const CALL_STATE_EVENTS: [&str; 3] = ["org.matrix.msc3401.call.member", "m.rtc.member", "m.call.member"];
+
+/// Not call bookkeeping, nor a "started a call" notice left behind.
+fn worth_showing(content: &ContentDto) -> bool {
+    match content {
+        ContentDto::CallInvite | ContentDto::RtcNotification { .. } => false,
+        ContentDto::State { event_type, .. } => !CALL_STATE_EVENTS.contains(&event_type.as_str()),
+        _ => true,
+    }
 }
 
 /// Membership, profile and state changes: a quiet line, not a message.

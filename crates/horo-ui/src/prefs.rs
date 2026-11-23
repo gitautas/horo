@@ -27,6 +27,8 @@ pub struct Prefs {
     pub audio_input: Option<String>,
     /// The speaker for calls; `None` follows the system default.
     pub audio_output: Option<String>,
+    /// The camera's unique ID; `None` is the system's preferred one.
+    pub video_input: Option<String>,
     /// The room info panel beside the timeline.
     pub show_info_panel: bool,
     /// 0 (default yellow) to 5, for emoji that take one.
@@ -51,6 +53,7 @@ impl Default for Prefs {
             call_sound: "ring".into(),
             notification_volume: 0.7,
             audio_input: None,
+            video_input: None,
             audio_output: None,
             show_info_panel: true,
             skin_tone: 0,

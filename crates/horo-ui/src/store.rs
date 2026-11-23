@@ -116,6 +116,17 @@ pub struct Store {
     pub incoming: Option<Incoming>,
     /// Who's typing in each open room, as the server last said (never us).
     pub typing: HashMap<String, Vec<horo_core::dto::TypingUser>>,
+    /// Names and pictures of people met outside a member list (in calls),
+    /// by user ID; ourselves from sign-in.
+    pub profiles: HashMap<String, Known>,
+    profiles_asked: HashSet<String>,
+}
+
+/// What we know of someone's profile.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Known {
+    pub name: Option<String>,
+    pub avatar: Option<String>,
 }
 
 /// A call ringing here.
@@ -252,6 +263,8 @@ impl Store {
             presence_on_screen: HashSet::new(),
             presence_in_panel: HashSet::new(),
             typing: HashMap::new(),
+            profiles: HashMap::new(),
+            profiles_asked: HashSet::new(),
             last_activity: Instant::now(),
             away: false,
             profile_card: None,
@@ -335,6 +348,37 @@ impl Store {
             }
         }
         cx.notify();
+    }
+
+    /// Fetch the profiles of `users` we know nothing of yet, once each.
+    pub fn want_profiles(&mut self, users: impl IntoIterator<Item = String>, cx: &mut Context<Self>) {
+        let missing: Vec<String> = users.into_iter().filter(|u| !self.profiles.contains_key(u) && self.profiles_asked.insert(u.clone())).collect();
+        if missing.is_empty() {
+            return;
+        }
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let state = backend.state.clone();
+            async move {
+                let core = state.core().await?;
+                let mut out = Vec::new();
+                for user in missing {
+                    if let Ok(p) = horo_core::matrix::profile::get_profile(&core, Some(user.clone())).await {
+                        out.push((user, Known { name: p.display_name, avatar: p.avatar_url }));
+                    }
+                }
+                Ok::<_, horo_core::Error>(out)
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(found)) = task.await {
+                let _ = this.update(cx, |store, cx| {
+                    store.profiles.extend(found);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     /// Who we're signed in as.
@@ -435,6 +479,9 @@ impl Store {
     /// Signed in: take the room list as it stands, then follow its diffs.
     fn signed_in(&mut self, info: SessionInfo, cx: &mut Context<Self>) {
         self.error = None;
+        if info.avatar_url.is_some() {
+            self.profiles.insert(info.user_id.clone(), Known { name: info.display_name.clone(), avatar: info.avatar_url.clone() });
+        }
         self.set_phase(Phase::SignedIn(info), cx);
         let backend = Backend::global(cx);
         let task = backend.run({

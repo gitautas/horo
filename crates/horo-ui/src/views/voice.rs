@@ -10,6 +10,8 @@
 //!
 //! The room header's call button lives with the header, in `shell`.
 
+use std::collections::HashMap;
+
 use gpui::{
     AnyElement, App, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled, div,
     prelude::FluentBuilder, px,
@@ -23,7 +25,7 @@ use horo_core::dto::RoomSummary;
 
 use crate::{
     call::{CallStatus, CallView, user_of},
-    store::Store,
+    store::{Known, Store},
     theme::Palette,
     views::{avatar::avatar, verification::scrim},
 };
@@ -35,7 +37,11 @@ pub fn icon(path: &'static str) -> Icon {
 /// Someone in a call, as listed.
 struct Person {
     user_id: String,
+    /// Their name, or "you".
     name: String,
+    /// Their own name, for the monogram, and their picture.
+    real_name: String,
+    avatar: Option<String>,
     speaking: bool,
     /// Only known for ourselves.
     muted: bool,
@@ -47,23 +53,46 @@ fn localpart(user_id: &str) -> &str {
 
 /// Everyone in our call, ourselves first, one entry per person (several
 /// devices of one person are one person).
-fn people(call: &CallView) -> Vec<Person> {
+fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
     let mut out: Vec<Person> = Vec::new();
-    let mut add = |identity: &str, name: &str, muted: bool| {
+    let mut add = |identity: &str, name: &str, muted: bool, me: bool| {
         let user = user_of(identity).to_owned();
         if out.iter().any(|p| p.user_id == user) {
             return;
         }
-        let name = if name.is_empty() || name == identity { localpart(&user).to_owned() } else { name.to_owned() };
-        out.push(Person { speaking: call.is_speaking(&user), user_id: user, name, muted });
+        let mut person = person(&user, profiles, call.is_speaking(&user), muted);
+        if me {
+            person.name = "you".into();
+        } else if !profiles.get(&user).is_some_and(|k| k.name.is_some()) && !name.is_empty() && name != identity {
+            // The call's own name for them until their profile arrives.
+            person.name = name.to_owned();
+            person.real_name = name.to_owned();
+        }
+        out.push(person);
     };
     if let Some(me) = &call.identity {
-        add(me, "you", call.muted);
+        add(me, "", call.muted, true);
     }
     for p in &call.participants {
-        add(&p.identity, &p.name, false);
+        add(&p.identity, &p.name, false, false);
     }
     out
+}
+
+/// Someone, by what their profile says (their username until it's in).
+fn person(user: &str, profiles: &HashMap<String, Known>, speaking: bool, muted: bool) -> Person {
+    let known = profiles.get(user);
+    let name = known.and_then(|k| k.name.clone()).unwrap_or_else(|| localpart(user).to_owned());
+    Person { user_id: user.to_owned(), real_name: name.clone(), name, avatar: known.and_then(|k| k.avatar.clone()), speaking, muted }
+}
+
+/// Ask for the profiles of the people shown that we don't know yet.
+fn want(store: &Entity<Store>, people: &[Person], cx: &mut App) {
+    let users: Vec<String> = people.iter().map(|p| p.user_id.clone()).filter(|u| !store.read(cx).profiles.contains_key(u)).collect();
+    if !users.is_empty() {
+        let store = store.clone();
+        cx.defer(move |cx| store.update(cx, |s, cx| s.want_profiles(users, cx)));
+    }
 }
 
 pub fn panel(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<AnyElement> {
@@ -145,19 +174,16 @@ pub fn roster(room: &RoomSummary, store: &Entity<Store>, palette: &Palette, cx: 
     let state = store.read(cx);
     let live = state.call.as_ref().filter(|c| c.room_id == room.id && c.status == CallStatus::Connected);
     let people: Vec<Person> = match live {
-        Some(call) => people(call),
-        None => room
-            .call_participants
-            .iter()
-            .map(|user| Person { name: localpart(user).to_owned(), user_id: user.clone(), speaking: false, muted: false })
-            .collect(),
+        Some(call) => people(call, &state.profiles),
+        None => room.call_participants.iter().map(|user| person(user, &state.profiles, false, false)).collect(),
     };
+    want(store, &people, cx);
     if people.is_empty() {
         return None;
     }
     let mut rows = Vec::new();
     for person in people {
-        let face = avatar(&person.user_id, &person.name, None, px(20.), cx);
+        let face = avatar(&person.user_id, &person.real_name, person.avatar.as_deref(), px(20.), cx);
         rows.push(
             h_flex()
                 .gap_2()
@@ -176,8 +202,10 @@ pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut A
     let call = store.read(cx).call.clone().filter(|c| c.room_id == room_id && c.is_live())?;
     let connecting = call.status == CallStatus::Connecting;
     let mut tiles = Vec::new();
-    for person in people(&call) {
-        let face = avatar(&person.user_id, &person.name, None, px(56.), cx);
+    let everyone = people(&call, &store.read(cx).profiles);
+    want(store, &everyone, cx);
+    for person in everyone {
+        let face = avatar(&person.user_id, &person.real_name, person.avatar.as_deref(), px(56.), cx);
         tiles.push(
             v_flex()
                 .w(px(96.))

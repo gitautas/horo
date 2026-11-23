@@ -33,6 +33,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>0.0.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSMicrophoneUsageDescription</key><string>horo uses the microphone in calls.</string>
+  <key>NSCameraUsageDescription</key><string>horo uses the camera in video calls.</string>
 </dict></plist>
 PLIST
 echo "$app"

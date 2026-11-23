@@ -7,6 +7,8 @@ use gpui::{App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions
 
 pub mod alerts;
 pub mod backend;
+#[cfg(target_os = "macos")]
+pub mod camera;
 pub mod call;
 pub mod emoji;
 pub mod media;

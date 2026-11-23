@@ -53,6 +53,60 @@ pub struct Settings {
     volume: Entity<SliderState>,
     /// Microphones and speakers, once listed.
     devices: Option<(Vec<DeviceInfo>, Vec<DeviceInfo>)>,
+    /// The chosen microphone, listened to while the voice section is open.
+    meter: Option<Preview<horo_rtc::voice::Meter>>,
+    /// The chosen camera, likewise; and the cameras there are.
+    #[cfg(target_os = "macos")]
+    camera: Option<Preview<crate::camera::Camera>>,
+    #[cfg(target_os = "macos")]
+    cameras: Option<Vec<DeviceInfo>>,
+    /// We've asked for the camera (the system asks the user once).
+    #[cfg(target_os = "macos")]
+    camera_asked: bool,
+}
+
+/// A device opened for a preview: which, and how it went.
+struct Preview<T> {
+    device: Option<String>,
+    state: PreviewState<T>,
+}
+
+enum PreviewState<T> {
+    Opening,
+    Live(T),
+    Failed(String),
+}
+
+impl<T: Send + 'static> Preview<T> {
+    /// Open `device` off the main thread (it can take a moment); the
+    /// result lands in `slot` if it still wants that device.
+    fn open(
+        device: Option<String>,
+        start: impl FnOnce(Option<&str>) -> Result<T, String> + Send + 'static,
+        slot: fn(&mut Settings) -> &mut Option<Preview<T>>,
+        cx: &mut Context<Settings>,
+    ) -> Preview<T> {
+        let wanted = device.clone();
+        let task = cx.background_spawn(async move { start(wanted.as_deref()) });
+        let wanted = device.clone();
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(preview) = slot(this)
+                    && preview.device == wanted
+                    && matches!(preview.state, PreviewState::Opening)
+                {
+                    preview.state = match result {
+                        Ok(live) => PreviewState::Live(live),
+                        Err(e) => PreviewState::Failed(e),
+                    };
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        Preview { device, state: PreviewState::Opening }
+    }
 }
 
 impl Settings {
@@ -99,6 +153,13 @@ impl Settings {
             confirm_wipe: false,
             volume,
             devices: None,
+            meter: None,
+            #[cfg(target_os = "macos")]
+            camera: None,
+            #[cfg(target_os = "macos")]
+            cameras: None,
+            #[cfg(target_os = "macos")]
+            camera_asked: false,
         };
         settings.list_devices(cx);
         settings.load_profile(window, cx);
@@ -433,6 +494,56 @@ impl Settings {
     }
 
     /// Ask the system for microphones and speakers, off the UI thread.
+    /// Keep the microphone meter and the camera preview running on the
+    /// devices chosen now.
+    fn run_previews(&mut self, cx: &mut Context<Self>) {
+        let prefs = self.store.read(cx).prefs.clone();
+        if self.meter.as_ref().is_none_or(|m| m.device != prefs.audio_input) {
+            self.meter = Some(Preview::open(
+                prefs.audio_input.clone(),
+                |device| horo_rtc::voice::Meter::start(device).map_err(|e| e.to_string()),
+                |this| &mut this.meter,
+                cx,
+            ));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if self.cameras.is_none() {
+                self.cameras = Some(Vec::new());
+                let task = cx.background_spawn(async move { crate::camera::cameras() });
+                cx.spawn(async move |this, cx| {
+                    let found = task.await;
+                    let _ = this.update(cx, |this, cx| {
+                        this.cameras = Some(found.into_iter().map(|c| DeviceInfo { id: c.id, name: c.name, is_default: c.is_default }).collect());
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
+            match crate::camera::allowed() {
+                Some(true) => {
+                    if self.camera.as_ref().is_none_or(|c| c.device != prefs.video_input) {
+                        self.camera = Some(Preview::open(prefs.video_input.clone(), crate::camera::Camera::start, |this| &mut this.camera, cx));
+                    }
+                }
+                // The system asks; the next frame sees the answer.
+                None if !self.camera_asked => {
+                    self.camera_asked = true;
+                    crate::camera::ask(|_| {});
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn stop_previews(&mut self) {
+        self.meter = None;
+        #[cfg(target_os = "macos")]
+        {
+            self.camera = None;
+        }
+    }
+
     fn list_devices(&mut self, cx: &mut Context<Self>) {
         let task = cx.background_spawn(async move { (horo_rtc::devices::inputs().unwrap_or_default(), horo_rtc::devices::outputs().unwrap_or_default()) });
         cx.spawn(async move |this, cx| {
@@ -492,6 +603,7 @@ impl Settings {
                     .child(picker("output", &outputs, &prefs.audio_output, |p, id| p.audio_output = id, cx))
                     .child(field(palette, "input device", Some("the microphone other people hear.")))
                     .child(picker("input", &inputs, &prefs.audio_input, |p, id| p.audio_input = id, cx))
+                    .child(self.meter_bar(palette))
                     .when(inputs.is_empty(), |c| {
                         c.child(div().text_sm().text_color(palette.idle).child("no microphones found — check that horo has permission in system settings."))
                     })
@@ -505,10 +617,101 @@ impl Settings {
                             }))),
                     ),
             )
+            .children(self.camera_card(prefs, palette, cx))
             .child(div().text_xs().text_color(palette.text_tertiary).child(
-                "echo cancellation and noise suppression are always on: horo's own, the same on every platform. camera and screen sharing come with video.",
+                "echo cancellation and noise suppression are always on: horo's own, the same on every platform.",
             ))
             .into_any_element()
+    }
+
+    /// How loud the chosen microphone is, live.
+    fn meter_bar(&self, palette: &Palette) -> AnyElement {
+        let (level, note) = match self.meter.as_ref().map(|m| &m.state) {
+            Some(PreviewState::Live(meter)) => (meter.level(), "say something to check your microphone~".to_owned()),
+            Some(PreviewState::Failed(why)) => (0., format!("couldn't open the microphone: {why}")),
+            _ => (0., "opening the microphone…".to_owned()),
+        };
+        v_flex()
+            .gap_1()
+            .pt_1()
+            .child(
+                div()
+                    .h(px(8.))
+                    .w_full()
+                    .rounded_full()
+                    .bg(palette.inset)
+                    .overflow_hidden()
+                    .child(div().h_full().w(gpui::relative(level)).rounded_full().bg(if level > 0.85 { palette.idle } else { palette.online })),
+            )
+            .child(div().text_xs().text_color(palette.text_tertiary).child(note))
+            .into_any_element()
+    }
+
+    /// The camera picker, with what the chosen camera sees.
+    #[cfg(target_os = "macos")]
+    fn camera_card(&mut self, prefs: &Prefs, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let cameras = self.cameras.clone().unwrap_or_default();
+        let picture: AnyElement = match crate::camera::allowed() {
+            Some(false) => message(palette, "horo isn't allowed to use the camera — allow it in system settings › privacy & security › camera."),
+            None => message(palette, "asking for the camera…"),
+            Some(true) => match self.camera.as_mut().map(|c| &mut c.state) {
+                Some(PreviewState::Live(camera)) => match camera.frame() {
+                    Some(frame) => gpui::surface(frame).w(px(PREVIEW_W)).h(px(PREVIEW_H)).object_fit(gpui::ObjectFit::Cover).into_any_element(),
+                    None => message(palette, "waiting for the camera…"),
+                },
+                Some(PreviewState::Failed(why)) => message(palette, &format!("couldn't open the camera: {why}")),
+                _ => message(palette, "opening the camera…"),
+            },
+        };
+        let saved_present = prefs.video_input.as_ref().filter(|id| cameras.iter().any(|d| &d.id == *id));
+        let default_name = cameras.iter().find(|d| d.is_default).map(|d| d.name.clone());
+        let mut rows = vec![(None, match default_name {
+            Some(name) => format!("system default ({name})"),
+            None => "system default".to_owned(),
+        })];
+        rows.extend(cameras.iter().map(|d| (Some(d.id.clone()), d.name.clone())));
+        let list = v_flex().gap(px(2.)).children(rows.into_iter().enumerate().map(|(i, (id, name))| {
+            let selected = id.as_ref() == saved_present;
+            h_flex()
+                .id(SharedString::from(format!("camera-{i}")))
+                .gap_2()
+                .px_3()
+                .py_2()
+                .rounded(px(10.))
+                .cursor_pointer()
+                .when(selected, |d| d.bg(palette.raised))
+                .hover(|d| d.bg(palette.raised))
+                .child(div().flex_none().size(px(10.)).rounded_full().border_2().border_color(if selected { palette.accent } else { palette.border_strong }).when(selected, |d| d.bg(palette.accent)))
+                .child(div().truncate().text_sm().child(name))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let id = id.clone();
+                    this.store.update(cx, |s, cx| s.update_prefs(|p| p.video_input = id, cx));
+                }))
+        }));
+        Some(
+            card(palette)
+                .child(field(palette, "camera", Some("what people see in video calls.")))
+                .child(
+                    div()
+                        .w(px(PREVIEW_W))
+                        .h(px(PREVIEW_H))
+                        .rounded(px(14.))
+                        .overflow_hidden()
+                        .bg(palette.inset)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(picture),
+                )
+                .when(cameras.is_empty() && self.cameras.is_some(), |c| c.child(div().text_sm().text_color(palette.idle).child("no cameras found.")))
+                .child(list)
+                .into_any_element(),
+        )
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn camera_card(&mut self, _prefs: &Prefs, _palette: &Palette, _cx: &mut Context<Self>) -> Option<AnyElement> {
+        None
     }
 
     fn about(&self, palette: &Palette) -> AnyElement {
@@ -535,6 +738,15 @@ impl Settings {
     }
 }
 
+/// The camera preview's size: 16:9.
+const PREVIEW_W: f32 = 320.;
+const PREVIEW_H: f32 = 180.;
+
+/// A quiet line in the preview's place.
+fn message(palette: &Palette, text: &str) -> AnyElement {
+    div().p_4().text_xs().text_center().text_color(palette.text_tertiary).child(text.to_owned()).into_any_element()
+}
+
 impl Render for Settings {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = cx.global::<Palette>().clone();
@@ -545,6 +757,13 @@ impl Render for Settings {
             _ => None,
         };
 
+        if section == SettingsSection::Voice {
+            self.run_previews(cx);
+            // The meter and the picture move.
+            window.request_animation_frame();
+        } else {
+            self.stop_previews();
+        }
         if section == SettingsSection::Security && self.security.is_none() {
             let store = self.store.clone();
             self.security = Some(cx.new(|cx| Security::new(store, window, cx)));
