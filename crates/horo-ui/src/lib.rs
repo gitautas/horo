@@ -15,6 +15,7 @@ pub mod media;
 pub mod mentions;
 pub mod packs;
 pub mod prefs;
+pub mod registration;
 pub mod presence;
 pub mod rich;
 pub mod rooms;

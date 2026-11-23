@@ -477,7 +477,7 @@ impl Store {
     }
 
     /// Signed in: take the room list as it stands, then follow its diffs.
-    fn signed_in(&mut self, info: SessionInfo, cx: &mut Context<Self>) {
+    pub fn signed_in(&mut self, info: SessionInfo, cx: &mut Context<Self>) {
         self.error = None;
         if info.avatar_url.is_some() {
             self.profiles.insert(info.user_id.clone(), Known { name: info.display_name.clone(), avatar: info.avatar_url.clone() });

@@ -1292,7 +1292,7 @@ fn drag_strip(height: gpui::Pixels) -> impl IntoElement {
         })
 }
 
-fn logo() -> std::sync::Arc<gpui::Image> {
+pub(crate) fn logo() -> std::sync::Arc<gpui::Image> {
     static LOGO: std::sync::OnceLock<std::sync::Arc<gpui::Image>> = std::sync::OnceLock::new();
     LOGO.get_or_init(|| std::sync::Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Svg, crate::LOGO.to_vec()))).clone()
 }
