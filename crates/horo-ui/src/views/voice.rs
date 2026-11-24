@@ -41,6 +41,8 @@ struct Person {
     identity: Option<String>,
     /// Their camera is on.
     camera: bool,
+    /// They're sharing their screen.
+    screen: bool,
     /// Their name, or "you".
     name: String,
     /// Their own name, for the monogram, and their picture.
@@ -59,17 +61,18 @@ fn localpart(user_id: &str) -> &str {
 /// devices of one person are one person).
 fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
     let mut out: Vec<Person> = Vec::new();
-    let mut add = |identity: &str, name: &str, muted: bool, me: bool, camera: bool| {
+    let mut add = |identity: &str, name: &str, muted: bool, me: bool, camera: bool, screen: bool| {
         let user = user_of(identity).to_owned();
         // A person's devices are one tile, except a device showing its
         // camera: that picture needs a tile of its own (your phone's, say,
         // beside this computer's).
-        if !camera && out.iter().any(|p| p.user_id == user && !p.camera) {
+        if !camera && !screen && out.iter().any(|p| p.user_id == user && !p.camera && !p.screen) {
             return;
         }
         let mut person = person(&user, profiles, call.is_speaking(&user), muted);
         person.identity = Some(identity.to_owned());
         person.camera = camera;
+        person.screen = screen;
         if me {
             person.name = "you".into();
         } else if !profiles.get(&user).is_some_and(|k| k.name.is_some()) && !name.is_empty() && name != identity {
@@ -80,10 +83,10 @@ fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
         out.push(person);
     };
     if let Some(me) = &call.identity {
-        add(me, "", call.muted, true, false);
+        add(me, "", call.muted, true, false, false);
     }
     for p in &call.participants {
-        add(&p.identity, &p.name, false, false, p.camera);
+        add(&p.identity, &p.name, false, false, p.camera, p.screen);
     }
     out
 }
@@ -92,7 +95,7 @@ fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
 fn person(user: &str, profiles: &HashMap<String, Known>, speaking: bool, muted: bool) -> Person {
     let known = profiles.get(user);
     let name = known.and_then(|k| k.name.clone()).unwrap_or_else(|| localpart(user).to_owned());
-    Person { user_id: user.to_owned(), identity: None, camera: false, real_name: name.clone(), name, avatar: known.and_then(|k| k.avatar.clone()), speaking, muted }
+    Person { user_id: user.to_owned(), identity: None, camera: false, screen: false, real_name: name.clone(), name, avatar: known.and_then(|k| k.avatar.clone()), speaking, muted }
 }
 
 /// Ask for the profiles of the people shown that we don't know yet.
@@ -127,6 +130,16 @@ pub fn panel(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<A
             .when(on, |b| b.primary())
             .on_click(move |_, _, cx| toggle.update(cx, |s, cx| s.set_call_camera(!on, cx)))
     };
+    #[cfg(target_os = "macos")]
+    let share_button = {
+        let (toggle, on) = (store.clone(), call.sharing);
+        Button::new("call-screen")
+            .ghost()
+            .icon(icon(if on { "icons/screen-share-off.svg" } else { "icons/screen-share.svg" }))
+            .tooltip(if on { "stop sharing your screen" } else { "share your screen" })
+            .when(on, |b| b.primary())
+            .on_click(move |_, _, cx| toggle.update(cx, |s, cx| s.set_call_screen(!on, cx)))
+    };
     let room_id = call.room_id.clone();
     let controls = if failed {
         h_flex().child(
@@ -139,7 +152,7 @@ pub fn panel(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<A
         let muted = call.muted;
         let row = h_flex().gap_1();
         #[cfg(target_os = "macos")]
-        let row = row.child(camera_button);
+        let row = row.child(share_button).child(camera_button);
         row.child(
                 Button::new("call-mute")
                     .ghost()
@@ -227,6 +240,15 @@ pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut A
     let screens = store.read(cx).call_live.as_ref().map(|l| l.screens.clone());
     let me = call.identity.clone();
     for person in everyone {
+        // A shared screen: its own, bigger tile, before the person's.
+        if person.screen
+            && let Some(picture) = person.identity.as_deref().and_then(|id| camera_picture(screens.as_ref()?, &horo_rtc::call::screen_key(id), SCREEN_W, SCREEN_H))
+        {
+            tiles.push(screen_tile(picture, &format!("{}'s screen", person.real_name), &person, palette).into_any_element());
+        }
+        if person.identity.is_some() && person.identity == me && call.sharing {
+            tiles.push(sharing_tile(palette).into_any_element());
+        }
         // Our own camera, straight from it rather than round the server.
         if call.camera
             && person.identity.is_some()
@@ -237,7 +259,7 @@ pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut A
             continue;
         }
         if person.camera
-            && let Some(picture) = person.identity.as_deref().and_then(|id| camera_picture(screens.as_ref()?, id))
+            && let Some(picture) = person.identity.as_deref().and_then(|id| camera_picture(screens.as_ref()?, id, VIDEO_W, VIDEO_H))
         {
             tiles.push(video_tile(picture, &person, palette).into_any_element());
             continue;
@@ -285,8 +307,57 @@ const VIDEO_H: f32 = 135.;
 
 /// Someone's camera, as an element: on macOS a surface over the newest
 /// picture (converted once per picture, not once per redraw).
+/// How big a shared screen's tile is.
+const SCREEN_W: f32 = 480.;
+const SCREEN_H: f32 = 270.;
+
+/// A tile with someone's shared screen in it.
+fn screen_tile(picture: AnyElement, label: &str, person: &Person, palette: &Palette) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(gpui::SharedString::from(format!("screen-{}", person.identity.as_deref().unwrap_or(&person.user_id))))
+        .relative()
+        .w(px(SCREEN_W))
+        .h(px(SCREEN_H))
+        .rounded(px(16.))
+        .overflow_hidden()
+        .bg(Hsla::black())
+        .child(picture)
+        .child(
+            div()
+                .absolute()
+                .left(px(6.))
+                .bottom(px(6.))
+                .px(px(6.))
+                .py(px(2.))
+                .rounded(px(8.))
+                .bg(Hsla { a: 0.65, ..palette.app })
+                .max_w(px(SCREEN_W - 12.))
+                .truncate()
+                .text_xs()
+                .child(label.to_owned()),
+        )
+}
+
+/// While we share: a quiet tile saying so (our own screen echoed back at
+/// us would only be a hall of mirrors).
+fn sharing_tile(palette: &Palette) -> gpui::Stateful<gpui::Div> {
+    v_flex()
+        .id("sharing-you")
+        .w(px(VIDEO_W))
+        .h(px(VIDEO_H))
+        .gap_2()
+        .items_center()
+        .justify_center()
+        .rounded(px(16.))
+        .bg(palette.card)
+        .border_1()
+        .border_color(palette.accent)
+        .child(icon("icons/screen-share.svg").size(px(28.)).text_color(palette.accent))
+        .child(div().text_xs().text_color(palette.text_secondary).child("you're sharing your screen"))
+}
+
 #[cfg(target_os = "macos")]
-fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str) -> Option<AnyElement> {
+fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str, width: f32, height: f32) -> Option<AnyElement> {
     use std::{cell::RefCell, collections::HashMap};
     type Converted = (u64, objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>);
     thread_local! {
@@ -303,7 +374,9 @@ fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str) -> Option<A
             }
         }
     })?;
-    Some(gpui::surface(buffer).w(px(VIDEO_W)).h(px(VIDEO_H)).object_fit(gpui::ObjectFit::Cover).into_any_element())
+    // A screen is shown whole (its edges matter); a face can be cropped.
+    let fit = if width > VIDEO_W { gpui::ObjectFit::Contain } else { gpui::ObjectFit::Cover };
+    Some(gpui::surface(buffer).w(px(width)).h(px(height)).object_fit(fit).into_any_element())
 }
 
 /// What our camera sees now.
@@ -319,7 +392,7 @@ fn own_camera(_store: &Entity<Store>, _cx: &mut App) -> Option<AnyElement> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn camera_picture(_screens: &horo_rtc::call::Screens, _identity: &str) -> Option<AnyElement> {
+fn camera_picture(_screens: &horo_rtc::call::Screens, _identity: &str, _width: f32, _height: f32) -> Option<AnyElement> {
     None
 }
 
@@ -355,7 +428,7 @@ fn video_tile(picture: AnyElement, person: &Person, palette: &Palette) -> gpui::
 /// Whether anyone in our call has a camera on (the window then redraws
 /// every frame for them).
 pub fn any_camera(store: &Entity<Store>, cx: &App) -> bool {
-    store.read(cx).call.as_ref().is_some_and(|c| c.camera || c.participants.iter().any(|p| p.camera))
+    store.read(cx).call.as_ref().is_some_and(|c| c.camera || c.participants.iter().any(|p| p.camera || p.screen))
 }
 
 /// Someone calling you: answer or decline, over everything.

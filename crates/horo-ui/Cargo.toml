@@ -42,3 +42,5 @@ objc2-core-media = "0.3"
 objc2-av-foundation = { version = "0.3", features = ["objc2-core-media", "objc2-core-video", "block2", "dispatch2"] }
 block2 = "0.6"
 dispatch2 = "0.3"
+# Screen sharing.
+objc2-screen-capture-kit = { version = "0.3", features = ["block2", "dispatch2", "objc2-core-media", "objc2-core-graphics"] }

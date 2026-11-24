@@ -38,6 +38,8 @@ pub struct CallView {
     pub muted: bool,
     /// Our camera is on.
     pub camera: bool,
+    /// We're sharing our screen.
+    pub sharing: bool,
     /// Our identity in the room (`@user:server:DEVICE`), once connected.
     pub identity: Option<String>,
     /// Everyone else.
@@ -65,8 +67,12 @@ pub struct Live {
     refresher: Option<tokio::task::AbortHandle>,
     /// Everyone's camera, newest picture each.
     pub screens: horo_rtc::call::Screens,
-    /// Where our camera's pictures go.
-    feed: Arc<Mutex<horo_rtc::call::CameraFeed>>,
+    /// Where our camera's and screen's pictures go.
+    feed: Arc<Mutex<horo_rtc::call::VideoFeed>>,
+    screen_feed: Arc<Mutex<horo_rtc::call::VideoFeed>>,
+    /// The screen, while it's shared.
+    #[cfg(target_os = "macos")]
+    pub screen: Option<crate::screen::ScreenShare>,
     /// Our camera, while it's on (and its picture, for our own tile).
     #[cfg(target_os = "macos")]
     pub camera: Option<crate::camera::Camera>,
@@ -96,6 +102,7 @@ impl Store {
             status: CallStatus::Connecting,
             muted: false,
             camera: false,
+            sharing: false,
             identity: None,
             participants: Vec::new(),
             speaking: Vec::new(),
@@ -127,7 +134,7 @@ impl Store {
                         return Err(format!("couldn't connect to the call: {e}"));
                     }
                 };
-                let Joined { call, microphone, speaker, events, screens, camera } = joined;
+                let Joined { call, microphone, speaker, events, screens, camera, screen } = joined;
                 let audio = match devices::start(microphone, speaker, devices) {
                     Ok(audio) => audio,
                     Err(e) => {
@@ -136,7 +143,7 @@ impl Store {
                         return Err(format!("couldn't start your microphone or speaker: {e}"));
                     }
                 };
-                Ok((call, audio, events, screens, camera))
+                Ok((call, audio, events, screens, camera, screen))
             }
         });
 
@@ -145,7 +152,7 @@ impl Store {
             let Ok(Some(mut events)) = this.update(cx, |store, cx| {
                 let still_wanted = store.call.as_ref().is_some_and(|c| c.room_id == room_id);
                 match outcome {
-                    Ok((call, audio, events, screens, feed)) if still_wanted => {
+                    Ok((call, audio, events, screens, feed, screen_feed)) if still_wanted => {
                         let backend = Backend::global(cx);
                         let refresher = backend.spawn({
                             let (state, room) = (backend.state.clone(), room.clone());
@@ -171,14 +178,17 @@ impl Store {
                             refresher: Some(refresher),
                             screens,
                             feed: Arc::new(Mutex::new(feed)),
+                            screen_feed: Arc::new(Mutex::new(screen_feed)),
                             #[cfg(target_os = "macos")]
                             camera: None,
+                            #[cfg(target_os = "macos")]
+                            screen: None,
                         });
                         cx.notify();
                         Some(events)
                     }
                     // Left (or moved on) while it was connecting.
-                    Ok((call, audio, _, screens, feed)) => {
+                    Ok((call, audio, _, screens, feed, screen_feed)) => {
                         store.hang_up(
                             Live {
                                 room_id: room,
@@ -187,8 +197,11 @@ impl Store {
                                 refresher: None,
                                 screens,
                                 feed: Arc::new(Mutex::new(feed)),
+                                screen_feed: Arc::new(Mutex::new(screen_feed)),
                                 #[cfg(target_os = "macos")]
                                 camera: None,
+                                #[cfg(target_os = "macos")]
+                                screen: None,
                             },
                             cx,
                         );
@@ -345,6 +358,62 @@ impl Store {
                             view.camera = false;
                         }
                         store.show_banner(crate::store::Tone::Error, format!("couldn't open the camera: {e}"), cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Share the main screen in the call, or stop. Starting asks macOS,
+    /// which can take a moment (and fails until screen recording is
+    /// allowed): off the UI thread.
+    #[cfg(target_os = "macos")]
+    pub fn set_call_screen(&mut self, on: bool, cx: &mut Context<Self>) {
+        tracing::info!("screen share {}", if on { "on" } else { "off" });
+        let Some(live) = &mut self.call_live else { return };
+        if let Some(view) = &mut self.call {
+            view.sharing = on;
+        }
+        live.call.set_screen(on);
+        if !on {
+            live.screen = None;
+            cx.notify();
+            return;
+        }
+        let feed = live.screen_feed.clone();
+        let task = cx.background_spawn(async move {
+            let on_frame: crate::screen::OnFrame = Box::new(move |buffer| {
+                if let Some(frame) = crate::camera::to_i420(buffer)
+                    && let Ok(mut feed) = feed.lock()
+                {
+                    feed.push(&frame);
+                }
+            });
+            crate::screen::ScreenShare::start(on_frame)
+        });
+        cx.spawn(async move |this, cx| {
+            let started = task.await;
+            let _ = this.update(cx, |store, cx| {
+                let wanted = store.call.as_ref().is_some_and(|c| c.sharing);
+                match started {
+                    Ok(share) if wanted => {
+                        if let Some(live) = &mut store.call_live {
+                            live.screen = Some(share);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!("{e}");
+                        if let Some(live) = &store.call_live {
+                            live.call.set_screen(false);
+                        }
+                        if let Some(view) = &mut store.call {
+                            view.sharing = false;
+                        }
+                        store.show_banner(crate::store::Tone::Error, e, cx);
                     }
                 }
                 cx.notify();

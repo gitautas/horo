@@ -45,12 +45,15 @@ use tokio::sync::mpsc;
 pub mod devices;
 pub mod video;
 
-pub use video::{CameraFeed, Picture, Screens};
+pub use video::{Picture, Screens, Source, VideoFeed, screen_key};
 
 /// The client track id of our microphone, echoed back by the server.
 const MIC_CID: &str = "microphone";
-/// And of our camera.
+/// And of our camera, and our shared screen.
 const CAMERA_CID: &str = "camera";
+const SCREEN_CID: &str = "screen";
+/// The screen size we tell the server we publish.
+const SCREEN_SIZE: (u32, u32) = (1920, 1080);
 /// The camera size we tell the server we publish (what it plans layers by).
 const CAMERA_SIZE: (u32, u32) = (1280, 720);
 /// Our camera's simulcast layers, smallest first, as LiveKit names them:
@@ -117,6 +120,9 @@ pub struct Participant {
     pub camera: bool,
     /// The server's id for their camera track, if they publish one.
     pub camera_sid: Option<String>,
+    /// They're sharing their screen, and the server's id for that track.
+    pub screen: bool,
+    pub screen_sid: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -142,7 +148,7 @@ pub enum CallEvent {
 
 enum Command {
     Mute(bool),
-    Camera(bool),
+    Video(Source, bool),
     Reconnect,
     Sever { signalling: bool },
     KillPublisher,
@@ -179,7 +185,9 @@ pub struct Joined {
     pub screens: Screens,
     /// Where our own camera's pictures go, once [`Call::set_camera`]
     /// has turned it on.
-    pub camera: CameraFeed,
+    pub camera: VideoFeed,
+    /// And our screen's, once [`Call::set_screen`] has.
+    pub screen: VideoFeed,
 }
 
 /// The connection to the room: signalling and both peers, with their event
@@ -237,9 +245,10 @@ impl Call {
         let remotes = Arc::new(Mutex::new(Remotes::default()));
         let screens = Screens::default();
         let (broken_tx, broken) = mpsc::unbounded_channel();
-        let (video_tx, video_packets) = mpsc::unbounded_channel::<(&'static str, u64, Vec<u8>)>();
-        let camera_on = Arc::new(AtomicBool::new(false));
-        let camera_keyframe = Arc::new(AtomicBool::new(true));
+        let (video_tx, video_packets) = mpsc::unbounded_channel::<video::VideoPacket>();
+        let outgoing = [Outgoing::new(Source::Camera), Outgoing::new(Source::Screen)];
+        let camera = VideoFeed::new(Source::Camera, video_tx.clone(), outgoing[0].on.clone(), outgoing[0].keyframe.clone());
+        let screen = VideoFeed::new(Source::Screen, video_tx, outgoing[1].on.clone(), outgoing[1].keyframe.clone());
 
         let mut engine = Engine {
             url: livekit_url.to_owned(),
@@ -258,10 +267,7 @@ impl Call {
             participants: HashMap::new(),
             remotes: remotes.clone(),
             video: video::Receiver::new(screens.clone(), broken_tx),
-            camera_on: camera_on.clone(),
-            camera_keyframe: camera_keyframe.clone(),
-            camera_mid: None,
-            camera_sid: None,
+            outgoing,
             owners: HashMap::new(),
             sized: std::collections::HashSet::new(),
             events: events_tx.clone(),
@@ -279,8 +285,7 @@ impl Call {
         gate.set_threshold(options.gate_threshold);
         let microphone = Microphone { gate, encoder: Encoder::new()?, rtp: 0, packets: packets_tx, muted: muted.clone(), events: events_tx, echo: None };
         let speaker = Speaker { remotes, frames: Vec::new(), echo: None };
-        let camera = CameraFeed::new(video_tx, camera_on, camera_keyframe);
-        Ok(Joined { call: Call { commands, muted, identity, task }, microphone, speaker, events, screens, camera })
+        Ok(Joined { call: Call { commands, muted, identity, task }, microphone, speaker, events, screens, camera, screen })
     }
 
     /// Stop sending the microphone, and tell the room.
@@ -292,7 +297,12 @@ impl Call {
     /// Turn our camera on in the call (publishing it the first time) or
     /// off (muted: it stops being sent).
     pub fn set_camera(&self, on: bool) {
-        let _ = self.commands.send(Command::Camera(on));
+        let _ = self.commands.send(Command::Video(Source::Camera, on));
+    }
+
+    /// Share our screen in the call, or stop.
+    pub fn set_screen(&self, on: bool) {
+        let _ = self.commands.send(Command::Video(Source::Screen, on));
     }
 
     pub fn is_muted(&self) -> bool {
@@ -340,16 +350,44 @@ impl Drop for Call {
 }
 
 fn participant(p: &proto::ParticipantInfo) -> Participant {
-    // Someone can have more than one camera track (republished, or an old
-    // one muted): the one that's on is the one to show.
-    let cameras = || p.tracks.iter().filter(|t| t.r#type == proto::TrackType::Video as i32 && t.source == proto::TrackSource::Camera as i32);
-    let track = cameras().find(|t| !t.muted).or_else(|| cameras().next());
+    // Someone can have more than one track of a kind (republished, or an
+    // old one muted): the one that's on is the one to show.
+    let find = |source: proto::TrackSource| {
+        let of = || p.tracks.iter().filter(move |t| t.r#type == proto::TrackType::Video as i32 && t.source == source as i32);
+        of().find(|t| !t.muted).or_else(|| of().next())
+    };
+    let (camera, screen) = (find(proto::TrackSource::Camera), find(proto::TrackSource::ScreenShare));
     Participant {
         sid: p.sid.clone(),
         identity: p.identity.clone(),
         name: p.name.clone(),
-        camera: track.is_some_and(|t| !t.muted),
-        camera_sid: track.map(|t| t.sid.clone()),
+        camera: camera.is_some_and(|t| !t.muted),
+        camera_sid: camera.map(|t| t.sid.clone()),
+        screen: screen.is_some_and(|t| !t.muted),
+        screen_sid: screen.map(|t| t.sid.clone()),
+    }
+}
+
+/// One of our video tracks (camera or screen): whether it's on, its send
+/// line once added, and the server's id for it once published.
+struct Outgoing {
+    source: Source,
+    on: Arc<AtomicBool>,
+    keyframe: Arc<AtomicBool>,
+    mid: Option<Mid>,
+    sid: Option<String>,
+}
+
+impl Outgoing {
+    fn new(source: Source) -> Outgoing {
+        Outgoing { source, on: Arc::new(AtomicBool::new(false)), keyframe: Arc::new(AtomicBool::new(true)), mid: None, sid: None }
+    }
+
+    fn cid(&self) -> &'static str {
+        match self.source {
+            Source::Camera => CAMERA_CID,
+            Source::Screen => SCREEN_CID,
+        }
     }
 }
 
@@ -418,12 +456,9 @@ struct Engine {
     video: video::Receiver,
     /// Our camera: whether it's on, its send line once added, and the
     /// server's id for it once published.
-    camera_on: Arc<AtomicBool>,
-    camera_keyframe: Arc<AtomicBool>,
-    camera_mid: Option<Mid>,
-    camera_sid: Option<String>,
+    outgoing: [Outgoing; 2],
     /// Which participant each subscriber media line belongs to (by mid).
-    owners: HashMap<String, String>,
+    owners: HashMap<String, (String, String)>,
     /// Camera tracks we've told the server what size we want.
     sized: std::collections::HashSet<String>,
     events: mpsc::UnboundedSender<CallEvent>,
@@ -470,7 +505,7 @@ impl Engine {
         mut packets: mpsc::UnboundedReceiver<(u64, Vec<u8>)>,
         mut commands: mpsc::UnboundedReceiver<Command>,
         mut broken: mpsc::UnboundedReceiver<Mid>,
-        mut video_packets: mpsc::UnboundedReceiver<(&'static str, u64, Vec<u8>)>,
+        mut video_packets: mpsc::UnboundedReceiver<video::VideoPacket>,
     ) {
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         let reason = loop {
@@ -494,11 +529,11 @@ impl Engine {
                     Some(event) => self.on_subscriber(event),
                     None => Err(Trouble::Rejoin("subscriber gone".into())),
                 },
-                Some((rid, rtp, packet)) = video_packets.recv() => {
+                Some((source, rid, rtp, packet)) = video_packets.recv() => {
                     if self.publishing
-                        && let Some(mid) = self.camera_mid
+                        && let Some(mid) = self.outgoing.iter().find(|o| o.source == source).and_then(|o| o.mid)
                     {
-                        let _ = self.link.publisher.write_video(mid, Some(rid), rtp, packet);
+                        let _ = self.link.publisher.write_video(mid, rid, rtp, packet);
                     }
                     Ok(())
                 }
@@ -516,7 +551,7 @@ impl Engine {
                         }
                         Ok(())
                     }
-                    Some(Command::Camera(on)) => self.set_camera(on).await,
+                    Some(Command::Video(source, on)) => self.set_video(source, on).await,
                     Some(Command::Reconnect) => Err(Trouble::Lost("the network changed".into(), ReconnectReason::RrSwitchCandidate)),
                     Some(Command::KillPublisher) => {
                         self.link.publisher.close();
@@ -657,14 +692,18 @@ impl Engine {
         self.video.reset();
         self.owners.clear();
         self.sized.clear();
-        self.camera_mid = None;
-        self.camera_sid = None;
+        for out in &mut self.outgoing {
+            out.mid = None;
+            out.sid = None;
+        }
         self.joined(&join);
-        // A new session has no camera track: publish it again if it's on.
-        if self.camera_on.load(Ordering::Relaxed)
-            && let Err(e) = self.publish_camera().await
-        {
-            tracing::warn!("{}: republishing the camera: {e}", self.identity);
+        // A new session has no video tracks: publish again what's on.
+        for source in [Source::Camera, Source::Screen] {
+            if self.outgoing(source).on.load(Ordering::Relaxed)
+                && let Err(e) = self.publish(source).await
+            {
+                tracing::warn!("{}: republishing {source:?}: {e}", self.identity);
+            }
         }
         Ok(())
     }
@@ -716,44 +755,62 @@ impl Engine {
         }
     }
 
-    /// Add the camera's track and send line (the first time it's turned on
-    /// in a session).
-    async fn publish_camera(&mut self) -> Result<()> {
+    fn outgoing(&mut self, source: Source) -> &mut Outgoing {
+        match source {
+            Source::Camera => &mut self.outgoing[0],
+            Source::Screen => &mut self.outgoing[1],
+        }
+    }
+
+    /// Add a video track and its send line (the first time it's turned on
+    /// in a session): the camera in three sizes, the screen in one.
+    async fn publish(&mut self, source: Source) -> Result<()> {
+        let cid = self.outgoing(source).cid();
+        let (kind, size, layers): (proto::TrackSource, (u32, u32), &[&str]) = match source {
+            Source::Camera => (proto::TrackSource::Camera, CAMERA_SIZE, &CAMERA_LAYERS),
+            Source::Screen => (proto::TrackSource::ScreenShare, SCREEN_SIZE, &[]),
+        };
         self.link.signal.add_track(AddTrack {
-            cid: CAMERA_CID.into(),
-            name: CAMERA_CID.into(),
+            cid: cid.into(),
+            name: cid.into(),
             kind: proto::TrackType::Video,
-            source: proto::TrackSource::Camera,
+            source: kind,
             muted: false,
-            width: CAMERA_SIZE.0,
-            height: CAMERA_SIZE.1,
-            layers: CAMERA_LAYERS.iter().zip([4, 2, 1]).map(|(rid, d)| ((*rid).to_owned(), CAMERA_SIZE.0 / d, CAMERA_SIZE.1 / d)).collect(),
+            width: size.0,
+            height: size.1,
+            layers: layers.iter().zip([4, 2, 1]).map(|(rid, d)| ((*rid).to_owned(), size.0 / d, size.1 / d)).collect(),
         })?;
-        let (sdp, mid) = self.link.publisher.offer_video(&format!("{}-camera", self.identity), CAMERA_CID, &CAMERA_LAYERS).await?;
+        let (sdp, mid) = self.link.publisher.offer_video(&format!("{}-{cid}", self.identity), cid, layers).await?;
         self.link.signal.offer(sdp, 1)?;
-        self.camera_mid = Some(mid);
-        self.camera_keyframe.store(true, Ordering::Relaxed);
+        let out = self.outgoing(source);
+        out.mid = Some(mid);
+        out.keyframe.store(true, Ordering::Relaxed);
         Ok(())
     }
 
-    async fn set_camera(&mut self, on: bool) -> Result<(), Trouble> {
-        self.camera_on.store(on, Ordering::Relaxed);
-        if on && self.camera_mid.is_none() {
-            if let Err(e) = self.publish_camera().await {
-                tracing::warn!("{}: publishing the camera: {e}", self.identity);
+    async fn set_video(&mut self, source: Source, on: bool) -> Result<(), Trouble> {
+        let out = self.outgoing(source);
+        out.on.store(on, Ordering::Relaxed);
+        if on && out.mid.is_none() {
+            if let Err(e) = self.publish(source).await {
+                tracing::warn!("{}: publishing {source:?}: {e}", self.identity);
             }
-        } else if let Some(sid) = &self.camera_sid {
-            let _ = self.link.signal.mute(sid, !on);
+        } else if let Some(sid) = out.sid.clone() {
             if on {
-                self.camera_keyframe.store(true, Ordering::Relaxed);
+                out.keyframe.store(true, Ordering::Relaxed);
             }
+            let _ = self.link.signal.mute(&sid, !on);
         }
         Ok(())
     }
 
     fn on_publisher(&mut self, event: PeerEvent) -> Result<(), Trouble> {
         match event {
-            PeerEvent::KeyframeRequest { .. } => self.camera_keyframe.store(true, Ordering::Relaxed),
+            PeerEvent::KeyframeRequest { mid } => {
+                if let Some(out) = self.outgoing.iter().find(|o| o.mid == Some(mid)) {
+                    out.keyframe.store(true, Ordering::Relaxed);
+                }
+            }
             PeerEvent::Connected => {
                 self.publishing = true;
                 if !self.ever_connected {
@@ -804,8 +861,9 @@ impl Engine {
                     tracing::debug!("subscriber candidate {candidate:?}: {e}");
                 }
             }
-            SignalEvent::TrackPublished { cid, track } if cid == CAMERA_CID => {
-                self.camera_sid = track.map(|t| t.sid);
+            SignalEvent::TrackPublished { cid, track } if cid == CAMERA_CID || cid == SCREEN_CID => {
+                let source = if cid == CAMERA_CID { Source::Camera } else { Source::Screen };
+                self.outgoing(source).sid = track.map(|t| t.sid);
             }
             SignalEvent::TrackPublished { cid, track } if cid == MIC_CID => {
                 self.mic_sid = track.map(|t| t.sid);
@@ -824,8 +882,12 @@ impl Engine {
                     }
                     changed = true;
                     let now = participant(&p);
-                    if p.state == proto::participant_info::State::Disconnected as i32 || !now.camera {
+                    let left = p.state == proto::participant_info::State::Disconnected as i32;
+                    if left || !now.camera {
                         self.video.gone(&now.identity);
+                    }
+                    if left || !now.screen {
+                        self.video.gone(&screen_key(&now.identity));
                     }
                     if p.state == proto::participant_info::State::Disconnected as i32 {
                         self.participants.remove(&p.sid);
@@ -835,7 +897,7 @@ impl Engine {
                 }
                 if changed {
                     for p in self.participants.values() {
-                        tracing::info!("{}: {} camera {:?} (on: {})", self.identity, p.identity, p.camera_sid, p.camera);
+                        tracing::info!("{}: {} camera {:?} (on: {}), screen {:?} (on: {})", self.identity, p.identity, p.camera_sid, p.camera, p.screen_sid, p.screen);
                     }
                     self.size_cameras();
                     let _ = self.events.send(CallEvent::Participants(sorted(&self.participants)));
@@ -894,9 +956,13 @@ impl Engine {
                 remote.buffer.push(rtp_time, data.to_vec(), now);
             }
             PeerEvent::Video { mid, data, keyframe, contiguous, .. } => {
-                let identity = self.owners.get(&mid.to_string()).and_then(|sid| self.participants.get(sid)).map(|p| p.identity.clone());
-                if let Some(identity) = identity
-                    && self.video.frame(mid, &identity, data, keyframe, contiguous)
+                // A person's screen is kept apart from their camera.
+                let key = self.owners.get(&mid.to_string()).and_then(|(sid, track)| {
+                    let p = self.participants.get(sid)?;
+                    Some(if p.screen_sid.as_deref() == Some(track.as_str()) { screen_key(&p.identity) } else { p.identity.clone() })
+                });
+                if let Some(key) = key
+                    && self.video.frame(mid, &key, data, keyframe, contiguous)
                 {
                     let _ = self.link.subscriber.request_keyframe(mid);
                 }
