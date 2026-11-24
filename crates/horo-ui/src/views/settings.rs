@@ -52,6 +52,8 @@ pub struct Settings {
     /// "sign out and erase keys" has been pressed once.
     confirm_wipe: bool,
     volume: Entity<SliderState>,
+    /// The noise gate's threshold, in dBFS.
+    sensitivity: Entity<SliderState>,
     /// Appearance: message text size, zoom, and a font typed by name.
     text_size: Entity<SliderState>,
     zoom: Entity<SliderState>,
@@ -141,6 +143,23 @@ impl Settings {
         })
         .detach();
 
+        // The gate moves as it's dragged (the meter shows the difference
+        // at once, and so does a call), and is saved when it's let go.
+        let gate_off = horo_rtc::audio::gate::GATE_OFF_DB;
+        let start = store.read(cx).prefs.input_sensitivity.max(gate_off);
+        let sensitivity = cx.new(|_| SliderState::new().min(gate_off).max(0.0).step(1.0).default_value(start));
+        cx.subscribe(&sensitivity, |this, _, event: &SliderEvent, cx| {
+            let (db, save) = match event {
+                SliderEvent::Change(value) => (value.start(), false),
+                SliderEvent::Release(value) => (value.start(), true),
+            };
+            if let Some(Preview { state: PreviewState::Live(meter), .. }) = &this.meter {
+                meter.set_threshold(db);
+            }
+            this.store.update(cx, |s, cx| s.set_input_sensitivity(db, save, cx));
+        })
+        .detach();
+
         // Sizes apply when the slider is let go: each relays the window out.
         let prefs = store.read(cx).prefs.clone();
         let text_size = cx.new(|_| {
@@ -205,6 +224,7 @@ impl Settings {
             font,
             devices: None,
             meter: None,
+            sensitivity,
             #[cfg(target_os = "macos")]
             camera: None,
             #[cfg(target_os = "macos")]
@@ -552,7 +572,10 @@ impl Settings {
         if self.meter.as_ref().is_none_or(|m| m.device != prefs.audio_input) {
             self.meter = Some(Preview::open(
                 prefs.audio_input.clone(),
-                |device| horo_rtc::voice::Meter::start(device).map_err(|e| e.to_string()),
+                {
+                    let threshold = prefs.input_sensitivity;
+                    move |device| horo_rtc::voice::Meter::start(device, threshold).map_err(|e| e.to_string())
+                },
                 |this| &mut this.meter,
                 cx,
             ));
@@ -654,7 +677,7 @@ impl Settings {
                     .child(picker("output", &outputs, &prefs.audio_output, |p, id| p.audio_output = id, cx))
                     .child(field(palette, "input device", Some("the microphone other people hear.")))
                     .child(picker("input", &inputs, &prefs.audio_input, |p, id| p.audio_input = id, cx))
-                    .child(self.meter_bar(palette))
+                    .child(self.meter_bar(palette, cx))
                     .when(inputs.is_empty(), |c| {
                         c.child(div().text_sm().text_color(palette.idle).child("no microphones found — check that horo has permission in system settings."))
                     })
@@ -675,26 +698,78 @@ impl Settings {
             .into_any_element()
     }
 
-    /// How loud the chosen microphone is, live.
-    fn meter_bar(&self, palette: &Palette) -> AnyElement {
-        let (level, note) = match self.meter.as_ref().map(|m| &m.state) {
-            Some(PreviewState::Live(meter)) => (meter.level(), "say something to check your microphone~".to_owned()),
-            Some(PreviewState::Failed(why)) => (0., format!("couldn't open the microphone: {why}")),
-            _ => (0., "opening the microphone…".to_owned()),
+    /// How loud the chosen microphone is, live, against the noise gate's
+    /// threshold: a marker on the meter, dragged with the slider under it,
+    /// the bar lit when you'd be heard (as Discord lays out input
+    /// sensitivity, the one layout where setting it isn't guesswork).
+    /// Mid-call it's the call's own microphone, showing what's sent.
+    fn meter_bar(&self, palette: &Palette, cx: &gpui::App) -> AnyElement {
+        use horo_rtc::audio::gate::GATE_OFF_DB;
+        let state = self.store.read(cx);
+        let threshold = state.prefs.input_sensitivity;
+        let gated = threshold > GATE_OFF_DB;
+        let from_call = state.call.as_ref().and_then(|c| c.mic);
+        let (reading, problem) = match (from_call, self.meter.as_ref().map(|m| &m.state)) {
+            (Some(reading), _) => (Some(reading), None),
+            (None, Some(PreviewState::Live(meter))) => (Some(meter.reading()), None),
+            (None, Some(PreviewState::Failed(why))) => (None, Some(format!("couldn't open the microphone: {why}"))),
+            _ => (None, Some("opening the microphone…".to_owned())),
         };
+        let muted = state.call.as_ref().is_some_and(|c| c.muted);
+        // Where a level lands on the meter, 0 to 1.
+        let at = |db: f32| (db.clamp(GATE_OFF_DB, 0.) - GATE_OFF_DB) / -GATE_OFF_DB;
+        let level = reading.map_or(0., |r| at(r.level));
+        let open = reading.is_some_and(|r| r.open) || !gated;
+        let hint = problem.unwrap_or_else(|| {
+            if muted {
+                "you're muted in the call, so nothing is sent whatever the meter says.".to_owned()
+            } else if gated {
+                "anything quieter than the marker is cut. talk normally: the bar lights up when you'd be heard. drag it all the way left to let everything through.".to_owned()
+            } else {
+                "everything gets through. to cut out background noise, stay quiet and drag the marker just past where the bar stops.".to_owned()
+            }
+        });
+        let label = if gated { format!("input sensitivity — {threshold:.0} db") } else { "input sensitivity — −∞ db".to_owned() };
         v_flex()
             .gap_1()
             .pt_1()
+            .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).child(label))
             .child(
-                div()
-                    .h(zpx(8.))
-                    .w_full()
-                    .rounded_full()
-                    .bg(palette.inset)
-                    .overflow_hidden()
-                    .child(div().h_full().w(gpui::relative(level)).rounded_full().bg(if level > 0.85 { palette.idle } else { palette.online })),
+                h_flex()
+                    .gap_3()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .relative()
+                                    .h(zpx(14.))
+                                    .w_full()
+                                    .rounded_full()
+                                    .bg(palette.inset)
+                                    .border_1()
+                                    .border_color(palette.border_subtle)
+                                    .overflow_hidden()
+                                    .child(div().h_full().w(gpui::relative(level)).rounded_full().bg(if open { palette.accent } else { palette.idle }).when(!open, |d| d.opacity(0.7)))
+                                    .when(gated, |d| d.child(div().absolute().top_0().bottom_0().left(gpui::relative(at(threshold))).w(zpx(2.)).bg(palette.text))),
+                            )
+                            .child(Slider::new(&self.sensitivity)),
+                    )
+                    .when(gated, |d| {
+                        d.child(
+                            div()
+                                .w(zpx(58.))
+                                .flex_none()
+                                .text_right()
+                                .font_family(crate::theme::MONO_FONT)
+                                .text_xs()
+                                .text_color(if open { palette.accent } else { palette.text_tertiary })
+                                .child(if open { "sending" } else { "gated" }),
+                        )
+                    }),
             )
-            .child(div().text_xs().text_color(palette.text_tertiary).child(note))
+            .child(div().text_xs().text_color(palette.text_tertiary).child(hint))
             .into_any_element()
     }
 

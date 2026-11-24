@@ -25,6 +25,10 @@ pub struct Prefs {
     /// The microphone for calls (a `horo_rtc::devices` id); `None` follows
     /// the system default.
     pub audio_input: Option<String>,
+    /// The noise gate's threshold in dBFS: the microphone is silenced
+    /// while it's quieter. At `GATE_OFF_DB` (the default) nothing is cut,
+    /// as a threshold set wrong cuts people off mid-word.
+    pub input_sensitivity: f32,
     /// The speaker for calls; `None` follows the system default.
     pub audio_output: Option<String>,
     /// The camera's unique ID; `None` is the system's preferred one.
@@ -98,6 +102,7 @@ impl Default for Prefs {
             font_family: String::new(),
             message_font_size: crate::theme::MESSAGE_SIZE_DEFAULT,
             audio_input: None,
+            input_sensitivity: horo_rtc::audio::gate::GATE_OFF_DB,
             video_input: None,
             audio_output: None,
             show_info_panel: true,

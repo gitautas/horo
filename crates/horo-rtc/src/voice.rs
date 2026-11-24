@@ -9,7 +9,10 @@
 //!   [`VoicePlayer`] plays them, with pause, position and seek.
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, Ordering},
+    },
     time::Duration,
 };
 
@@ -17,6 +20,7 @@ use crate::{
     audio::{
         FRAME, SAMPLE_RATE,
         codec::{CodecError, Encoder},
+        gate::{FLOOR_DB, GATE_OFF_DB, GateReading, NoiseGate},
         ogg::{self, DEFAULT_PRE_SKIP, OggError},
     },
     devices::{Capture, DeviceError, Playback},
@@ -125,31 +129,62 @@ impl Recorder {
 }
 
 /// A microphone's level, for a meter: nothing is kept but how loud the
-/// last fraction of a second was.
+/// last fraction of a second was, and what a noise gate at the chosen
+/// threshold would make of it (the same gate calls use, so the settings
+/// meter shows what a call would send).
 pub struct Meter {
     _capture: Capture,
     /// The loudest recent frame's RMS, as f32 bits.
-    peak: Arc<std::sync::atomic::AtomicU32>,
+    peak: Arc<AtomicU32>,
+    /// The gate's threshold (f32 bits) and its latest reading.
+    threshold: Arc<AtomicU32>,
+    reading: Arc<Mutex<GateReading>>,
 }
 
 impl Meter {
-    /// Listen to `device` (the system default when `None`).
-    pub fn start(device: Option<&str>) -> Result<Meter> {
-        use std::sync::atomic::Ordering;
-        let peak = Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let sink = peak.clone();
+    /// Listen to `device` (the system default when `None`), gating at
+    /// `threshold` dBFS.
+    pub fn start(device: Option<&str>, threshold: f32) -> Result<Meter> {
+        let peak = Arc::new(AtomicU32::new(0));
+        let wanted = Arc::new(AtomicU32::new(threshold.to_bits()));
+        let reading = Arc::new(Mutex::new(GateReading { level: FLOOR_DB, open: threshold <= GATE_OFF_DB }));
+        let (sink, wants, readings) = (peak.clone(), wanted.clone(), reading.clone());
+        let mut gate = NoiseGate::new(SAMPLE_RATE);
+        gate.set_threshold(threshold);
+        let mut applied = threshold;
         let capture = Capture::start(device, move |frame: &[f32; FRAME]| {
             let rms = (frame.iter().map(|s| s * s).sum::<f32>() / FRAME as f32).sqrt();
             // Falls by a fifth each 20 ms frame, so a word lingers a moment.
             let held = f32::from_bits(sink.load(Ordering::Relaxed)) * 0.8;
             sink.store(rms.max(held).to_bits(), Ordering::Relaxed);
+            let threshold = f32::from_bits(wants.load(Ordering::Relaxed));
+            if threshold != applied {
+                applied = threshold;
+                gate.set_threshold(threshold);
+            }
+            let mut copy = *frame;
+            if let Some(reading) = gate.process(&mut copy)
+                && let Ok(mut latest) = readings.lock()
+            {
+                *latest = reading;
+            }
         })?;
-        Ok(Meter { _capture: capture, peak })
+        Ok(Meter { _capture: capture, peak, threshold: wanted, reading })
     }
 
     /// How loud, 0 to 1.
     pub fn level(&self) -> f32 {
-        loudness(f32::from_bits(self.peak.load(std::sync::atomic::Ordering::Relaxed)))
+        loudness(f32::from_bits(self.peak.load(Ordering::Relaxed)))
+    }
+
+    /// Move the gate's threshold.
+    pub fn set_threshold(&self, db: f32) {
+        self.threshold.store(db.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The level in dBFS and whether the gate would let it through.
+    pub fn reading(&self) -> GateReading {
+        self.reading.lock().map(|r| *r).unwrap_or(GateReading { level: FLOOR_DB, open: false })
     }
 }
 

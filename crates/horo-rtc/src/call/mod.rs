@@ -22,7 +22,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -171,6 +171,9 @@ pub struct Call {
     commands: mpsc::UnboundedSender<Command>,
     muted: Arc<AtomicBool>,
     deafened: Arc<AtomicBool>,
+    /// The noise gate's threshold (dBFS, as f32 bits), read by the
+    /// microphone each frame.
+    gate: Arc<AtomicU32>,
     /// Our own identity in the room.
     pub identity: String,
     task: tokio::task::JoinHandle<()>,
@@ -284,10 +287,21 @@ impl Call {
 
         let mut gate = NoiseGate::new(crate::audio::SAMPLE_RATE);
         gate.set_threshold(options.gate_threshold);
-        let microphone = Microphone { gate, encoder: Encoder::new()?, rtp: 0, packets: packets_tx, muted: muted.clone(), events: events_tx, echo: None };
+        let threshold = Arc::new(AtomicU32::new(options.gate_threshold.to_bits()));
+        let microphone = Microphone {
+            gate,
+            threshold: threshold.clone(),
+            applied: options.gate_threshold,
+            encoder: Encoder::new()?,
+            rtp: 0,
+            packets: packets_tx,
+            muted: muted.clone(),
+            events: events_tx,
+            echo: None,
+        };
         let deafened = Arc::new(AtomicBool::new(false));
         let speaker = Speaker { remotes, frames: Vec::new(), echo: None, deafened: deafened.clone() };
-        Ok(Joined { call: Call { commands, muted, deafened, identity, task }, microphone, speaker, events, screens, camera, screen })
+        Ok(Joined { call: Call { commands, muted, deafened, gate: threshold, identity, task }, microphone, speaker, events, screens, camera, screen })
     }
 
     /// Stop sending the microphone, and tell the room.
@@ -315,6 +329,12 @@ impl Call {
     /// too, as deafening usually does).
     pub fn set_deafened(&self, deafened: bool) {
         self.deafened.store(deafened, Ordering::Relaxed);
+    }
+
+    /// Change the noise gate's threshold mid-call (dBFS; at
+    /// [`GATE_OFF_DB`] or below nothing is cut).
+    pub fn set_gate_threshold(&self, db: f32) {
+        self.gate.store(db.to_bits(), Ordering::Relaxed);
     }
 
     pub fn is_deafened(&self) -> bool {
@@ -997,6 +1017,9 @@ impl Engine {
 /// Where the microphone's frames go. Lives on the audio thread.
 pub struct Microphone {
     gate: NoiseGate,
+    /// The threshold the call wants (f32 bits), and the one the gate has.
+    threshold: Arc<AtomicU32>,
+    applied: f32,
     encoder: Encoder,
     rtp: u64,
     packets: mpsc::UnboundedSender<(u64, Vec<u8>)>,
@@ -1013,13 +1036,18 @@ impl Microphone {
     }
 
     pub fn set_gate_threshold(&mut self, db: f32) {
-        self.gate.set_threshold(db);
+        self.threshold.store(db.to_bits(), Ordering::Relaxed);
     }
 
     /// One 20 ms frame of microphone: echo-cancelled, gated, encoded and
     /// sent (unless muted).
     pub fn push(&mut self, frame: &[f32; FRAME]) {
         let mut frame = *frame;
+        let wanted = f32::from_bits(self.threshold.load(Ordering::Relaxed));
+        if wanted != self.applied {
+            self.applied = wanted;
+            self.gate.set_threshold(wanted);
+        }
         // Even while muted: the canceller keeps adapting, so unmuting
         // doesn't let a burst of echo through.
         if let Some(echo) = &self.echo {

@@ -52,6 +52,9 @@ pub struct CallView {
     pub participants: Vec<Participant>,
     /// Identities speaking now, ourselves included.
     pub speaking: Vec<String>,
+    /// The microphone's latest level and whether the gate lets it through
+    /// (for the meter in settings; read without a redraw of its own).
+    pub mic: Option<horo_rtc::audio::gate::GateReading>,
 }
 
 impl CallView {
@@ -115,9 +118,11 @@ impl Store {
             identity: None,
             participants: Vec::new(),
             speaking: Vec::new(),
+            mic: None,
         });
         cx.notify();
 
+        let gate_threshold = self.prefs.input_sensitivity;
         let devices = AudioDevices { input: self.prefs.audio_input.clone(), output: self.prefs.audio_output.clone(), cancel_echo: true };
         let backend = Backend::global(cx);
         let task = backend.run({
@@ -135,7 +140,7 @@ impl Store {
                         Box::pin(async move { horo_rtc::join(&core, &room, false).await.map(|c| c.jwt).map_err(|e| e.to_string()) })
                     })
                 };
-                let options = CallOptions { refresh_token: Some(refresh), ..Default::default() };
+                let options = CallOptions { refresh_token: Some(refresh), gate_threshold, ..Default::default() };
                 let joined = match Call::connect(&credentials.livekit_url, &credentials.jwt, options).await {
                     Ok(joined) => joined,
                     Err(e) => {
@@ -249,8 +254,11 @@ impl Store {
                 }
                 view.speaking = speaking;
             }
-            // The level meter isn't drawn yet.
-            CallEvent::Level(_) => return,
+            // Settings draws it every frame while it's open.
+            CallEvent::Level(reading) => {
+                view.mic = Some(reading);
+                return;
+            }
             CallEvent::Ended(reason) => {
                 tracing::info!("call ended: {reason}");
                 view.status = CallStatus::Failed(reason);
@@ -326,6 +334,19 @@ impl Store {
             self.set_call_muted(true, cx);
         }
         cx.notify();
+    }
+
+    /// Move the noise gate's threshold: in the call now, and (`save`) for
+    /// calls to come.
+    pub fn set_input_sensitivity(&mut self, db: f32, save: bool, cx: &mut Context<Self>) {
+        if let Some(live) = &self.call_live {
+            live.call.set_gate_threshold(db);
+        }
+        if save {
+            self.update_prefs(|p| p.input_sensitivity = db, cx);
+        } else {
+            self.preview_prefs(|p| p.input_sensitivity = db, cx);
+        }
     }
 
     /// Show `key`'s tile big, or (None) everyone alike.
