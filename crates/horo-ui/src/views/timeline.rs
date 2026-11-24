@@ -11,7 +11,7 @@ use std::{collections::HashMap, rc::Rc};
 use chrono::{DateTime, Local, TimeZone};
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, Hsla, EventEmitter, InteractiveElement, StatefulInteractiveElement, FontWeight, IntoElement, ListAlignment, ListState, ParentElement, Render, SharedString, Styled,
-    WeakEntity, Window, div, img, list, AnimationExt, prelude::FluentBuilder, px, StyledImage,
+    WeakEntity, Window, div, img, list, AnimationExt, prelude::FluentBuilder, StyledImage,
 };
 use gpui_component::{h_flex, v_flex};
 use horo_core::{
@@ -20,6 +20,7 @@ use horo_core::{
 };
 use matrix_sdk::ruma::OwnedRoomId;
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     media::Media,
@@ -52,6 +53,8 @@ pub struct Timeline {
     rich: HashMap<String, Rc<Vec<Block>>>,
     items: Vec<TimelineItemDto>,
     list: ListState,
+    /// The zoom the rows were last measured at.
+    zoom_epoch: u64,
     /// The initial items are in; until then diffs wait in `early`.
     loaded: bool,
     early: Vec<Vec<Diff<TimelineItemDto>>>,
@@ -144,7 +147,7 @@ impl EventEmitter<TimelineAction> for Timeline {}
 impl Timeline {
     pub fn new(room_id: OwnedRoomId, thread_root: Option<String>, store: &Entity<Store>, cx: &mut Context<Self>) -> Timeline {
         let key = timeline::timeline_key(&room_id, thread_root.as_deref());
-        let list = ListState::new(0, ListAlignment::Bottom, px(400.));
+        let list = ListState::new(0, ListAlignment::Bottom, zpx(400.));
         let this = cx.weak_entity();
         list.set_scroll_handler(move |event, _, cx| {
             if event.visible_range.start < PAGINATE_WITHIN {
@@ -175,7 +178,7 @@ impl Timeline {
             error: None,
             marking_read: false,
             confirm_delete: None,
-            notice: None, picker: None, playing: None, menu: None };
+            notice: None, picker: None, playing: None, menu: None, zoom_epoch: 0 };
 
         let backend = Backend::global(cx);
         let task = backend.run({
@@ -342,10 +345,10 @@ fn wave_heights(samples: &[u16], bars: usize) -> Vec<f32> {
 fn wave(samples: &[u16], played: f32, palette: &Palette) -> AnyElement {
     let heights = wave_heights(samples, WAVE_BARS);
     let count = heights.len().max(1) as f32;
-    let mut row = h_flex().w_full().h(px(22.)).items_center().justify_between();
+    let mut row = h_flex().w_full().h(zpx(22.)).items_center().justify_between();
     for (i, height) in heights.into_iter().enumerate() {
         let lit = (i as f32 + 0.5) / count <= played;
-        row = row.child(div().w(px(2.5)).h(px(22. * height)).rounded_full().bg(if lit { palette.accent } else { palette.border_strong }));
+        row = row.child(div().w(zpx(2.5)).h(zpx(22. * height)).rounded_full().bg(if lit { palette.accent } else { palette.border_strong }));
     }
     row.into_any_element()
 }
@@ -363,7 +366,7 @@ impl Timeline {
             div()
                 .id(SharedString::from(format!("{key}/{id}")))
                 .px_2()
-                .py(px(2.))
+                .py(zpx(2.))
                 .rounded(palette.radius_sm)
                 .text_xs()
                 .text_color(colour)
@@ -373,10 +376,10 @@ impl Timeline {
         };
         let mut bar = h_flex()
             .absolute()
-            .top(px(-8.))
+            .top(zpx(-8.))
             .right_4()
-            .p(px(2.))
-            .gap(px(2.))
+            .p(zpx(2.))
+            .gap(zpx(2.))
             .rounded(palette.radius_md)
             .bg(palette.raised)
             .border_1()
@@ -400,14 +403,14 @@ impl Timeline {
                 let picture = packs::reaction_image(&key, &known);
                 let name = picture.as_ref().map(|(_, name)| name.clone()).unwrap_or_else(|| key.clone());
                 let face = match picture.and_then(|(url, _)| Media::image(&url, Some((52, 52)), cx)) {
-                    Some(image) => img(image).size(px(18.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
+                    Some(image) => img(image).size(zpx(18.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
                     None => div().child(key.clone()).into_any_element(),
                 };
                 let (event_id, tip) = (id.clone(), format!("react with {name}"));
                 bar = bar.child(
                     div()
                         .id(SharedString::from(format!("quick-{i}/{id}")))
-                        .size(px(26.))
+                        .size(zpx(26.))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -424,7 +427,7 @@ impl Timeline {
             bar = bar.child(
                 div()
                     .id(SharedString::from(format!("more-reactions/{id}")))
-                    .size(px(26.))
+                    .size(zpx(26.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -432,7 +435,7 @@ impl Timeline {
                     .cursor_pointer()
                     .hover(|b| b.bg(Hsla { a: 0.08, ..gpui::white() }))
                     .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("more reactions").build(window, cx))
-                    .child(icon("icons/smile.svg").size(px(15.)).text_color(palette.text_secondary))
+                    .child(icon("icons/smile.svg").size(zpx(15.)).text_color(palette.text_secondary))
                     .on_click(cx.listener(move |this, click: &gpui::ClickEvent, window, cx| this.open_picker(event_id.clone(), click.position(), window, cx))),
             );
         }
@@ -595,6 +598,12 @@ fn reply_preview(content: &ContentDto) -> String {
 impl Render for Timeline {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = Rc::new(cx.global::<Palette>().clone());
+        // Zoomed: every row's height changed.
+        let epoch = self.store.read(cx).zoom_epoch;
+        if epoch != self.zoom_epoch {
+            self.zoom_epoch = epoch;
+            self.list.remeasure();
+        }
         // Something playing wants its next frame (or time) drawn.
         if self.playing.as_ref().is_some_and(|p| p.state.is_playing()) {
             window.request_animation_frame();
@@ -626,7 +635,7 @@ impl Render for Timeline {
                     gpui::anchored()
                         .position(*at)
                         .anchor(gpui::Anchor::TopRight)
-                        .snap_to_window_with_margin(px(10.))
+                        .snap_to_window_with_margin(zpx(10.))
                         .child(picker.clone()),
                 )
                 .with_priority(1)
@@ -764,7 +773,7 @@ impl Timeline {
         let left = (!typing.is_empty()).then(|| {
             let dots = h_flex().gap(space(3.)).children((0..3).map(|i| {
                 div()
-                    .size(px(5.))
+                    .size(zpx(5.))
                     .rounded_full()
                     .bg(palette.accent_secondary)
                     .with_animation(
@@ -812,7 +821,7 @@ impl Timeline {
                 let store = self.store.clone();
                 cx.defer(move |cx| store.update(cx, |s, cx| s.want_profiles(missing, cx)));
             }
-            let faces: Vec<AnyElement> = shown.iter().map(|(user, name, picture)| avatar(user, name, picture.as_deref(), px(18.), cx)).collect();
+            let faces: Vec<AnyElement> = shown.iter().map(|(user, name, picture)| avatar(user, name, picture.as_deref(), zpx(18.), cx)).collect();
             let overflow = readers.len().saturating_sub(MAX_FACES);
             h_flex()
                 .id("read-receipts")
@@ -829,8 +838,8 @@ impl Timeline {
 
         h_flex()
             .flex_none()
-            .h(px(28.))
-            .pl(px(40.) + space(30.))
+            .h(zpx(28.))
+            .pl(zpx(40.) + space(30.))
             .pr(space(30.))
             .gap(space(12.))
             .children(left)
@@ -946,12 +955,12 @@ fn divider(label: String, colour: gpui::Hsla, line: gpui::Hsla) -> AnyElement {
     h_flex()
         .w_full()
         .px(space(22.))
-        .pt(px(18.))
-        .pb(px(10.))
+        .pt(zpx(18.))
+        .pb(zpx(10.))
         .gap(space(12.))
-        .child(div().flex_1().h(px(1.)).bg(line))
+        .child(div().flex_1().h(zpx(1.)).bg(line))
         .child(div().text_size(text(11.)).font_weight(FontWeight::SEMIBOLD).text_color(colour).child(label))
-        .child(div().flex_1().h(px(1.)).bg(line))
+        .child(div().flex_1().h(zpx(1.)).bg(line))
         .into_any_element()
 }
 
@@ -1072,10 +1081,10 @@ impl Timeline {
             }
         };
         let button = |key: &'static str| {
-            div().id(key).flex_none().size(px(28.)).flex().items_center().justify_center().rounded_full().cursor_pointer().hover(|d| d.bg(palette.inset))
+            div().id(key).flex_none().size(zpx(28.)).flex().items_center().justify_center().rounded_full().cursor_pointer().hover(|d| d.bg(palette.inset))
         };
         let toggle = button("media-toggle")
-            .child(icon(if state == Some(true) { "icons/pause.svg" } else { "icons/play.svg" }).size(px(15.)).text_color(palette.text))
+            .child(icon(if state == Some(true) { "icons/pause.svg" } else { "icons/play.svg" }).size(zpx(15.)).text_color(palette.text))
             .on_click(cx.listener(|this, _, _, cx| {
                 if let Some(playing) = &this.playing {
                     playing.state.toggle();
@@ -1087,14 +1096,14 @@ impl Timeline {
             .id("media-bar")
             .relative()
             .flex_1()
-            .min_w(px(60.))
-            .h(px(if waveform.is_some() { 24. } else { 14. }))
+            .min_w(zpx(60.))
+            .h(zpx(if waveform.is_some() { 24. } else { 14. }))
             .flex()
             .items_center()
             .cursor_pointer()
             .child(match waveform {
                 Some(samples) => wave(samples, fraction, palette),
-                None => div().w_full().h(px(4.)).rounded_full().bg(palette.inset).child(div().h_full().w(gpui::relative(fraction)).rounded_full().bg(palette.accent)).into_any_element(),
+                None => div().w_full().h(zpx(4.)).rounded_full().bg(palette.inset).child(div().h_full().w(gpui::relative(fraction)).rounded_full().bg(palette.accent)).into_any_element(),
             })
             // Where the bar was drawn, so a press on it knows how far along.
             .child(gpui::canvas(move |bounds, _, _| record.set(Some(bounds)), |_, _, _, _| {}).absolute().inset_0())
@@ -1140,11 +1149,11 @@ impl Timeline {
     /// length; once playing, its frames and the controls under them.
     fn video(&mut self, event: &EventItemDto, body: &str, media: &MediaInfoDto, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let (w, h) = crate::media::fit(media.width, media.height, (400., 320.), 120.);
-        let frame = div().relative().w(px(w)).h(px(h)).bg(gpui::black()).flex().items_center().justify_center().overflow_hidden();
+        let frame = div().relative().w(zpx(w)).h(zpx(h)).bg(gpui::black()).flex().items_center().justify_center().overflow_hidden();
         if self.is_playing(event) {
             #[cfg(target_os = "macos")]
             let picture = match &mut self.playing {
-                Some(InlineMedia { state: PlayState::Playing(player), .. }) => player.frame().map(|f| gpui::surface(f).w(px(w)).h(px(h)).into_any_element()),
+                Some(InlineMedia { state: PlayState::Playing(player), .. }) => player.frame().map(|f| gpui::surface(f).w(zpx(w)).h(zpx(h)).into_any_element()),
                 _ => None,
             };
             #[cfg(not(target_os = "macos"))]
@@ -1153,13 +1162,13 @@ impl Timeline {
             // Wide enough for the controls; a narrow video sits centred.
             let wide = w.max(300.);
             return v_flex()
-                .w(px(wide))
+                .w(zpx(wide))
                 .rounded(corner(16.))
                 .overflow_hidden()
                 .border_1()
                 .border_color(palette.border_subtle)
                 .bg(palette.card)
-                .child(frame.w(px(wide)).children(picture))
+                .child(frame.w(zpx(wide)).children(picture))
                 .child(div().px(space(8.)).py(space(5.)).child(controls))
                 .into_any_element();
         }
@@ -1175,25 +1184,25 @@ impl Timeline {
             .map(|d| match poster {
                 Some(poster) => d.child(img(poster).absolute().inset_0().size_full().object_fit(gpui::ObjectFit::Cover)),
                 // No poster: what it's called, where the picture would be.
-                None => d.child(div().absolute().top(px(10.)).left(px(12.)).right(px(12.)).truncate().text_size(text(12.)).text_color(palette.text_tertiary).child(body.clone())),
+                None => d.child(div().absolute().top(zpx(10.)).left(zpx(12.)).right(zpx(12.)).truncate().text_size(text(12.)).text_color(palette.text_tertiary).child(body.clone())),
             })
             .child(
                 div()
-                    .size(px(52.))
+                    .size(zpx(52.))
                     .rounded_full()
                     .bg(Hsla { a: 0.72, ..palette.app })
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(icon("icons/play.svg").size(px(22.)).text_color(palette.text)),
+                    .child(icon("icons/play.svg").size(zpx(22.)).text_color(palette.text)),
             )
             .children(length.map(|length| {
                 div()
                     .absolute()
-                    .right(px(8.))
-                    .bottom(px(8.))
+                    .right(zpx(8.))
+                    .bottom(zpx(8.))
                     .px(space(6.))
-                    .py(px(1.))
+                    .py(zpx(1.))
                     .rounded(corner(6.))
                     .bg(Hsla { a: 0.72, ..palette.app })
                     .font_family(palette.mono_font.clone())
@@ -1208,7 +1217,7 @@ impl Timeline {
     /// A sound or a voice message, as AudioBody: its icon, then play and
     /// the bar (or, once playing, the controls), then its length.
     fn audio(&mut self, event: &EventItemDto, body: &str, media: &MediaInfoDto, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        let glyph = icon(if media.is_voice { "icons/mic.svg" } else { "icons/music.svg" }).flex_none().size(px(16.)).text_color(palette.accent_secondary);
+        let glyph = icon(if media.is_voice { "icons/mic.svg" } else { "icons/music.svg" }).flex_none().size(zpx(16.)).text_color(palette.accent_secondary);
         let middle = if self.is_playing(event) {
             self.controls(media.duration_ms, media.waveform.as_deref().filter(|w| !w.is_empty()), false, palette, cx)
         } else {
@@ -1222,19 +1231,19 @@ impl Timeline {
                     div()
                         .id(SharedString::from(format!("audio/{}", event_key(&event))))
                         .flex_none()
-                        .size(px(28.))
+                        .size(zpx(28.))
                         .flex()
                         .items_center()
                         .justify_center()
                         .rounded_full()
                         .cursor_pointer()
                         .hover(|d| d.bg(palette.inset))
-                        .child(icon("icons/play.svg").size(px(15.)).text_color(palette.text))
+                        .child(icon("icons/play.svg").size(zpx(15.)).text_color(palette.text))
                         .on_click(cx.listener(move |this, _, _, cx| this.start_media(&event, &body, &media, false, cx))),
                 )
                 .child(match waveform {
-                    Some(samples) => div().flex_1().min_w(px(60.)).h(px(24.)).flex().items_center().child(wave(&samples, 0., palette)).into_any_element(),
-                    None => div().flex_1().min_w(px(60.)).h(px(4.)).rounded_full().bg(palette.inset).into_any_element(),
+                    Some(samples) => div().flex_1().min_w(zpx(60.)).h(zpx(24.)).flex().items_center().child(wave(&samples, 0., palette)).into_any_element(),
+                    None => div().flex_1().min_w(zpx(60.)).h(zpx(4.)).rounded_full().bg(palette.inset).into_any_element(),
                 })
                 .children(length.map(|ms| {
                     div().flex_none().font_family(palette.mono_font.clone()).text_size(text(10.5)).text_color(palette.text_tertiary).child(crate::views::content::duration(ms))
@@ -1242,8 +1251,8 @@ impl Timeline {
                 .into_any_element()
         };
         h_flex()
-            .mt(px(4.))
-            .w(px(340.))
+            .mt(zpx(4.))
+            .w(zpx(340.))
             .max_w_full()
             .gap(space(10.))
             .px(space(12.))
@@ -1284,7 +1293,7 @@ impl Timeline {
                     .w_full()
                     .text_color(if muted { palette.text_tertiary } else { palette.text })
                     .when(muted, |d| d.italic())
-                    .when(event.is_emoji_only, |d| d.text_size(px(32.)))
+                    .when(event.is_emoji_only, |d| d.text_size(zpx(32.)))
                     .child(text)
                     .into_any_element()
             }
@@ -1308,7 +1317,7 @@ impl Timeline {
                         .w_full()
                         .gap(space(10.))
                         .py(space(6.))
-                        .pl(px(40.) + space(12.) + space(8.))
+                        .pl(zpx(40.) + space(12.) + space(8.))
                         .text_size(text(12.))
                         .text_color(palette.text_tertiary)
                         .child(div().flex_1().min_w_0().child(line))
@@ -1319,8 +1328,8 @@ impl Timeline {
 
         let body = v_flex()
             .w_full()
-            .max_w(px(640.))
-            .text_size(px(14.5))
+            .max_w(zpx(640.))
+            .text_size(zpx(14.5))
             .line_height(gpui::relative(1.55))
             .child(self.body(event, palette, cx))
             .when(event.is_edited, |d| d.child(div().text_size(text(10.)).text_color(palette.text_tertiary).child("(edited)")));
@@ -1328,11 +1337,11 @@ impl Timeline {
         let reply = event.reply.as_ref().map(|reply| {
             let who = reply.sender_name.clone().or_else(|| reply.sender.clone()).unwrap_or_default();
             h_flex()
-                .mb(px(5.))
+                .mb(zpx(5.))
                 .gap(space(8.))
                 .px(space(11.))
                 .py(space(5.))
-                .max_w(px(520.))
+                .max_w(zpx(520.))
                 .rounded(corner(12.))
                 .bg(gpui::Hsla { a: 0.04, ..gpui::white() })
                 .border_l_2()
@@ -1363,7 +1372,7 @@ impl Timeline {
                     }
                 })
                 .collect();
-            h_flex().flex_wrap().gap(space(6.)).mt(px(7.)).children(chips)
+            h_flex().flex_wrap().gap(space(6.)).mt(zpx(7.)).children(chips)
         });
 
         let thread_target = event.event_id.clone();
@@ -1378,8 +1387,8 @@ impl Timeline {
                         this.store.update(cx, |s, cx| s.open_thread(Some(root), cx));
                     }
                 }))
-                .max_w(px(460.))
-                .mt(px(8.))
+                .max_w(zpx(460.))
+                .mt(zpx(8.))
                 .gap(space(8.))
                 .pl(space(8.))
                 .pr(space(12.))
@@ -1405,7 +1414,7 @@ impl Timeline {
                 .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(message.clone()).build(window, cx))
                 .child(
                     gpui_component::Icon::new(gpui_component::IconName::TriangleAlert)
-                        .size(px(12.))
+                        .size(zpx(12.))
                         .text_color(if shield.colour == horo_core::dto::ShieldColour::Red { palette.danger } else { palette.text_tertiary }),
                 )
         });
@@ -1413,7 +1422,7 @@ impl Timeline {
         let header = (!continues).then(|| {
             let (sender, hint) = (event.sender.clone(), event.sender_avatar.clone());
             h_flex()
-                .mb(px(3.))
+                .mb(zpx(3.))
                 .gap(space(8.))
                 .flex_wrap()
                 .child(
@@ -1440,13 +1449,13 @@ impl Timeline {
             .children(reactions)
             .children(thread)
             .when(failed, |c| {
-                c.child(div().mt(px(6.)).text_size(text(11.5)).text_color(palette.danger).child("couldn't send — it'll retry when you're back online"))
+                c.child(div().mt(zpx(6.)).text_size(text(11.5)).text_color(palette.danger).child("couldn't send — it'll retry when you're back online"))
             });
 
         let column = if continues {
             // The time, quietly, when the pointer is on the row.
             div()
-                .w(px(40.))
+                .w(zpx(40.))
                 .flex_none()
                 .flex()
                 .justify_center()
@@ -1459,11 +1468,11 @@ impl Timeline {
                 .child(time_label(event.timestamp))
                 .into_any_element()
         } else {
-            let picture = avatar(&event.sender, &name, event.sender_avatar.as_deref(), px(38.), cx);
+            let picture = avatar(&event.sender, &name, event.sender_avatar.as_deref(), zpx(38.), cx);
             let (sender, hint) = (event.sender.clone(), event.sender_avatar.clone());
             div()
                 .id(SharedString::from(format!("face/{}", event_key(event))))
-                .w(px(40.))
+                .w(zpx(40.))
                 .flex_none()
                 .flex()
                 .justify_center()
@@ -1515,11 +1524,11 @@ fn reaction(r: &ReactionDto, palette: &Palette, cx: &mut App) -> AnyElement {
     // A custom emoji reacts with its picture's mxc URI as the key.
     let key: AnyElement = if r.key.starts_with("mxc://") {
         match Media::image(&r.key, Some((40, 40)), cx) {
-            Some(image) => img(image).size(px(16.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
-            None => div().size(px(16.)).into_any_element(),
+            Some(image) => img(image).size(zpx(16.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
+            None => div().size(zpx(16.)).into_any_element(),
         }
     } else {
-        div().text_size(px(13.)).child(r.key.clone()).into_any_element()
+        div().text_size(zpx(13.)).child(r.key.clone()).into_any_element()
     };
     h_flex()
         .gap(space(6.))

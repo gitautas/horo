@@ -11,7 +11,7 @@
 
 use gpui::{
     AnyElement, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, StyledImage, Window, div, img, prelude::FluentBuilder, px,
+    StatefulInteractiveElement, Styled, StyledImage, Window, div, img, prelude::FluentBuilder,
 };
 use gpui_component::{h_flex, v_flex};
 use horo_core::{
@@ -24,6 +24,7 @@ use horo_core::{
 };
 use matrix_sdk::ruma::OwnedRoomId;
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     media::Media,
@@ -175,7 +176,7 @@ impl RoomInfo {
     }
 
     fn room_heading(&self, room: &RoomSummary, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        let picture = avatar(&room.id, &room.name, room.avatar_url.as_deref(), px(76.), cx);
+        let picture = avatar(&room.id, &room.name, room.avatar_url.as_deref(), zpx(76.), cx);
         let (store, mxc, name) = (self.store.clone(), room.avatar_url.clone(), room.name.clone());
         v_flex()
             .items_center()
@@ -195,7 +196,7 @@ impl RoomInfo {
             )
             .child(
                 div()
-                    .mt(px(12.))
+                    .mt(zpx(12.))
                     .max_w_full()
                     .truncate()
                     .font_family(palette.heading_font.clone())
@@ -221,7 +222,7 @@ impl RoomInfo {
         let cover = profile
             .and_then(|p| p.cover_url.clone())
             .and_then(|mxc| Media::image(&mxc, Some(((WIDTH * 2.) as u32, (COVER * 2.) as u32)), cx));
-        let cover = div().h(px(COVER)).w_full().bg(palette.raised).map(|d| match cover {
+        let cover = div().h(zpx(COVER)).w_full().bg(palette.raised).map(|d| match cover {
             Some(image) => d.child(img(image).size_full().object_fit(gpui::ObjectFit::Cover)),
             None => d,
         });
@@ -236,11 +237,11 @@ impl RoomInfo {
         let face = div()
             .relative()
             .self_start()
-            .p(px(3.))
-            .rounded(px(FACE / 3. + 3.))
+            .p(zpx(3.))
+            .rounded(zpx(FACE / 3. + 3.))
             .bg(palette.app)
-            .child(avatar(&partner.user_id, &name, mxc.as_deref(), px(FACE), cx))
-            .children(shown.map(|s| presence_dot(s, px(16.), palette.app, palette)));
+            .child(avatar(&partner.user_id, &name, mxc.as_deref(), zpx(FACE), cx))
+            .children(shown.map(|s| presence_dot(s, zpx(16.), palette.app, palette)));
         let bio = profile.and_then(|p| p.bio.clone()).filter(|b| !b.trim().is_empty());
 
         v_flex()
@@ -251,11 +252,11 @@ impl RoomInfo {
             .child(
                 v_flex()
                     .px(space(16.))
-                    .mt(px(-FACE / 2.))
+                    .mt(zpx(-FACE / 2.))
                     .child(face)
                     .child(
                         div()
-                            .mt(px(8.))
+                            .mt(zpx(8.))
                             .truncate()
                             .font_family(palette.heading_font.clone())
                             .font_weight(FontWeight::EXTRA_BOLD)
@@ -271,10 +272,10 @@ impl RoomInfo {
                             .text_color(palette.text_tertiary)
                             .child(partner.user_id.clone()),
                     )
-                    .children(line.map(|l| div().mt(px(4.)).text_size(text(11.5)).text_color(palette.text_secondary).child(l)))
+                    .children(line.map(|l| div().mt(zpx(4.)).text_size(text(11.5)).text_color(palette.text_secondary).child(l)))
                     .children(bio.map(|b| div().pt(space(12.)).text_size(text(12.5)).line_height(gpui::relative(1.55)).text_color(palette.text_secondary).child(b))),
             )
-            .child(div().h(px(16.)))
+            .child(div().h(zpx(16.)))
             .into_any_element()
     }
 
@@ -287,22 +288,22 @@ impl RoomInfo {
         let face = div()
             .relative()
             .flex_none()
-            .child(avatar(&member.user_id, &name, member.avatar_url.as_deref(), px(34.), cx))
-            .children(shown.map(|s| presence_dot(s, px(11.), palette.app, palette)));
+            .child(avatar(&member.user_id, &name, member.avatar_url.as_deref(), zpx(34.), cx))
+            .children(shown.map(|s| presence_dot(s, zpx(11.), palette.app, palette)));
         let (store, user, hint) = (self.store.clone(), member.user_id.clone(), member.avatar_url.clone());
         let open = move |click: &ClickEvent, _: &mut Window, cx: &mut gpui::App| {
             let (user, hint) = (user.clone(), hint.clone());
             store.update(cx, |s, cx| s.open_profile(user, click.position(), hint, cx));
         };
         let badge = if member.verification == Verification::Verified {
-            icon("icons/badge-check.svg").size(px(14.)).text_color(palette.accent).into_any_element()
+            icon("icons/badge-check.svg").size(zpx(14.)).text_color(palette.accent).into_any_element()
         } else {
             let user = member.user_id.clone();
             div()
                 .id(SharedString::from(format!("verify-{}", member.user_id)))
                 .cursor_pointer()
                 .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("verify this person").build(window, cx))
-                .child(icon("icons/badge-question-mark.svg").size(px(14.)).text_color(palette.text_tertiary))
+                .child(icon("icons/badge-question-mark.svg").size(zpx(14.)).text_color(palette.text_tertiary))
                 .on_click(cx.listener(move |this, _, _, cx| this.verify(user.clone(), cx)))
                 .into_any_element()
         };
@@ -358,10 +359,10 @@ fn encryption_card(room: &RoomSummary, unverified: usize, total: usize, palette:
     let title = |icon_path: &'static str, colour: Hsla, words: String| {
         h_flex()
             .gap(space(8.))
-            .child(icon(icon_path).size(px(16.)).text_color(colour))
+            .child(icon(icon_path).size(zpx(16.)).text_color(colour))
             .child(div().font_family(palette.heading_font.clone()).font_weight(FontWeight::BOLD).text_size(heading(14.)).child(words))
     };
-    let body = |words: String| div().mt(px(5.)).text_size(text(12.5)).line_height(gpui::relative(1.5)).text_color(palette.text_secondary).child(words);
+    let body = |words: String| div().mt(zpx(5.)).text_size(text(12.5)).line_height(gpui::relative(1.5)).text_color(palette.text_secondary).child(words);
     if !room.is_encrypted {
         return card
             .border_color(Hsla { a: 0.3, ..palette.accent })
@@ -385,7 +386,7 @@ fn encryption_card(room: &RoomSummary, unverified: usize, total: usize, palette:
         .child(
             h_flex()
                 .gap(space(6.))
-                .mt(px(10.))
+                .mt(zpx(10.))
                 .font_family(palette.mono_font.clone())
                 .text_size(text(10.5))
                 .text_color(palette.text_tertiary)
@@ -417,7 +418,7 @@ impl Render for RoomInfo {
         let muted = room.is_muted;
         let mute_button = div()
             .id("info-mute")
-            .size(px(28.))
+            .size(zpx(28.))
             .flex()
             .items_center()
             .justify_center()
@@ -430,7 +431,7 @@ impl Render for RoomInfo {
             .tooltip(move |window, cx| {
                 gpui_component::tooltip::Tooltip::new(if muted { "unmute notifications" } else { "mute notifications" }).build(window, cx)
             })
-            .child(icon(if muted { "icons/bell-off.svg" } else { "icons/bell.svg" }).size(px(13.)).text_color(if muted {
+            .child(icon(if muted { "icons/bell-off.svg" } else { "icons/bell.svg" }).size(zpx(13.)).text_color(if muted {
                 palette.idle
             } else {
                 palette.text_secondary
@@ -461,7 +462,7 @@ impl Render for RoomInfo {
         div()
             .relative()
             .flex_none()
-            .w(px(width))
+            .w(zpx(width))
             .child(crate::views::shell::resize_handle(crate::views::shell::Pane::InfoPanel, &palette))
             .h_full()
             .border_l_1()
@@ -482,7 +483,7 @@ impl Render for RoomInfo {
                         }))
                     })
                     .child(encryption_card(&room, unverified, total, &palette))
-                    .children(self.error.clone().map(|e| div().mt(px(10.)).text_size(text(12.)).text_color(palette.danger).child(e)))
+                    .children(self.error.clone().map(|e| div().mt(zpx(10.)).text_size(text(12.)).text_color(palette.danger).child(e)))
                     .child(
                         div()
                             .px(space(4.))
@@ -502,14 +503,14 @@ impl Render for RoomInfo {
             .child(
                 h_flex()
                     .absolute()
-                    .top(px(14.))
-                    .right(px(14.))
+                    .top(zpx(14.))
+                    .right(zpx(14.))
                     .gap(space(6.))
                     .child(mute_button)
                     .child(
                         div()
                             .id("info-settings")
-                            .size(px(28.))
+                            .size(zpx(28.))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -520,7 +521,7 @@ impl Render for RoomInfo {
                             .border_1()
                             .border_color(palette.border_subtle)
                             .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("room settings").build(window, cx))
-                            .child(icon("icons/pencil.svg").size(px(13.)).text_color(palette.text_secondary))
+                            .child(icon("icons/pencil.svg").size(zpx(13.)).text_color(palette.text_secondary))
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(OpenRoomSettings))),
                     ),
             )

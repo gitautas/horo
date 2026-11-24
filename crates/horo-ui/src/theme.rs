@@ -116,21 +116,55 @@ pub const LABEL_SCALE: f32 = 1.45;
 pub const DENSITY: f32 = 0.78;
 pub const RADIUS_SCALE: f32 = 0.45;
 
+/// The whole window's zoom, as a factor (1 is the design's own size), as
+/// the WebView build's page zoom: every size below is multiplied by it,
+/// and so is the rem gpui-component sizes its widgets in.
+static ZOOM: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000); // 1.0
+
+/// The range zoom covers, and one step of it (⌘= / ⌘-).
+pub const ZOOM_MIN: f32 = 0.5;
+pub const ZOOM_MAX: f32 = 2.;
+pub const ZOOM_STEP: f32 = 0.1;
+
+pub fn zoom() -> f32 {
+    f32::from_bits(ZOOM.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+pub fn set_zoom(zoom: f32) {
+    ZOOM.store(zoom.clamp(ZOOM_MIN, ZOOM_MAX).to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The zoom one shortcut press away, on the step grid, clamped.
+pub fn step_zoom(zoom: f32, up: bool) -> f32 {
+    let next = ((zoom + if up { ZOOM_STEP } else { -ZOOM_STEP }) / ZOOM_STEP).round() * ZOOM_STEP;
+    next.clamp(ZOOM_MIN, ZOOM_MAX)
+}
+
+/// gpui's rem at this zoom (its default is 16 px).
+pub fn rem() -> Pixels {
+    px(16. * zoom())
+}
+
+/// A size in the design's pixels, zoomed.
+pub fn zpx(size: f32) -> Pixels {
+    px(size * zoom())
+}
+
 pub fn text(size: f32) -> Pixels {
-    px(size * TEXT_SCALE)
+    zpx(size * TEXT_SCALE)
 }
 pub fn heading(size: f32) -> Pixels {
-    px(size * TEXT_SCALE * HEADING_SCALE)
+    zpx(size * TEXT_SCALE * HEADING_SCALE)
 }
 /// Section labels: the heading face, a size up.
 pub fn label(size: f32) -> Pixels {
-    px(size * TEXT_SCALE * LABEL_SCALE)
+    zpx(size * TEXT_SCALE * LABEL_SCALE)
 }
 pub fn space(size: f32) -> Pixels {
-    px(size * DENSITY)
+    zpx(size * DENSITY)
 }
 pub fn corner(size: f32) -> Pixels {
-    px(size * RADIUS_SCALE)
+    zpx(size * RADIUS_SCALE)
 }
 
 /// Load the fonts, make the palette global, and dress gpui-component in it.
@@ -181,4 +215,22 @@ pub fn install(cx: &mut App) {
 
     palette.mono_font = theme.mono_font_family.clone();
     cx.set_global(palette);
+}
+
+#[cfg(test)]
+mod zoom_tests {
+    use super::*;
+
+    #[test]
+    fn zoom_steps_on_a_grid_and_stops_at_the_ends() {
+        let mut zoom = 1.;
+        for _ in 0..3 {
+            zoom = step_zoom(zoom, true);
+        }
+        assert!((zoom - 1.3).abs() < 1e-5);
+        assert_eq!(step_zoom(2., true), 2.);
+        assert_eq!(step_zoom(0.5, false), 0.5);
+        // Off the grid (a slider's 1.04) snaps onto it.
+        assert!((step_zoom(1.04, true) - 1.1).abs() < 1e-5);
+    }
 }

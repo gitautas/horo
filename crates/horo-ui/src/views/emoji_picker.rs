@@ -15,7 +15,6 @@ use gpui::{AppContext as _, StyledImage as _};
 use gpui::{
     AnyElement, Context, Entity, EventEmitter, FocusHandle, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ListAlignment,
     ListOffset, ListState, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, div, list, prelude::FluentBuilder,
-    px,
 };
 use gpui_component::{
     h_flex,
@@ -23,6 +22,7 @@ use gpui_component::{
     v_flex,
 };
 
+use crate::theme::zpx;
 use crate::{
     emoji::{self, SkinTone, TONE_SAMPLES},
     media::Media,
@@ -78,8 +78,8 @@ fn face(draw: &Draw, size: f32, cx: &mut gpui::App) -> AnyElement {
     match draw {
         Draw::Text(text) => div().child(text.clone()).into_any_element(),
         Draw::Image(mxc) => match Media::image(mxc, Some((64, 64)), cx) {
-            Some(image) => gpui::img(image).size(px(size)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
-            None => div().size(px(size)).into_any_element(),
+            Some(image) => gpui::img(image).size(zpx(size)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
+            None => div().size(zpx(size)).into_any_element(),
         },
     }
 }
@@ -120,7 +120,7 @@ impl EmojiPicker {
         let mut picker = EmojiPicker {
             store,
             search,
-            list: ListState::new(0, ListAlignment::Top, px(300.)),
+            list: ListState::new(0, ListAlignment::Top, zpx(300.)),
             rows: Rc::new(Vec::new()),
             sections: Vec::new(),
             hovered: None,
@@ -217,7 +217,7 @@ impl EmojiPicker {
     }
 
     fn jump_to(&mut self, row: usize, cx: &mut Context<Self>) {
-        self.list.scroll_to(ListOffset { item_ix: row, offset_in_item: px(0.) });
+        self.list.scroll_to(ListOffset { item_ix: row, offset_in_item: zpx(0.) });
         cx.notify();
     }
 
@@ -245,7 +245,7 @@ impl EmojiPicker {
                         div()
                             .id(("emoji", ix * COLUMNS + col))
                             .flex_1()
-                            .h(px(CELL))
+                            .h(zpx(CELL))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -265,7 +265,7 @@ impl EmojiPicker {
                 }
                 // A short last row keeps its cells the grid's width.
                 for _ in cells.len()..COLUMNS {
-                    row = row.child(div().flex_1().h(px(CELL)));
+                    row = row.child(div().flex_1().h(zpx(CELL)));
                 }
                 row.into_any_element()
             }
@@ -285,7 +285,7 @@ impl EmojiPicker {
             swatches = swatches.child(
                 div()
                     .id(("tone", i))
-                    .size(px(20.))
+                    .size(zpx(20.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -308,7 +308,7 @@ impl EmojiPicker {
             .border_t_1()
             .border_color(palette.border_subtle)
             .bg(palette.card)
-            .child(div().w(px(20.)).flex().justify_center().text_size(text(17.)).child(shown))
+            .child(div().w(zpx(20.)).flex().justify_center().text_size(text(17.)).child(shown))
             .child(div().flex_1().min_w_0().truncate().text_size(text(11.5)).text_color(palette.text_secondary).child(label))
             .child(swatches)
             .into_any_element()
@@ -326,7 +326,7 @@ impl Render for EmojiPicker {
                 div()
                     .id(("rail", i))
                     .flex_1()
-                    .h(px(26.))
+                    .h(zpx(26.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -334,7 +334,7 @@ impl Render for EmojiPicker {
                     .cursor_pointer()
                     .hover(|d| d.bg(Hsla { a: 0.07, ..gpui::white() }))
                     .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(title.clone()).build(window, cx))
-                    .child(icon(path).size(px(14.)).text_color(palette.text_tertiary))
+                    .child(icon(path).size(zpx(14.)).text_color(palette.text_tertiary))
                     .on_click(cx.listener(move |this, _, _, cx| this.jump_to(row, cx))),
             );
         }
@@ -356,8 +356,8 @@ impl Render for EmojiPicker {
             // Clicks stop here rather than reaching the timeline under it.
             .occlude()
             .track_focus(&self.focus)
-            .w(px(WIDTH))
-            .h(px(HEIGHT))
+            .w(zpx(WIDTH))
+            .h(zpx(HEIGHT))
             .overflow_hidden()
             .rounded(corner(20.))
             .border_1()
@@ -383,7 +383,7 @@ impl Render for EmojiPicker {
                         .bg(palette.card)
                         .border_1()
                         .border_color(palette.border_subtle)
-                        .child(icon("icons/search.svg").size(px(13.)).text_color(palette.text_tertiary))
+                        .child(icon("icons/search.svg").size(zpx(13.)).text_color(palette.text_tertiary))
                         .child(div().flex_1().min_w_0().text_size(text(13.)).child(Input::new(&self.search).appearance(false))),
                 ),
             )

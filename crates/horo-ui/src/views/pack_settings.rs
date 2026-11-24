@@ -16,7 +16,7 @@ type Job = Pin<Box<dyn Future<Output = horo_core::Result<()>> + Send>>;
 
 use gpui::{
     AnyElement, AppContext as _, AsyncWindowContext, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, StyledImage, WeakEntity, Window, div, img, prelude::FluentBuilder, px,
+    SharedString, StatefulInteractiveElement, Styled, StyledImage, WeakEntity, Window, div, img, prelude::FluentBuilder,
 };
 use gpui_component::{
     Disableable, Sizable,
@@ -31,6 +31,7 @@ use horo_core::matrix::{
     profile,
 };
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     media::Media,
@@ -268,8 +269,8 @@ impl PackSettings {
 
     fn thumb(image: &PackImageDto, size: f32, cx: &mut Context<Self>) -> AnyElement {
         match Media::image(&image.url, Some(((size * 2.) as u32, (size * 2.) as u32)), cx) {
-            Some(picture) => img(picture).flex_none().size(px(size)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
-            None => div().flex_none().size(px(size)).into_any_element(),
+            Some(picture) => img(picture).flex_none().size(zpx(size)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
+            None => div().flex_none().size(zpx(size)).into_any_element(),
         }
     }
 
@@ -303,7 +304,7 @@ impl PackSettings {
             .flex_wrap()
             .gap(space(10.))
             .p(space(12.))
-            .mb(px(12.))
+            .mb(zpx(12.))
             .rounded(corner(16.))
             .bg(palette.inset)
             .border_1()
@@ -312,7 +313,7 @@ impl PackSettings {
             .child(
                 h_flex()
                     .flex_1()
-                    .min_w(px(160.))
+                    .min_w(zpx(160.))
                     .gap(space(4.))
                     .font_family(palette.mono_font.clone())
                     .child(div().text_color(palette.text_tertiary).child(":"))
@@ -331,7 +332,7 @@ impl PackSettings {
                     .p(space(6.))
                     .cursor_pointer()
                     .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(format!("remove :{code}:")).build(window, cx))
-                    .child(icon("icons/trash.svg").size(px(15.)).text_color(palette.danger))
+                    .child(icon("icons/trash.svg").size(zpx(15.)).text_color(palette.danger))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let shortcode = this.editing.take().map(|(_, s, _)| s).unwrap_or_default();
                         this.run_edit(t3.clone(), PackEdit::RemoveImage { shortcode }, window, cx)
@@ -366,11 +367,11 @@ impl PackSettings {
                 "shared with everyone in that room."
             };
             let reach = if pack.everywhere { "on in every room." } else { "on in that room only, until you turn it on everywhere." };
-            div().mt(px(-8.)).mb(px(12.)).text_size(text(12.)).line_height(gpui::relative(1.5)).text_color(palette.text_tertiary).child(format!("{whose} {reach}"))
+            div().mt(zpx(-8.)).mb(zpx(12.)).text_size(text(12.)).line_height(gpui::relative(1.5)).text_color(palette.text_tertiary).child(format!("{whose} {reach}"))
         });
 
         let editing = self.editing.clone().filter(|(p, _, _)| *p == pack.id);
-        let mut grid = h_flex().flex_wrap().gap(space(6.)).mb(px(12.));
+        let mut grid = h_flex().flex_wrap().gap(space(6.)).mb(zpx(12.));
         for image in &pack.images {
             let on = editing.as_ref().is_some_and(|(_, s, _)| *s == image.shortcode);
             let face = Self::thumb(image, 38., cx);
@@ -379,7 +380,7 @@ impl PackSettings {
             grid = grid.child(
                 div()
                     .id(SharedString::from(format!("img-{}-{}", pack.id, image.shortcode)))
-                    .size(px(56.))
+                    .size(zpx(56.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -408,8 +409,8 @@ impl PackSettings {
             .child(
                 h_flex()
                     .gap(space(10.))
-                    .mb(px(14.))
-                    .child(icon(if pack.source == PackSource::User { "icons/circle-user.svg" } else { "icons/users.svg" }).size(px(17.)).text_color(palette.accent))
+                    .mb(zpx(14.))
+                    .child(icon(if pack.source == PackSource::User { "icons/circle-user.svg" } else { "icons/users.svg" }).size(zpx(17.)).text_color(palette.accent))
                     .child(title)
                     .children(everywhere),
             )
@@ -439,7 +440,7 @@ impl PackSettings {
 
     fn new_pack(&mut self, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let card = || v_flex().p(space(16.)).rounded(corner(20.)).bg(palette.card).border_1().border_color(palette.border_subtle);
-        let hint = |words: &'static str| div().mt(px(10.)).text_size(text(12.)).line_height(gpui::relative(1.5)).text_color(palette.text_tertiary).child(words);
+        let hint = |words: &'static str| div().mt(zpx(10.)).text_size(text(12.)).line_height(gpui::relative(1.5)).text_color(palette.text_tertiary).child(words);
         let mine_ready = !self.new_mine.read(cx).value().trim().is_empty() && !self.busy;
         let mine = card()
             .child(label(palette, "NEW PACK OF YOUR OWN"))
@@ -461,7 +462,7 @@ impl PackSettings {
         let in_room = (!self.rooms.is_empty()).then(|| {
             let chosen = self.new_room.clone();
             let ready = chosen.is_some() && !self.new_room_name.read(cx).value().trim().is_empty() && !self.busy;
-            let mut chips = h_flex().flex_wrap().gap(space(6.)).mb(px(10.));
+            let mut chips = h_flex().flex_wrap().gap(space(6.)).mb(zpx(10.));
             for room in &self.rooms {
                 let on = chosen.as_deref() == Some(room.id.as_str());
                 let id = room.id.clone();
@@ -508,7 +509,7 @@ impl PackSettings {
 impl Render for PackSettings {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = cx.global::<Palette>().clone();
-        let heading_el = div().pt_2().font_family(palette.heading_font.clone()).text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child("emotes & stickers");
+        let heading_el = div().pt_2().font_family(palette.heading_font.clone()).text_size(zpx(22.)).font_weight(FontWeight::SEMIBOLD).child("emotes & stickers");
         let Some(all) = self.packs.clone() else {
             return v_flex().gap(space(12.)).child(heading_el).child(div().py(space(40.)).text_center().text_color(palette.text_tertiary).child("loading…")).into_any_element();
         };

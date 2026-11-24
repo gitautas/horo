@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use gpui::{
     AnyElement, AppContext as _, Context, Entity, EventEmitter, FocusHandle, FontWeight, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     h_flex,
@@ -15,6 +15,7 @@ use gpui_component::{
 };
 use horo_core::matrix::rooms::{self, NewRoom};
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     store::Store,
@@ -205,13 +206,13 @@ impl CreateRoom {
         h_flex()
             .items_start()
             .gap(space(12.))
-            .mb(px(14.))
+            .mb(zpx(14.))
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
                     .child(div().font_family(palette.heading_font.clone()).font_weight(FontWeight::BOLD).text_size(heading(13.5)).child(title))
-                    .child(div().mt(px(2.)).text_size(text(12.)).line_height(gpui::relative(1.45)).text_color(palette.text_tertiary).child(hint)),
+                    .child(div().mt(zpx(2.)).text_size(text(12.)).line_height(gpui::relative(1.45)).text_color(palette.text_tertiary).child(hint)),
             )
             .child(div().pt(space(2.)).child(Switch::new(id).checked(on).on_click(cx.listener(move |this, checked: &bool, _, cx| {
                 set(this, *checked);
@@ -221,7 +222,7 @@ impl CreateRoom {
     }
 
     fn hint(words: impl Into<SharedString>, palette: &Palette) -> gpui::Div {
-        div().mt(px(6.)).text_size(text(11.5)).line_height(gpui::relative(1.45)).text_color(palette.text_tertiary).child(words.into())
+        div().mt(zpx(6.)).text_size(text(11.5)).line_height(gpui::relative(1.45)).text_color(palette.text_tertiary).child(words.into())
     }
 
     fn create_form(&mut self, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
@@ -243,7 +244,7 @@ impl CreateRoom {
         } else {
             "your homeserver can read everything sent here. you can't turn encryption on later."
         };
-        let field = |words: &str, child: AnyElement| v_flex().mb(px(14.)).child(label(palette, &words.to_uppercase())).child(child);
+        let field = |words: &str, child: AnyElement| v_flex().mb(zpx(14.)).child(label(palette, &words.to_uppercase())).child(child);
 
         v_flex()
             .child(field(
@@ -304,7 +305,7 @@ impl CreateRoom {
                 )
             }))
             .child(
-                h_flex().justify_end().mt(px(22.)).child(
+                h_flex().justify_end().mt(zpx(22.)).child(
                     accent_button("create-make", if self.busy { "making it…" } else { "make it" }, can_make, false, palette)
                         .on_click(cx.listener(|this, _, _, cx| this.create(cx))),
                 ),
@@ -317,9 +318,9 @@ impl CreateRoom {
         v_flex()
             .child(label(palette, "ADDRESS OR ID"))
             .child(well(palette).child(div().flex_1().child(Input::new(&self.address).appearance(false))))
-            .child(div().mt(px(10.)).text_size(text(12.)).line_height(gpui::relative(1.5)).text_color(palette.text_tertiary).child("an alias like #uwu:m.uwu.lt, or a room id if someone gave you one."))
+            .child(div().mt(zpx(10.)).text_size(text(12.)).line_height(gpui::relative(1.5)).text_color(palette.text_tertiary).child("an alias like #uwu:m.uwu.lt, or a room id if someone gave you one."))
             .child(
-                h_flex().justify_end().mt(px(22.)).child(
+                h_flex().justify_end().mt(zpx(22.)).child(
                     accent_button("join-go", if self.busy { "joining…" } else { "join" }, can_join, false, palette)
                         .on_click(cx.listener(|this, _, _, cx| this.join(cx))),
                 ),
@@ -334,7 +335,7 @@ impl Render for CreateRoom {
         let mode = self.mode;
         let tabs = h_flex()
             .gap(space(6.))
-            .mb(px(20.))
+            .mb(zpx(20.))
             .child(self.tab("mode-create", "make one", mode == Mode::Create, &palette).on_click(cx.listener(|this, _, window, cx| {
                 this.mode = Mode::Create;
                 this.name.update(cx, |s, cx| s.focus(window, cx));
@@ -352,7 +353,7 @@ impl Render for CreateRoom {
         };
         let body = v_flex()
             .child(tabs)
-            .children(self.error.clone().map(|e| div().mb(px(12.)).text_size(text(12.5)).text_color(palette.danger).child(e)))
+            .children(self.error.clone().map(|e| div().mb(zpx(12.)).text_size(text(12.5)).text_color(palette.danger).child(e)))
             .child(form)
             .into_any_element();
         let this = cx.weak_entity();

@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use gpui::{
     AnyElement, App, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled, div,
-    prelude::FluentBuilder, px,
+    prelude::FluentBuilder,
 };
 use gpui_component::{
     Icon,
@@ -23,6 +23,7 @@ use gpui_component::{
 };
 use horo_core::dto::RoomSummary;
 
+use crate::theme::zpx;
 use crate::{
     call::{CallStatus, CallView, user_of},
     store::{Known, Store},
@@ -181,7 +182,7 @@ pub fn panel(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<A
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .child(h_flex().gap_2().child(div().flex_none().size(px(8.)).rounded_full().bg(colour)).child(div().truncate().text_sm().text_color(colour).child(status)))
+                    .child(h_flex().gap_2().child(div().flex_none().size(zpx(8.)).rounded_full().bg(colour)).child(div().truncate().text_sm().text_color(colour).child(status)))
                     .child(
                         div()
                             .id("call-room")
@@ -216,15 +217,15 @@ pub fn roster(room: &RoomSummary, store: &Entity<Store>, palette: &Palette, cx: 
     }
     let mut rows = Vec::new();
     for person in people {
-        let face = avatar(&person.user_id, &person.real_name, person.avatar.as_deref(), px(20.), cx);
+        let face = avatar(&person.user_id, &person.real_name, person.avatar.as_deref(), zpx(20.), cx);
         rows.push(
             h_flex()
                 .gap_2()
-                .pl(px(40.))
-                .py(px(2.))
+                .pl(zpx(40.))
+                .py(zpx(2.))
                 .child(div().flex_none().rounded_full().border_2().border_color(if person.speaking { palette.online } else { gpui::transparent_black() }).child(face))
                 .child(div().truncate().text_xs().text_color(if person.speaking { palette.text } else { palette.text_secondary }).child(person.name))
-                .when(person.muted, |row| row.child(icon("icons/mic-off.svg").size(px(12.)).text_color(palette.text_tertiary))),
+                .when(person.muted, |row| row.child(icon("icons/mic-off.svg").size(zpx(12.)).text_color(palette.text_tertiary))),
         );
     }
     Some(v_flex().pb_1().children(rows).into_any_element())
@@ -264,25 +265,25 @@ pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut A
             tiles.push(video_tile(picture, &person, palette).into_any_element());
             continue;
         }
-        let face = avatar(&person.user_id, &person.real_name, person.avatar.as_deref(), px(56.), cx);
+        let face = avatar(&person.user_id, &person.real_name, person.avatar.as_deref(), zpx(56.), cx);
         tiles.push(
             v_flex()
-                .w(px(96.))
+                .w(zpx(96.))
                 .py_2()
                 .gap_1()
                 .items_center()
-                .rounded(px(16.))
+                .rounded(zpx(16.))
                 .bg(palette.card)
                 .child(
                     div()
                         .rounded_full()
-                        .p(px(2.))
+                        .p(zpx(2.))
                         .border_2()
                         .border_color(if person.speaking { palette.online } else { gpui::transparent_black() })
                         .child(face),
                 )
-                .child(h_flex().gap_1().max_w(px(88.)).child(div().truncate().text_xs().child(person.name)).when(person.muted, |row| {
-                    row.child(icon("icons/mic-off.svg").size(px(12.)).text_color(palette.danger))
+                .child(h_flex().gap_1().max_w(zpx(88.)).child(div().truncate().text_xs().child(person.name)).when(person.muted, |row| {
+                    row.child(icon("icons/mic-off.svg").size(zpx(12.)).text_color(palette.danger))
                 }))
                 .into_any_element(),
         );
@@ -316,22 +317,22 @@ fn screen_tile(picture: AnyElement, label: &str, person: &Person, palette: &Pale
     div()
         .id(gpui::SharedString::from(format!("screen-{}", person.identity.as_deref().unwrap_or(&person.user_id))))
         .relative()
-        .w(px(SCREEN_W))
-        .h(px(SCREEN_H))
-        .rounded(px(16.))
+        .w(zpx(SCREEN_W))
+        .h(zpx(SCREEN_H))
+        .rounded(zpx(16.))
         .overflow_hidden()
         .bg(Hsla::black())
         .child(picture)
         .child(
             div()
                 .absolute()
-                .left(px(6.))
-                .bottom(px(6.))
-                .px(px(6.))
-                .py(px(2.))
-                .rounded(px(8.))
+                .left(zpx(6.))
+                .bottom(zpx(6.))
+                .px(zpx(6.))
+                .py(zpx(2.))
+                .rounded(zpx(8.))
                 .bg(Hsla { a: 0.65, ..palette.app })
-                .max_w(px(SCREEN_W - 12.))
+                .max_w(zpx(SCREEN_W - 12.))
                 .truncate()
                 .text_xs()
                 .child(label.to_owned()),
@@ -343,16 +344,16 @@ fn screen_tile(picture: AnyElement, label: &str, person: &Person, palette: &Pale
 fn sharing_tile(palette: &Palette) -> gpui::Stateful<gpui::Div> {
     v_flex()
         .id("sharing-you")
-        .w(px(VIDEO_W))
-        .h(px(VIDEO_H))
+        .w(zpx(VIDEO_W))
+        .h(zpx(VIDEO_H))
         .gap_2()
         .items_center()
         .justify_center()
-        .rounded(px(16.))
+        .rounded(zpx(16.))
         .bg(palette.card)
         .border_1()
         .border_color(palette.accent)
-        .child(icon("icons/screen-share.svg").size(px(28.)).text_color(palette.accent))
+        .child(icon("icons/screen-share.svg").size(zpx(28.)).text_color(palette.accent))
         .child(div().text_xs().text_color(palette.text_secondary).child("you're sharing your screen"))
 }
 
@@ -376,14 +377,14 @@ fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str, width: f32,
     })?;
     // A screen is shown whole (its edges matter); a face can be cropped.
     let fit = if width > VIDEO_W { gpui::ObjectFit::Contain } else { gpui::ObjectFit::Cover };
-    Some(gpui::surface(buffer).w(px(width)).h(px(height)).object_fit(fit).into_any_element())
+    Some(gpui::surface(buffer).w(zpx(width)).h(zpx(height)).object_fit(fit).into_any_element())
 }
 
 /// What our camera sees now.
 #[cfg(target_os = "macos")]
 fn own_camera(store: &Entity<Store>, cx: &mut App) -> Option<AnyElement> {
     let buffer = store.update(cx, |s, _| s.call_live.as_mut()?.camera.as_mut()?.mirrored_frame())?;
-    Some(gpui::surface(buffer).w(px(VIDEO_W)).h(px(VIDEO_H)).object_fit(gpui::ObjectFit::Cover).into_any_element())
+    Some(gpui::surface(buffer).w(zpx(VIDEO_W)).h(zpx(VIDEO_H)).object_fit(gpui::ObjectFit::Cover).into_any_element())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -401,9 +402,9 @@ fn video_tile(picture: AnyElement, person: &Person, palette: &Palette) -> gpui::
     div()
         .id(gpui::SharedString::from(format!("video-{}", person.identity.as_deref().unwrap_or(&person.user_id))))
         .relative()
-        .w(px(VIDEO_W))
-        .h(px(VIDEO_H))
-        .rounded(px(16.))
+        .w(zpx(VIDEO_W))
+        .h(zpx(VIDEO_H))
+        .rounded(zpx(16.))
         .overflow_hidden()
         .bg(palette.inset)
         .border_2()
@@ -412,16 +413,16 @@ fn video_tile(picture: AnyElement, person: &Person, palette: &Palette) -> gpui::
         .child(
             h_flex()
                 .absolute()
-                .left(px(6.))
-                .bottom(px(6.))
+                .left(zpx(6.))
+                .bottom(zpx(6.))
                 .gap_1()
-                .px(px(6.))
-                .py(px(2.))
-                .rounded(px(8.))
+                .px(zpx(6.))
+                .py(zpx(2.))
+                .rounded(zpx(8.))
                 .bg(Hsla { a: 0.65, ..palette.app })
-                .max_w(px(VIDEO_W - 12.))
+                .max_w(zpx(VIDEO_W - 12.))
                 .child(div().truncate().text_xs().child(person.name.clone()))
-                .when(person.muted, |row| row.child(icon("icons/mic-off.svg").size(px(12.)).text_color(palette.danger))),
+                .when(person.muted, |row| row.child(icon("icons/mic-off.svg").size(zpx(12.)).text_color(palette.danger))),
         )
 }
 
@@ -437,23 +438,23 @@ pub fn ringing(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option
     let incoming = state.incoming.clone()?;
     let room = state.rooms.iter().find(|r| r.id == incoming.room_id).cloned();
     let name = room.as_ref().map(|r| r.name.clone()).unwrap_or_else(|| incoming.room_id.clone());
-    let picture = avatar(&incoming.room_id, &name, room.as_ref().and_then(|r| r.avatar_url.as_deref()), px(72.), cx);
+    let picture = avatar(&incoming.room_id, &name, room.as_ref().and_then(|r| r.avatar_url.as_deref()), zpx(72.), cx);
     let (answer, decline) = (store.clone(), store.clone());
     Some(
         scrim(palette)
             .child(
                 v_flex()
-                    .w(px(320.))
+                    .w(zpx(320.))
                     .p_6()
                     .gap_4()
                     .items_center()
-                    .rounded(px(24.))
+                    .rounded(zpx(24.))
                     .bg(palette.card)
                     .border_1()
                     .border_color(Hsla { a: 0.5, ..palette.online })
                     .shadow_lg()
                     .child(picture)
-                    .child(div().font_family(palette.heading_font.clone()).text_size(px(24.)).font_weight(FontWeight::SEMIBOLD).child(name))
+                    .child(div().font_family(palette.heading_font.clone()).text_size(zpx(24.)).font_weight(FontWeight::SEMIBOLD).child(name))
                     .child(div().text_sm().text_color(palette.text_secondary).child("is calling you~"))
                     .child(
                         h_flex()

@@ -10,7 +10,7 @@
 
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    StyledImage, WeakEntity, Window, div, img, prelude::FluentBuilder, px,
+    StyledImage, WeakEntity, Window, div, img, prelude::FluentBuilder,
 };
 use gpui_component::{
     h_flex, v_flex,
@@ -22,6 +22,7 @@ use horo_core::{
 };
 use matrix_sdk::ruma::OwnedRoomId;
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     media::Media,
@@ -514,12 +515,12 @@ impl Composer {
             self.levels.pop_front();
         }
         let secs = elapsed.as_secs();
-        let mut meter = h_flex().flex_1().min_w_0().h(px(24.)).items_center().justify_end().gap(px(2.));
+        let mut meter = h_flex().flex_1().min_w_0().h(zpx(24.)).items_center().justify_end().gap(zpx(2.));
         for _ in self.levels.len()..METER_BARS {
-            meter = meter.child(div().w(px(3.)).h(px(3.)).rounded_full().bg(palette.border));
+            meter = meter.child(div().w(zpx(3.)).h(zpx(3.)).rounded_full().bg(palette.border));
         }
         for level in &self.levels {
-            meter = meter.child(div().w(px(3.)).h(px(3. + 19. * level)).rounded_full().bg(palette.danger));
+            meter = meter.child(div().w(zpx(3.)).h(zpx(3. + 19. * level)).rounded_full().bg(palette.danger));
         }
         h_flex()
             .flex_1()
@@ -528,7 +529,7 @@ impl Composer {
             .child(
                 div()
                     .id("recording-cancel")
-                    .size(px(38.))
+                    .size(zpx(38.))
                     .flex_none()
                     .rounded_full()
                     .flex()
@@ -541,7 +542,7 @@ impl Composer {
                     .child("✕")
                     .on_click(cx.listener(|this, _, window, cx| this.cancel_recording(window, cx))),
             )
-            .child(div().flex_none().size(px(9.)).rounded_full().bg(palette.danger))
+            .child(div().flex_none().size(zpx(9.)).rounded_full().bg(palette.danger))
             .child(div().flex_none().font_family(palette.mono_font.clone()).text_size(text(13.)).child(format!("{}:{:02}", secs / 60, secs % 60)))
             .map(|row| {
                 if starting {
@@ -754,11 +755,11 @@ impl Composer {
                 Some(source) => img(source.clone()).size_full().object_fit(gpui::ObjectFit::Cover).into_any_element(),
                 None => v_flex()
                     .size_full()
-                    .p(px(6.))
+                    .p(zpx(6.))
                     .gap_1()
                     .items_center()
                     .justify_center()
-                    .child(icon("icons/file.svg").size(px(20.)).text_color(palette.text_tertiary))
+                    .child(icon("icons/file.svg").size(zpx(20.)).text_color(palette.text_tertiary))
                     .child(div().w_full().truncate().text_center().text_size(text(10.)).text_color(palette.text_secondary).child(staged.file.name()))
                     .into_any_element(),
             };
@@ -766,7 +767,7 @@ impl Composer {
                 .id(("staged", i))
                 .relative()
                 .flex_none()
-                .size(px(STAGED_SIZE))
+                .size(zpx(STAGED_SIZE))
                 .rounded(corner(14.))
                 .overflow_hidden()
                 .bg(palette.card)
@@ -781,15 +782,15 @@ impl Composer {
                     div()
                         .id(("unstage", i))
                         .absolute()
-                        .top(px(4.))
-                        .right(px(4.))
-                        .size(px(20.))
+                        .top(zpx(4.))
+                        .right(zpx(4.))
+                        .size(zpx(20.))
                         .rounded_full()
                         .flex()
                         .items_center()
                         .justify_center()
                         .bg(gpui::Hsla { a: 0.8, ..palette.app })
-                        .text_size(px(11.))
+                        .text_size(zpx(11.))
                         .text_color(palette.text)
                         .cursor_pointer()
                         .hover(|d| d.bg(palette.danger))
@@ -802,7 +803,7 @@ impl Composer {
                         })),
                 )
         });
-        Some(h_flex().mb(px(8.)).gap(space(8.)).flex_wrap().children(tiles).into_any_element())
+        Some(h_flex().mb(zpx(8.)).gap(space(8.)).flex_wrap().children(tiles).into_any_element())
     }
 }
 
@@ -907,11 +908,11 @@ impl Render for Composer {
                 .id("shortcodes")
                 .occlude()
                 .absolute()
-                .left(px(10.))
+                .left(zpx(10.))
                 .bottom(gpui::relative(1.))
-                .mb(px(6.))
-                .min_w(px(220.))
-                .max_w(px(320.))
+                .mb(zpx(6.))
+                .min_w(zpx(220.))
+                .max_w(zpx(320.))
                 .p(space(5.))
                 .rounded(corner(16.))
                 .bg(palette.raised)
@@ -923,14 +924,14 @@ impl Render for Composer {
                 let (picture, label, detail) = match suggestion {
                     Suggestion::Emote(image) => (
                         match Media::image(&image.url, Some((48, 48)), cx) {
-                            Some(picture) => img(picture).size(px(22.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
-                            None => div().size(px(22.)).into_any_element(),
+                            Some(picture) => img(picture).size(zpx(22.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
+                            None => div().size(zpx(22.)).into_any_element(),
                         },
                         div().font_family(palette.mono_font.clone()).child(format!(":{}:", image.shortcode)),
                         None,
                     ),
                     Suggestion::Person(person) => (
-                        avatar(&person.user_id, &person.name, person.avatar.as_deref(), px(22.), cx),
+                        avatar(&person.user_id, &person.name, person.avatar.as_deref(), zpx(22.), cx),
                         div().child(person.name.clone()),
                         Some(person.user_id.clone()),
                     ),
@@ -967,7 +968,7 @@ impl Render for Composer {
             .children(self.error.clone().map(|e| div().pb_1().text_size(text(12.)).text_color(palette.danger).child(e)))
             .children(bar.map(|(colour, title, detail)| {
                 h_flex()
-                    .mb(px(8.))
+                    .mb(zpx(8.))
                     .gap(space(10.))
                     .px(space(14.))
                     .py(space(7.))
@@ -978,7 +979,7 @@ impl Render for Composer {
                     .border_1()
                     .border_color(palette.border_subtle)
                     // The coloured left edge: gpui borders take one colour.
-                    .child(div().absolute().left_0().top_0().bottom_0().w(px(2.)).bg(colour))
+                    .child(div().absolute().left_0().top_0().bottom_0().w(zpx(2.)).bg(colour))
                     .text_size(text(12.5))
                     .child(div().flex_none().text_color(colour).child(title))
                     .child(div().flex_1().min_w_0().truncate().text_color(palette.text_tertiary).child(detail))
@@ -1027,7 +1028,7 @@ impl Render for Composer {
                             .child(
                             div()
                                 .id("composer-attach")
-                                .size(px(38.))
+                                .size(zpx(38.))
                                 .flex_none()
                                 .rounded_full()
                                 .flex()
@@ -1035,17 +1036,17 @@ impl Render for Composer {
                                 .justify_center()
                                 .cursor_pointer()
                                 .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("attach a file").build(window, cx))
-                                .child(icon("icons/circle-plus.svg").size(px(22.)).text_color(palette.text_tertiary))
+                                .child(icon("icons/circle-plus.svg").size(zpx(22.)).text_color(palette.text_tertiary))
                                 .on_click(cx.listener(|this, _, window, cx| this.attach(window, cx))),
                         )
-                        .child(div().flex_1().min_w_0().py(space(4.)).text_size(px(14.5)).child(Textarea::new(&self.input).appearance(false).on_paste({
+                        .child(div().flex_1().min_w_0().py(space(4.)).text_size(zpx(14.5)).child(Textarea::new(&self.input).appearance(false).on_paste({
                             let this = cx.weak_entity();
                             move |item, _, cx| this.update(cx, |composer, cx| composer.paste(item, cx)).unwrap_or(false)
                         })))
                         .child(
                             div()
                                 .id("composer-emoji")
-                                .size(px(38.))
+                                .size(zpx(38.))
                                 .flex_none()
                                 .rounded_full()
                                 .flex()
@@ -1053,20 +1054,20 @@ impl Render for Composer {
                                 .justify_center()
                                 .cursor_pointer()
                                 .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("emoji").build(window, cx))
-                                .child(icon("icons/smile.svg").size(px(20.)).text_color(if self.picker.is_some() { palette.accent } else { palette.text_tertiary }))
+                                .child(icon("icons/smile.svg").size(zpx(20.)).text_color(if self.picker.is_some() { palette.accent } else { palette.text_tertiary }))
                                 // On press, so the picker's own "pressed outside"
                                 // doesn't close it and this reopen it.
                                 .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
                                     // Above the button, clear of the box.
-                                    this.open_picker(gpui::point(event.position.x, event.position.y - px(28.)), window, cx)
+                                    this.open_picker(gpui::point(event.position.x, event.position.y - zpx(28.)), window, cx)
                                 })),
                         ),
                     })
                     .child(
                         div()
                             .id("composer-send")
-                            .size(px(38.))
+                            .size(zpx(38.))
                             .flex_none()
                             .rounded_full()
                             .bg(palette.accent)
@@ -1082,7 +1083,7 @@ impl Render for Composer {
                                 gpui_component::tooltip::Tooltip::new(words).build(window, cx)
                             })
                             // Empty, it records; recording, it sends that.
-                            .child(icon(if can_send || recording { "icons/send.svg" } else { "icons/mic.svg" }).size(px(17.)).text_color(palette.text_on_accent))
+                            .child(icon(if can_send || recording { "icons/send.svg" } else { "icons/mic.svg" }).size(zpx(17.)).text_color(palette.text_on_accent))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 // While recording it sends, once it's been
                                 // going long enough (send_recording checks).
@@ -1101,7 +1102,7 @@ impl Render for Composer {
                     gpui::anchored()
                         .position(*at)
                         .anchor(gpui::Anchor::BottomRight)
-                        .snap_to_window_with_margin(px(10.))
+                        .snap_to_window_with_margin(zpx(10.))
                         .child(picker.clone()),
                 )
                 .with_priority(1)
@@ -1109,13 +1110,13 @@ impl Render for Composer {
             .when(!self.encrypted, |d| {
                 d.child(
                     h_flex()
-                        .mt(px(8.))
+                        .mt(zpx(8.))
                         .px(space(6.))
                         .gap(space(8.))
                         .font_family(palette.mono_font.clone())
                         .text_size(text(10.5))
                         .text_color(palette.text_tertiary)
-                        .child(icon("icons/lock.svg").size(px(11.)).text_color(palette.idle))
+                        .child(icon("icons/lock.svg").size(zpx(11.)).text_color(palette.idle))
                         .child("not encrypted · your homeserver can read this"),
                 )
             })

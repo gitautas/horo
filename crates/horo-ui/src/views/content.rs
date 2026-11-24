@@ -10,11 +10,11 @@ use gpui::AppContext as _;
 use gpui::{
     AnyElement, App, ElementId, Entity, FontStyle, FontWeight, Hsla, InteractiveElement, InteractiveText, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, StrikethroughStyle, StyledImage, Styled, StyledText, TextRun, UnderlineStyle, div, font, img, prelude::FluentBuilder,
-    px,
 };
 use gpui_component::{h_flex, v_flex};
 use horo_core::{dto::MediaInfoDto, matrix::media as core_media};
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     media::{Media, fit},
@@ -57,7 +57,7 @@ fn block(id: &str, block: &Block, colour: Hsla, emote: f32, palette: &Palette, c
                 3 => 17.,
                 _ => 15.,
             };
-            div().pt_1().text_size(px(size)).child(text(id, inline, colour, emote, palette, cx)).into_any_element()
+            div().pt_1().text_size(zpx(size)).child(text(id, inline, colour, emote, palette, cx)).into_any_element()
         }
         Block::Quote(inner) => div()
             .pl_3()
@@ -76,20 +76,20 @@ fn block(id: &str, block: &Block, colour: Hsla, emote: f32, palette: &Palette, c
             .child(code.clone())
             .into_any_element(),
         Block::List { ordered, start, items } => {
-            let mut list = v_flex().gap(px(2.));
+            let mut list = v_flex().gap(zpx(2.));
             for (n, item) in items.iter().enumerate() {
                 let marker = if *ordered { format!("{}.", start + n as u64) } else { "•".into() };
                 list = list.child(
                     h_flex()
                         .items_start()
                         .gap_2()
-                        .child(div().flex_none().min_w(px(14.)).text_color(palette.text_tertiary).child(marker))
+                        .child(div().flex_none().min_w(zpx(14.)).text_color(palette.text_tertiary).child(marker))
                         .child(div().flex_1().min_w_0().child(rich_sized(&format!("{id}/{n}"), item, colour, emote, palette, cx))),
                 );
             }
             list.into_any_element()
         }
-        Block::Rule => div().w_full().my_1().h(px(1.)).bg(palette.border).into_any_element(),
+        Block::Rule => div().w_full().my_1().h(zpx(1.)).bg(palette.border).into_any_element(),
     }
 }
 
@@ -117,7 +117,7 @@ fn text(id: &str, inline: &Inline, colour: Hsla, emote: f32, palette: &Palette, 
         row = add_words(row, from..image.at, &mut piece);
         from = image.at;
         row = row.child(match Media::image(&image.mxc, Some((64, 64)), cx) {
-            Some(picture) => img(picture).flex_none().size(px(emote)).mx(px(1.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
+            Some(picture) => img(picture).flex_none().size(zpx(emote)).mx(zpx(1.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
             // Its shortcode while it loads, or if it can't be fetched.
             None => div().flex_none().text_color(palette.text_tertiary).child(image.alt.clone()).into_any_element(),
         });
@@ -199,8 +199,8 @@ fn runs(inline: &Inline, colour: Hsla, palette: &Palette) -> Vec<TextRun> {
             } else {
                 None
             },
-            underline: (marks.underline || marks.link).then(|| UnderlineStyle { thickness: px(1.), color: Some(ink), wavy: false }),
-            strikethrough: marks.strike.then(|| StrikethroughStyle { thickness: px(1.), color: Some(ink) }),
+            underline: (marks.underline || marks.link).then(|| UnderlineStyle { thickness: zpx(1.), color: Some(ink), wavy: false }),
+            strikethrough: marks.strike.then(|| StrikethroughStyle { thickness: zpx(1.), color: Some(ink) }),
         }
     };
     let mut out = Vec::new();
@@ -228,9 +228,9 @@ pub fn picture(id: &str, body: &str, media: &MediaInfoDto, sticker: bool, store:
     let image = source.as_deref().and_then(|mxc| Media::image(mxc, size, cx));
     let frame = div()
         .id(ElementId::Name(SharedString::from(format!("{id}/picture"))))
-        .w(px(w))
-        .h(px(h))
-        .rounded(px(12.))
+        .w(zpx(w))
+        .h(zpx(h))
+        .rounded(zpx(12.))
         .overflow_hidden()
         .when(!sticker, |d| d.bg(palette.inset))
         .cursor_pointer();
@@ -275,8 +275,8 @@ pub fn card(id: &str, glyph: &str, body: &str, media: &MediaInfoDto, open: Open,
     let (mxc, name, mime) = (media.mxc.clone(), body.to_owned(), media.mimetype.clone());
     v_flex()
         .id(ElementId::Name(SharedString::from(format!("{id}/card"))))
-        .max_w(px(360.))
-        .rounded(px(12.))
+        .max_w(zpx(360.))
+        .rounded(zpx(12.))
         .overflow_hidden()
         .bg(palette.raised)
         .border_1()
@@ -284,9 +284,9 @@ pub fn card(id: &str, glyph: &str, body: &str, media: &MediaInfoDto, open: Open,
         .cursor_pointer()
         .hover(|d| d.border_color(palette.border_strong))
         .children(poster.map(|(image, w, h)| {
-            div().relative().w(px(w)).h(px(h)).child(img(image).size_full().object_fit(gpui::ObjectFit::Cover)).child(
+            div().relative().w(zpx(w)).h(zpx(h)).child(img(image).size_full().object_fit(gpui::ObjectFit::Cover)).child(
                 div().absolute().inset_0().flex().items_center().justify_center().child(
-                    div().size(px(44.)).rounded_full().bg(Hsla { a: 0.7, ..palette.app }).flex().items_center().justify_center().child("▶"),
+                    div().size(zpx(44.)).rounded_full().bg(Hsla { a: 0.7, ..palette.app }).flex().items_center().justify_center().child("▶"),
                 ),
             )
         }))
@@ -295,7 +295,7 @@ pub fn card(id: &str, glyph: &str, body: &str, media: &MediaInfoDto, open: Open,
                 .gap_3()
                 .px_3()
                 .py_2()
-                .child(div().flex_none().text_size(px(20.)).child(glyph.to_owned()))
+                .child(div().flex_none().text_size(zpx(20.)).child(glyph.to_owned()))
                 .child(
                     v_flex()
                         .flex_1()

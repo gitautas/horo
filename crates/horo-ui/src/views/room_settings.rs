@@ -6,7 +6,7 @@
 
 use gpui::{
     AnyElement, AppContext as _, Context, Entity, EventEmitter, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
+    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     Disableable, Sizable,
@@ -21,6 +21,7 @@ use horo_core::{
 };
 use matrix_sdk::ruma::OwnedRoomId;
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     store::Store,
@@ -201,7 +202,7 @@ impl RoomSettings {
         let (name, topic) = self.changes(cx);
         let dirty = name.is_some() || topic.is_some();
         v_flex()
-            .gap(px(8.))
+            .gap(zpx(8.))
             .when(permissions.can_rename, |d| d.child(well(palette).child(div().flex_1().child(Input::new(&self.name).appearance(false)))))
             .when(permissions.can_set_topic, |d| d.child(well(palette).child(div().flex_1().child(Textarea::new(&self.topic).appearance(false)))))
             .when(dirty, |d| {
@@ -233,7 +234,7 @@ impl RoomSettings {
                 format!("leave {}? it drops off your list, and you'd need an invite to get back into a private room.", room.name)
             };
             v_flex()
-                .child(div().mb(px(10.)).text_size(text(12.5)).line_height(gpui::relative(1.55)).text_color(palette.text_secondary).child(question))
+                .child(div().mb(zpx(10.)).text_size(text(12.5)).line_height(gpui::relative(1.55)).text_color(palette.text_secondary).child(question))
                 .child(
                     h_flex()
                         .justify_end()
@@ -265,7 +266,7 @@ impl RoomSettings {
                 }))
                 .into_any_element()
         };
-        div().mt(px(20.)).pt(space(14.)).border_t_1().border_color(palette.border_subtle).child(body).into_any_element()
+        div().mt(zpx(20.)).pt(space(14.)).border_t_1().border_color(palette.border_subtle).child(body).into_any_element()
     }
 }
 
@@ -277,7 +278,7 @@ impl Render for RoomSettings {
         let leave = self.leave_part(&room, &palette, cx);
         let body = v_flex()
             .child(editor)
-            .children(self.error.clone().map(|e| div().mt(px(10.)).text_size(text(12.5)).text_color(palette.danger).child(e)))
+            .children(self.error.clone().map(|e| div().mt(zpx(10.)).text_size(text(12.5)).text_color(palette.danger).child(e)))
             .child(leave)
             .into_any_element();
         let this = cx.weak_entity();

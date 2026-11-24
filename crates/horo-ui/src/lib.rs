@@ -37,6 +37,17 @@ gpui::actions!(
         /// Open settings (⌘, on macOS, Ctrl+, elsewhere).
         OpenSettings,
         Quit,
+        /// Settings, at "about".
+        About,
+        Hide,
+        HideOthers,
+        ShowAll,
+        ZoomIn,
+        ZoomOut,
+        ZoomReset,
+        Minimize,
+        ZoomWindow,
+        ToggleFullScreen,
     ]
 );
 
@@ -91,13 +102,84 @@ pub fn init(backend: Backend, cx: &mut App) {
     #[cfg(not(target_os = "macos"))]
     let (settings, quit) = ("ctrl-,", "ctrl-q");
     cx.bind_keys([gpui::KeyBinding::new(settings, OpenSettings, None), gpui::KeyBinding::new(quit, Quit, None)]);
+    cx.bind_keys(shortcuts());
     cx.on_action(|_: &Quit, cx| cx.quit());
-    // The app menu, where a Mac keeps Settings… and its shortcut.
-    cx.set_menus(vec![gpui::Menu {
-        name: "horo".into(),
-        items: vec![gpui::MenuItem::action("Settings…", OpenSettings), gpui::MenuItem::separator(), gpui::MenuItem::action("Quit horo", Quit)],
-        disabled: false,
-    }]);
+    cx.on_action(|_: &Hide, cx| cx.hide());
+    cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
+    cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
+    cx.set_menus(menus());
+}
+
+/// The rest of the shortcuts the menus show (⌘ on macOS, Ctrl elsewhere).
+fn shortcuts() -> Vec<gpui::KeyBinding> {
+    use gpui::KeyBinding;
+    // ⌘+ too, on keyboards where + is its own key (or shift-=).
+    #[cfg(target_os = "macos")]
+    let zoom = ["cmd-=", "cmd-+", "cmd--", "cmd-0"];
+    #[cfg(not(target_os = "macos"))]
+    let zoom = ["ctrl-=", "ctrl-+", "ctrl--", "ctrl-0"];
+    #[allow(unused_mut)]
+    let mut keys = vec![
+        KeyBinding::new(zoom[0], ZoomIn, None),
+        KeyBinding::new(zoom[1], ZoomIn, None),
+        KeyBinding::new(zoom[2], ZoomOut, None),
+        KeyBinding::new(zoom[3], ZoomReset, None),
+    ];
+    #[cfg(target_os = "macos")]
+    keys.extend([
+        KeyBinding::new("cmd-h", Hide, None),
+        KeyBinding::new("alt-cmd-h", HideOthers, None),
+        KeyBinding::new("cmd-m", Minimize, None),
+        KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
+    ]);
+    keys
+}
+
+/// The menu bar, as the Tauri build's: horo, Edit, View, Window. Edit's
+/// items drive whichever text field has focus (gpui-component's own
+/// actions), and are the system's own on macOS.
+fn menus() -> Vec<gpui::Menu> {
+    use gpui::{Menu, MenuItem, OsAction};
+    use gpui_component::input;
+    let menu = |name: &str, items: Vec<MenuItem>| Menu { name: name.to_owned().into(), items, disabled: false };
+    vec![
+        menu(
+            "horo",
+            vec![
+                MenuItem::action("About horo", About),
+                MenuItem::separator(),
+                MenuItem::action("Settings…", OpenSettings),
+                MenuItem::separator(),
+                MenuItem::action("Hide horo", Hide),
+                MenuItem::action("Hide Others", HideOthers),
+                MenuItem::action("Show All", ShowAll),
+                MenuItem::separator(),
+                MenuItem::action("Quit horo", Quit),
+            ],
+        ),
+        menu(
+            "Edit",
+            vec![
+                MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
+                MenuItem::os_action("Redo", input::Redo, OsAction::Redo),
+                MenuItem::separator(),
+                MenuItem::os_action("Cut", input::Cut, OsAction::Cut),
+                MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
+                MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
+                MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll),
+            ],
+        ),
+        menu(
+            "View",
+            vec![
+                MenuItem::action("Zoom In", ZoomIn),
+                MenuItem::action("Zoom Out", ZoomOut),
+                MenuItem::action("Actual Size", ZoomReset),
+                // macOS adds Enter Full Screen to a menu named View itself.
+            ],
+        ),
+        menu("Window", vec![MenuItem::action("Minimize", Minimize), MenuItem::action("Zoom", ZoomWindow)]),
+    ]
 }
 
 /// The main window.

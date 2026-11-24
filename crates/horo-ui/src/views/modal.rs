@@ -4,10 +4,11 @@
 
 use gpui::{
     AnyElement, App, ClickEvent, FocusHandle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, MouseDownEvent, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    StatefulInteractiveElement, Styled, Window, div,
 };
 use gpui_component::{h_flex, v_flex};
 
+use crate::theme::zpx;
 use crate::{
     theme::{Palette, corner, heading, space},
     views::verification::scrim,
@@ -28,7 +29,7 @@ pub fn modal(
             v_flex()
                 .id(id)
                 .track_focus(focus)
-                .w(px(width))
+                .w(zpx(width))
                 .max_w_full()
                 .max_h(gpui::relative(0.88))
                 .rounded(corner(24.))
@@ -55,7 +56,7 @@ pub fn modal(
                         .child(
                             div()
                                 .id((id, 1usize))
-                                .size(px(28.))
+                                .size(zpx(28.))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -75,7 +76,7 @@ pub fn modal(
 /// The small upper-case label over a field, as `RaveLabel` draws it.
 pub fn label(palette: &Palette, words: &str) -> gpui::Div {
     div()
-        .mb(px(6.))
+        .mb(zpx(6.))
         .font_family(palette.heading_font.clone())
         .font_weight(FontWeight::SEMIBOLD)
         .text_size(crate::theme::label(9.5))

@@ -7,7 +7,7 @@
 //! clicks through without looking has verified nothing.
 
 use gpui::{
-    AnyElement, App, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, div, prelude::FluentBuilder, px,
+    AnyElement, App, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -15,6 +15,7 @@ use gpui_component::{
 };
 use horo_core::verification::RequestState;
 
+use crate::theme::zpx;
 use crate::{
     store::{SettingsSection, Store, VerifyAction},
     theme::Palette,
@@ -60,15 +61,15 @@ pub fn dialog(store: &Entity<Store>, palette: &Palette, cx: &App) -> Option<AnyE
                 )))
                 .child(h_flex().flex_wrap().gap_2().justify_center().children(emoji.into_iter().map(|e| {
                     v_flex()
-                        .w(px(84.))
+                        .w(zpx(84.))
                         .py_3()
                         .gap_1()
                         .items_center()
-                        .rounded(px(14.))
+                        .rounded(zpx(14.))
                         .bg(palette.raised)
                         .border_1()
                         .border_color(palette.border_subtle)
-                        .child(div().text_size(px(30.)).child(e.symbol))
+                        .child(div().text_size(zpx(30.)).child(e.symbol))
                         .child(div().text_xs().text_color(palette.text_tertiary).child(e.description.to_lowercase()))
                 })))
                 .into_any_element()
@@ -99,17 +100,17 @@ pub fn dialog(store: &Entity<Store>, palette: &Palette, cx: &App) -> Option<AnyE
     });
 
     let card = v_flex()
-        .w(px(440.))
+        .w(zpx(440.))
         .p_6()
         .gap_5()
-        .rounded(px(20.))
+        .rounded(zpx(20.))
         .bg(palette.card)
         .border_1()
         .border_color(palette.border_strong)
         .shadow_lg()
         .child(
             v_flex()
-                .child(div().font_family(palette.heading_font.clone()).text_size(px(26.)).font_weight(FontWeight::SEMIBOLD).child(title))
+                .child(div().font_family(palette.heading_font.clone()).text_size(zpx(26.)).font_weight(FontWeight::SEMIBOLD).child(title))
                 .child(div().text_xs().text_color(palette.text_tertiary).child(other)),
         )
         .child(body)
@@ -180,7 +181,7 @@ fn strip(palette: &Palette, title: &str, text: String, buttons: Vec<AnyElement>)
         .gap_3()
         .px_4()
         .py_3()
-        .rounded(px(16.))
+        .rounded(zpx(16.))
         .bg(palette.raised)
         .border_1()
         .border_color(Hsla { a: 0.35, ..palette.accent })

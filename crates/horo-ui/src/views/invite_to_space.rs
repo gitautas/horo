@@ -9,7 +9,7 @@ use std::{collections::HashMap, time::Duration};
 
 use gpui::{
     AppContext as _, Context, Entity, EventEmitter, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Task, Window, div, prelude::FluentBuilder, px,
+    SharedString, StatefulInteractiveElement, Styled, Task, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     h_flex,
@@ -22,6 +22,7 @@ use horo_core::matrix::{
 };
 use matrix_sdk::ruma::OwnedRoomId;
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     store::{Store, Tone},
@@ -241,7 +242,7 @@ impl Render for InviteToSpace {
         let palette = cx.global::<Palette>().clone();
         let term = self.term(cx);
 
-        let mut list = v_flex().mt(px(6.)).p(space(4.)).gap(space(2.)).rounded(corner(14.)).bg(palette.inset).border_1().border_color(palette.border_subtle);
+        let mut list = v_flex().mt(zpx(6.)).p(space(4.)).gap(space(2.)).rounded(corner(14.)).bg(palette.inset).border_1().border_color(palette.border_subtle);
         for (i, s) in self.suggestions.clone().into_iter().enumerate() {
             let name = s.display_name.clone().unwrap_or_else(|| s.user_id.clone());
             let taken = match self.members.get(&s.user_id).map(String::as_str) {
@@ -249,7 +250,7 @@ impl Render for InviteToSpace {
                 Some("invite") => Some("invited"),
                 _ => None,
             };
-            let face = avatar(&s.user_id, &name, s.avatar_url.as_deref(), px(28.), cx);
+            let face = avatar(&s.user_id, &name, s.avatar_url.as_deref(), zpx(28.), cx);
             list = list.child(
                 h_flex()
                     .id(("suggestion", i))
@@ -289,9 +290,9 @@ impl Render for InviteToSpace {
             .child(label(&palette, "WHO"))
             .child(well(&palette).child(div().flex_1().child(Input::new(&self.who).appearance(false))))
             .children(suggestions)
-            .child(div().mt(px(8.)).text_size(text(12.)).line_height(gpui::relative(1.45)).text_color(colour).child(line))
+            .child(div().mt(zpx(8.)).text_size(text(12.)).line_height(gpui::relative(1.45)).text_color(colour).child(line))
             .child(
-                h_flex().justify_end().mt(px(20.)).child(
+                h_flex().justify_end().mt(zpx(20.)).child(
                     accent_button("invite-go", if self.busy { "inviting…" } else { "invite" }, ready, false, &palette)
                         .on_click(cx.listener(|this, _, _, cx| this.invite(cx))),
                 ),

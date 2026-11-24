@@ -7,7 +7,7 @@
 
 use gpui::{
     AnyElement, AppContext, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
-    PathPromptOptions, Render, SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div, img, prelude::FluentBuilder, px,
+    PathPromptOptions, Render, SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div, img, prelude::FluentBuilder,
 };
 use gpui_component::{
     Disableable, Sizable,
@@ -24,6 +24,7 @@ use horo_core::{
     matrix::profile::{self, ProfileDto, ProfileUpdate},
 };
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     media::Media,
@@ -291,7 +292,7 @@ impl Settings {
 
     fn account(&mut self, session: &SessionInfo, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let name = session.display_name.clone().unwrap_or_else(|| session.user_id.clone());
-        let face = avatar(&session.user_id, &name, session.avatar_url.as_deref(), px(64.), cx);
+        let face = avatar(&session.user_id, &name, session.avatar_url.as_deref(), zpx(64.), cx);
 
         let identity = card(palette).child(
             h_flex()
@@ -300,7 +301,7 @@ impl Settings {
                 .child(
                     v_flex()
                         .min_w_0()
-                        .child(div().font_family(palette.heading_font.clone()).text_size(px(24.)).font_weight(FontWeight::SEMIBOLD).child(name))
+                        .child(div().font_family(palette.heading_font.clone()).text_size(zpx(24.)).font_weight(FontWeight::SEMIBOLD).child(name))
                         .child(div().text_xs().text_color(palette.text_tertiary).child(session.user_id.clone())),
                 ),
         );
@@ -362,9 +363,9 @@ impl Settings {
         }
         let preview = (!self.cover.is_empty()).then(|| Media::image(&self.cover, Some((1120, 280)), cx)).flatten();
         let cover = div()
-            .h(px(96.))
+            .h(zpx(96.))
             .w_full()
-            .rounded(px(14.))
+            .rounded(zpx(14.))
             .overflow_hidden()
             .border_1()
             .border_color(palette.border_subtle)
@@ -481,7 +482,7 @@ impl Settings {
                 h_flex()
                     .gap_3()
                     .child(div().flex_1().child(Slider::new(&self.volume)))
-                    .child(div().w(px(40.)).text_sm().text_color(palette.text_secondary).child(format!("{:.0}%", prefs.notification_volume * 100.0))),
+                    .child(div().w(zpx(40.)).text_sm().text_color(palette.text_secondary).child(format!("{:.0}%", prefs.notification_volume * 100.0))),
             );
 
         v_flex()
@@ -574,18 +575,18 @@ impl Settings {
                 None => "system default".to_owned(),
             })];
             rows.extend(list.iter().map(|d| (Some(d.id.clone()), d.name.clone())));
-            v_flex().gap(px(2.)).children(rows.into_iter().enumerate().map(|(i, (id, name))| {
+            v_flex().gap(zpx(2.)).children(rows.into_iter().enumerate().map(|(i, (id, name))| {
                 let selected = id.as_ref() == saved_present;
                 h_flex()
                     .id(SharedString::from(format!("{key}-{i}")))
                     .gap_2()
                     .px_3()
                     .py_2()
-                    .rounded(px(10.))
+                    .rounded(zpx(10.))
                     .cursor_pointer()
                     .when(selected, |d| d.bg(palette.raised))
                     .hover(|d| d.bg(palette.raised))
-                    .child(div().flex_none().size(px(10.)).rounded_full().border_2().border_color(if selected { palette.accent } else { palette.border_strong }).when(selected, |d| d.bg(palette.accent)))
+                    .child(div().flex_none().size(zpx(10.)).rounded_full().border_2().border_color(if selected { palette.accent } else { palette.border_strong }).when(selected, |d| d.bg(palette.accent)))
                     .child(div().truncate().text_sm().child(name))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let id = id.clone();
@@ -636,7 +637,7 @@ impl Settings {
             .pt_1()
             .child(
                 div()
-                    .h(px(8.))
+                    .h(zpx(8.))
                     .w_full()
                     .rounded_full()
                     .bg(palette.inset)
@@ -656,7 +657,7 @@ impl Settings {
             None => message(palette, "asking for the camera…"),
             Some(true) => match self.camera.as_mut().map(|c| &mut c.state) {
                 Some(PreviewState::Live(camera)) => match camera.mirrored_frame() {
-                    Some(frame) => gpui::surface(frame).w(px(PREVIEW_W)).h(px(PREVIEW_H)).object_fit(gpui::ObjectFit::Cover).into_any_element(),
+                    Some(frame) => gpui::surface(frame).w(zpx(PREVIEW_W)).h(zpx(PREVIEW_H)).object_fit(gpui::ObjectFit::Cover).into_any_element(),
                     None => message(palette, "waiting for the camera…"),
                 },
                 Some(PreviewState::Failed(why)) => message(palette, &format!("couldn't open the camera: {why}")),
@@ -670,18 +671,18 @@ impl Settings {
             None => "system default".to_owned(),
         })];
         rows.extend(cameras.iter().map(|d| (Some(d.id.clone()), d.name.clone())));
-        let list = v_flex().gap(px(2.)).children(rows.into_iter().enumerate().map(|(i, (id, name))| {
+        let list = v_flex().gap(zpx(2.)).children(rows.into_iter().enumerate().map(|(i, (id, name))| {
             let selected = id.as_ref() == saved_present;
             h_flex()
                 .id(SharedString::from(format!("camera-{i}")))
                 .gap_2()
                 .px_3()
                 .py_2()
-                .rounded(px(10.))
+                .rounded(zpx(10.))
                 .cursor_pointer()
                 .when(selected, |d| d.bg(palette.raised))
                 .hover(|d| d.bg(palette.raised))
-                .child(div().flex_none().size(px(10.)).rounded_full().border_2().border_color(if selected { palette.accent } else { palette.border_strong }).when(selected, |d| d.bg(palette.accent)))
+                .child(div().flex_none().size(zpx(10.)).rounded_full().border_2().border_color(if selected { palette.accent } else { palette.border_strong }).when(selected, |d| d.bg(palette.accent)))
                 .child(div().truncate().text_sm().child(name))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let id = id.clone();
@@ -693,9 +694,9 @@ impl Settings {
                 .child(field(palette, "camera", Some("what people see in video calls.")))
                 .child(
                     div()
-                        .w(px(PREVIEW_W))
-                        .h(px(PREVIEW_H))
-                        .rounded(px(14.))
+                        .w(zpx(PREVIEW_W))
+                        .h(zpx(PREVIEW_H))
+                        .rounded(zpx(14.))
                         .overflow_hidden()
                         .bg(palette.inset)
                         .flex()
@@ -748,7 +749,7 @@ impl Settings {
                         v_flex()
                             .flex_1()
                             .min_w_0()
-                            .child(div().text_size(px(13.5)).text_color(palette.text).child("updates"))
+                            .child(div().text_size(zpx(13.5)).text_color(palette.text).child("updates"))
                             .child(div().mt_1().text_xs().line_height(gpui::relative(1.5)).text_color(if warn { palette.idle } else { palette.text_tertiary }).child(line)),
                     )
                     .child(action),
@@ -762,7 +763,7 @@ impl Settings {
             .child(heading(palette, "about"))
             .child(
                 card(palette)
-                    .child(div().font_family(palette.heading_font.clone()).text_size(px(36.)).text_color(palette.accent).child("horo"))
+                    .child(div().font_family(palette.heading_font.clone()).text_size(zpx(36.)).text_color(palette.accent).child("horo"))
                     .child(div().text_sm().text_color(palette.text_secondary).child("a cute matrix client~"))
                     .child(
                         v_flex()
@@ -817,12 +818,12 @@ impl Render for Settings {
         }
 
         let nav = v_flex()
-            .w(px(232.))
+            .w(zpx(232.))
             .flex_none()
             .h_full()
-            .pt(px(52.))
+            .pt(zpx(52.))
             .px_3()
-            .gap(px(3.))
+            .gap(zpx(3.))
             .bg(palette.card)
             .border_r_1()
             .border_color(palette.border_subtle)
@@ -832,10 +833,10 @@ impl Render for Settings {
                     .id(SharedString::from(format!("settings-{}", entry.label())))
                     .px_3()
                     .py_2()
-                    .rounded(px(12.))
+                    .rounded(zpx(12.))
                     .cursor_pointer()
                     .font_family(palette.heading_font.clone())
-                    .text_size(px(17.))
+                    .text_size(zpx(17.))
                     .text_color(if selected { palette.text } else { palette.text_secondary })
                     .when(selected, |d| d.bg(palette.raised))
                     .hover(|d| d.bg(palette.raised))
@@ -880,26 +881,26 @@ impl Render for Settings {
                     .flex_1()
                     .h_full()
                     .overflow_y_scroll()
-                    .pt(px(52.))
+                    .pt(zpx(52.))
                     .pb_10()
-                    .child(div().max_w(px(620.)).mx_auto().px_10().child(body)),
+                    .child(div().max_w(zpx(620.)).mx_auto().px_10().child(body)),
             )
             .child(
                 div()
                     .absolute()
-                    .top(px(40.))
-                    .right(px(32.))
+                    .top(zpx(40.))
+                    .right(zpx(32.))
                     .child(Button::new("settings-close").ghost().label("close (esc)").on_click(cx.listener(|this, _, _, cx| this.close(cx)))),
             )
     }
 }
 
 fn heading(palette: &Palette, text: &str) -> gpui::Div {
-    div().pt_2().font_family(palette.heading_font.clone()).text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child(SharedString::from(text.to_owned()))
+    div().pt_2().font_family(palette.heading_font.clone()).text_size(zpx(22.)).font_weight(FontWeight::SEMIBOLD).child(SharedString::from(text.to_owned()))
 }
 
 fn card(palette: &Palette) -> gpui::Div {
-    v_flex().gap_3().p_4().rounded(px(16.)).bg(palette.card).border_1().border_color(palette.border_subtle)
+    v_flex().gap_3().p_4().rounded(zpx(16.)).bg(palette.card).border_1().border_color(palette.border_subtle)
 }
 
 fn row(palette: &Palette, title: &str, value: String) -> gpui::Div {

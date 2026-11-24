@@ -124,6 +124,9 @@ pub struct Store {
     pub update: UpdateState,
     /// The periodic look has been started.
     update_watch: bool,
+    /// Counts zoom changes, so views that cache sizes (the timeline's
+    /// rows) know to measure again.
+    pub zoom_epoch: u64,
 }
 
 /// Looking for a newer horo.
@@ -287,6 +290,7 @@ impl Store {
             profiles_asked: HashSet::new(),
             update: UpdateState::Idle,
             update_watch: false,
+            zoom_epoch: 0,
             last_activity: Instant::now(),
             away: false,
             profile_card: None,
@@ -294,6 +298,8 @@ impl Store {
             call_live: None,
             incoming: None,
         };
+        // The saved zoom, before anything is drawn.
+        crate::theme::set_zoom(store.prefs.zoom);
         store.pump_events(cx);
         store.watch_idle(cx);
         // Quitting mid-call leaves it properly: otherwise our membership
@@ -928,6 +934,22 @@ impl Store {
     }
 
     /// Change the app's settings and save them.
+    /// Zoom in (`Some(true)`), out (`Some(false)`), or back to 100%
+    /// (`None`), as ⌘= / ⌘- / ⌘0 do.
+    pub fn zoom(&mut self, step: Option<bool>, cx: &mut Context<Self>) {
+        let zoom = match step {
+            Some(up) => crate::theme::step_zoom(self.prefs.zoom, up),
+            None => 1.,
+        };
+        if (zoom - self.prefs.zoom).abs() < f32::EPSILON {
+            return;
+        }
+        crate::theme::set_zoom(zoom);
+        self.zoom_epoch += 1;
+        self.update_prefs(|p| p.zoom = zoom, cx);
+        cx.refresh_windows();
+    }
+
     /// Change prefs for now, without writing them out (a column being
     /// dragged: saved once, when it's let go).
     pub fn preview_prefs(&mut self, change: impl FnOnce(&mut Prefs), cx: &mut Context<Self>) {

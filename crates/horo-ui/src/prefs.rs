@@ -34,6 +34,8 @@ pub struct Prefs {
     /// The room list's width, and the info panel's, as dragged.
     pub room_list_width: f32,
     pub info_panel_width: f32,
+    /// The whole window's zoom, as a factor (1 is the design's size).
+    pub zoom: f32,
     /// The release whose notice was waved away (a newer one speaks up).
     pub dismissed_update: Option<String>,
     /// 0 (default yellow) to 5, for emoji that take one.
@@ -66,6 +68,7 @@ impl Default for Prefs {
             room_list_width: ROOM_LIST_WIDTH,
             info_panel_width: INFO_PANEL_WIDTH,
             dismissed_update: None,
+            zoom: 1.,
             audio_input: None,
             video_input: None,
             audio_output: None,

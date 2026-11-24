@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use gpui::{
     AsyncApp, Context, Entity, FontWeight, IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window, div,
-    prelude::FluentBuilder, px,
+    prelude::FluentBuilder,
 };
 use gpui_component::{
     Disableable, Sizable,
@@ -17,6 +17,7 @@ use gpui_component::{
 use horo_core::{dto::RoomMembership, matrix::rooms};
 use matrix_sdk::ruma::OwnedRoomId;
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     store::Store,
@@ -177,7 +178,7 @@ impl Render for InvitePane {
             Some(who) => format!("{who} invited you to this {kind}"),
             None => format!("you're invited to this {kind}"),
         };
-        let face = avatar(&room.id, &room.name, room.avatar_url.as_deref(), px(76.), cx);
+        let face = avatar(&room.id, &room.name, room.avatar_url.as_deref(), zpx(76.), cx);
         let busy = self.busy;
 
         let buttons = if self.asked {
@@ -186,7 +187,7 @@ impl Render for InvitePane {
                 .gap(space(10.))
                 .child(
                     div()
-                        .max_w(px(340.))
+                        .max_w(zpx(340.))
                         .text_size(text(12.5))
                         .line_height(gpui::relative(1.5))
                         .text_color(palette.text_secondary)
@@ -211,7 +212,7 @@ impl Render for InvitePane {
         } else {
             v_flex().child(
                 h_flex()
-                    .mt(px(6.))
+                    .mt(zpx(6.))
                     .gap(space(8.))
                     .child(Button::new("invite-decline").ghost().label("decline").disabled(busy).on_click(cx.listener(|this, _, _, cx| {
                         this.asked = true;
@@ -235,9 +236,9 @@ impl Render for InvitePane {
                 v_flex()
                     .items_center()
                     .child(div().font_family(palette.heading_font.clone()).font_weight(FontWeight::EXTRA_BOLD).text_size(heading(20.)).child(room.name.clone()))
-                    .child(div().mt(px(4.)).text_size(text(13.)).text_color(palette.text_secondary).child(line))
+                    .child(div().mt(zpx(4.)).text_size(text(13.)).text_color(palette.text_secondary).child(line))
                     .when(room.is_space, |d| {
-                        d.child(div().mt(px(6.)).max_w(px(320.)).text_center().text_size(text(12.)).text_color(palette.text_tertiary).child("joining it puts you in its rooms too."))
+                        d.child(div().mt(zpx(6.)).max_w(zpx(320.)).text_center().text_size(text(12.)).text_color(palette.text_tertiary).child("joining it puts you in its rooms too."))
                     }),
             )
             .child(buttons)

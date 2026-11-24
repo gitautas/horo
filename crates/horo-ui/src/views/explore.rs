@@ -6,7 +6,7 @@ use std::{collections::HashMap, time::Duration};
 
 use gpui::{
     AnyElement, AppContext as _, AsyncApp, Context, Entity, EventEmitter, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task, WeakEntity, Window, div, prelude::FluentBuilder, px,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task, WeakEntity, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     Disableable, Sizable,
@@ -24,6 +24,7 @@ use horo_core::{
 };
 use matrix_sdk::ruma::OwnedRoomId;
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     store::{Phase, Store},
@@ -351,7 +352,7 @@ impl Explore {
                 .border_color(palette.border_subtle)
                 .text_size(text(10.5))
                 .text_color(palette.text_tertiary)
-                .child(icon("icons/lock.svg").size(px(10.)).text_color(palette.text_tertiary))
+                .child(icon("icons/lock.svg").size(zpx(10.)).text_color(palette.text_tertiary))
                 .child(words)
                 .into_any_element();
         }
@@ -381,7 +382,7 @@ impl Explore {
             // Joining a big space on another server can take minutes; a
             // spinner that long reads as stuck.
             .when(busy && top_level, |d| {
-                d.child(div().mt(px(6.)).max_w(px(110.)).text_right().text_size(text(10.5)).text_color(palette.text_tertiary).child("big spaces can take a minute~"))
+                d.child(div().mt(zpx(6.)).max_w(zpx(110.)).text_right().text_size(text(10.5)).text_color(palette.text_tertiary).child("big spaces can take a minute~"))
             })
             .into_any_element()
     }
@@ -389,7 +390,7 @@ impl Explore {
     fn space_row(&mut self, sp: &PublicRoom, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let expanded = self.expanded.as_deref() == Some(sp.id.as_str());
         let name = display_name(sp);
-        let face = avatar(&sp.id, &name, sp.avatar_url.as_deref(), px(44.), cx);
+        let face = avatar(&sp.id, &name, sp.avatar_url.as_deref(), zpx(44.), cx);
         let action = self.action(sp, true, &[], palette, cx);
         let inside = expanded.then(|| self.inside_list(sp, palette, cx));
         let space_id = sp.id.clone();
@@ -417,11 +418,11 @@ impl Explore {
                                 h_flex()
                                     .gap(space(6.))
                                     .child(div().truncate().font_family(palette.heading_font.clone()).font_weight(FontWeight::EXTRA_BOLD).text_size(heading(14.5)).child(name))
-                                    .child(icon(if expanded { "icons/chevron-up.svg" } else { "icons/chevron-down.svg" }).size(px(12.)).text_color(palette.text_tertiary)),
+                                    .child(icon(if expanded { "icons/chevron-up.svg" } else { "icons/chevron-down.svg" }).size(zpx(12.)).text_color(palette.text_tertiary)),
                             )
                             .child(
                                 h_flex()
-                                    .mt(px(2.))
+                                    .mt(zpx(2.))
                                     .gap(space(8.))
                                     .min_w_0()
                                     .text_size(text(11.5))
@@ -431,12 +432,12 @@ impl Explore {
                             )
                             .children(sp.topic.clone().map(|t| {
                                 let t = if expanded { t } else { first_lines(&t, 2, 160) };
-                                div().mt(px(5.)).text_size(text(12.5)).line_height(gpui::relative(1.45)).text_color(palette.text_secondary).child(t)
+                                div().mt(zpx(5.)).text_size(text(12.5)).line_height(gpui::relative(1.45)).text_color(palette.text_secondary).child(t)
                             })),
                     )
                     .child(div().flex_none().pt(space(2.)).child(action)),
             )
-            .children(inside.map(|list| div().pl(px(66.)).pr(space(10.)).pt(px(2.)).pb(space(12.)).child(list)))
+            .children(inside.map(|list| div().pl(zpx(66.)).pr(space(10.)).pt(zpx(2.)).pb(space(12.)).child(list)))
             .into_any_element()
     }
 
@@ -451,7 +452,7 @@ impl Explore {
                 let mut list = v_flex().gap(space(2.));
                 for room in &rooms {
                     let name = display_name(room);
-                    let face = avatar(&room.id, &name, room.avatar_url.as_deref(), px(28.), cx);
+                    let face = avatar(&room.id, &name, room.avatar_url.as_deref(), zpx(28.), cx);
                     let action = self.action(room, false, &sp.via, palette, cx);
                     list = list.child(
                         h_flex()
@@ -467,7 +468,7 @@ impl Explore {
                                             .gap(space(5.))
                                             .font_weight(FontWeight::BOLD)
                                             .text_size(text(13.))
-                                            .when(room.is_space, |d| d.child(icon("icons/orbit.svg").size(px(12.)).text_color(palette.text_tertiary)))
+                                            .when(room.is_space, |d| d.child(icon("icons/orbit.svg").size(zpx(12.)).text_color(palette.text_tertiary)))
                                             .child(div().truncate().child(name)),
                                     )
                                     .child(div().text_size(text(11.)).text_color(palette.text_tertiary).child(member_count(room.members))),
@@ -525,7 +526,7 @@ impl Render for Explore {
         let palette = cx.global::<Palette>().clone();
         if let Some(space) = self.browse.clone() {
             let body = v_flex()
-                .child(div().mb(px(12.)).text_size(text(12.5)).text_color(palette.text_tertiary).child("everything in the space, including rooms you haven't joined yet."))
+                .child(div().mb(zpx(12.)).text_size(text(12.5)).text_color(palette.text_tertiary).child("everything in the space, including rooms you haven't joined yet."))
                 .child(self.inside_list(&space, &palette, cx))
                 .into_any_element();
             let this = cx.weak_entity();
@@ -556,7 +557,7 @@ impl Render for Explore {
         let error = self.error.clone().map(|e| {
             let words = if server.is_empty() { format!("couldn't load the directory — {e}") } else { format!("couldn't read {server}'s directory — {e}") };
             div()
-                .mb(px(12.))
+                .mb(zpx(12.))
                 .px(space(13.))
                 .py(space(10.))
                 .rounded(corner(14.))
@@ -566,7 +567,7 @@ impl Render for Explore {
                 .child(words)
         });
         let more = (!self.loading && self.next_batch.is_some()).then(|| {
-            h_flex().justify_center().mt(px(12.)).child(Button::new("explore-more").ghost().small().label("show more").on_click(cx.listener(|this, _, _, cx| {
+            h_flex().justify_center().mt(zpx(12.)).child(Button::new("explore-more").ghost().small().label("show more").on_click(cx.listener(|this, _, _, cx| {
                 let since = this.next_batch.clone();
                 this.load(since, cx)
             })))
@@ -576,22 +577,22 @@ impl Render for Explore {
             .child(
                 h_flex()
                     .gap(space(8.))
-                    .mb(px(16.))
+                    .mb(zpx(16.))
                     .child(
                         v_flex()
                             .flex_grow(1.)
-                            .flex_basis(px(220.))
+                            .flex_basis(zpx(220.))
                             .min_w_0()
                             .child(label(&palette, "SEARCH"))
                             .child(
                                 well(&palette)
-                                    .child(icon("icons/search.svg").size(px(14.)).text_color(palette.text_tertiary))
+                                    .child(icon("icons/search.svg").size(zpx(14.)).text_color(palette.text_tertiary))
                                     .child(div().flex_1().min_w_0().child(Input::new(&self.search).appearance(false))),
                             ),
                     )
                     .child(
                         v_flex()
-                            .w(px(170.))
+                            .w(zpx(170.))
                             .flex_none()
                             .child(label(&palette, "SERVER"))
                             .child(well(&palette).child(div().flex_1().min_w_0().child(Input::new(&self.server).appearance(false)))),
@@ -601,7 +602,7 @@ impl Render for Explore {
                 v_flex()
                     // A floor, so the dialog doesn't shrink and jump under
                     // the pointer as a search narrows.
-                    .min_h(px(320.))
+                    .min_h(zpx(320.))
                     .children(error)
                     .children(empty)
                     .child(v_flex().gap(space(4.)).children(rows))

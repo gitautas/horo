@@ -5,7 +5,7 @@
 
 use gpui::{
     Context, Entity, EventEmitter, FocusHandle, FontWeight, IntoElement, ParentElement, Render, SharedString, Styled, Window,
-    div, px,
+    div,
 };
 use gpui_component::{
     Disableable,
@@ -17,6 +17,7 @@ use gpui_component::{
 use horo_core::matrix::rooms as core_rooms;
 use matrix_sdk::ruma::OwnedRoomId;
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     rooms,
@@ -130,7 +131,7 @@ impl Render for LeaveSpace {
             h_flex()
                 .items_start()
                 .gap(space(12.))
-                .mb(px(6.))
+                .mb(zpx(6.))
                 .child(
                     v_flex()
                         .flex_1()
@@ -138,7 +139,7 @@ impl Render for LeaveSpace {
                         .child(div().font_family(palette.heading_font.clone()).font_weight(FontWeight::BOLD).text_size(heading(13.5)).child("leave its rooms too"))
                         .child(
                             div()
-                                .mt(px(2.))
+                                .mt(zpx(2.))
                                 .text_size(text(12.))
                                 .line_height(gpui::relative(1.45))
                                 .text_color(palette.text_tertiary)
@@ -154,19 +155,19 @@ impl Render for LeaveSpace {
         let body = v_flex()
             .child(
                 div()
-                    .mb(px(16.))
+                    .mb(zpx(16.))
                     .text_size(text(13.))
                     .line_height(gpui::relative(1.55))
                     .text_color(palette.text_secondary)
                     .child("it drops out of your rail. rooms you're in stay in \"everything\" unless you take them with you — and if the space is private, you'd need an invite to get back."),
             )
             .children(with_rooms)
-            .children(self.error.clone().map(|e| div().mt(px(8.)).text_size(text(12.5)).text_color(palette.danger).child(e)))
+            .children(self.error.clone().map(|e| div().mt(zpx(8.)).text_size(text(12.5)).text_color(palette.danger).child(e)))
             .child(
                 h_flex()
                     .justify_end()
                     .gap(space(8.))
-                    .mt(px(20.))
+                    .mt(zpx(20.))
                     .child(Button::new("leave-space-stay").ghost().label("stay").on_click(cx.listener(|_, _, _, cx| cx.emit(Closed))))
                     .child(
                         Button::new("leave-space-go")

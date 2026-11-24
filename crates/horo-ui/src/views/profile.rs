@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::{
     AnyElement, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, anchored, deferred, div, img, prelude::FluentBuilder, px,
+    SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, anchored, deferred, div, img, prelude::FluentBuilder,
 };
 use gpui_component::{
     Disableable,
@@ -20,6 +20,7 @@ use horo_core::{
     verification,
 };
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     media::Media,
@@ -139,7 +140,7 @@ impl ProfileCard {
         let user = self.target.user_id.clone();
         let profile = self.profile.clone();
         let cover = profile.as_ref().and_then(|p| p.cover_url.clone()).and_then(|mxc| Media::image(&mxc, Some(((WIDTH * 2.) as u32, (COVER * 2.) as u32)), cx));
-        let cover = div().h(px(COVER)).w_full().bg(palette.raised).map(|d| match cover {
+        let cover = div().h(zpx(COVER)).w_full().bg(palette.raised).map(|d| match cover {
             Some(image) => d.child(img(image).size_full().object_fit(gpui::ObjectFit::Cover)),
             None => d,
         });
@@ -149,21 +150,21 @@ impl ProfileCard {
             presence::shown(store.presence.get(&user), store.presence_supported)
         };
         let mxc = profile.as_ref().and_then(|p| p.avatar_url.clone()).or_else(|| self.target.avatar_hint.clone());
-        let picture = avatar(&user, name, mxc.as_deref(), px(FACE), cx);
+        let picture = avatar(&user, name, mxc.as_deref(), zpx(FACE), cx);
         let face = div()
             .relative()
-            .p(px(3.))
-            .rounded(px(FACE / 3. + 3.))
+            .p(zpx(3.))
+            .rounded(zpx(FACE / 3. + 3.))
             .bg(palette.card)
             .child(picture)
-            .children(shown.map(|s| presence_dot(s, px(16.), palette.card, palette)));
+            .children(shown.map(|s| presence_dot(s, zpx(16.), palette.card, palette)));
 
         v_flex()
             .child(cover)
             .child(
                 h_flex()
                     .px_4()
-                    .mt(px(-FACE / 2.))
+                    .mt(zpx(-FACE / 2.))
                     .items_end()
                     .justify_between()
                     .child(face)
@@ -172,7 +173,7 @@ impl ProfileCard {
                             div()
                                 .mb_1()
                                 .px_2()
-                                .py(px(2.))
+                                .py(zpx(2.))
                                 .rounded_full()
                                 .bg(Hsla { a: 0.15, ..palette.online })
                                 .text_xs()
@@ -205,7 +206,7 @@ impl Render for ProfileCard {
                     .font_family(palette.mono_font.clone())
                     .text_xs()
                     .text_color(palette.text_tertiary)
-                    .child(div().size(px(7.)).rounded_full().bg(match shown {
+                    .child(div().size(zpx(7.)).rounded_full().bg(match shown {
                         presence::Shown::Online => palette.online,
                         presence::Shown::Away => palette.idle,
                         presence::Shown::Offline => palette.offline,
@@ -217,12 +218,12 @@ impl Render for ProfileCard {
         let status = self.profile.as_ref().and_then(|p| p.status.clone());
         let bio = self.profile.as_ref().and_then(|p| p.bio.clone());
         let shared = self.context.as_ref().map(|c| c.shared_rooms.clone()).unwrap_or_default();
-        let label = |text: &'static str| div().pt_2().font_family(palette.heading_font.clone()).text_size(px(14.)).text_color(palette.text_tertiary).child(text);
+        let label = |text: &'static str| div().pt_2().font_family(palette.heading_font.clone()).text_size(zpx(14.)).text_color(palette.text_tertiary).child(text);
 
         let mut rooms = Vec::new();
         for room in shared.iter().take(8) {
             let id = room.id.clone();
-            let face = avatar(&room.id, &room.name, room.avatar_url.as_deref(), px(20.), cx);
+            let face = avatar(&room.id, &room.name, room.avatar_url.as_deref(), zpx(20.), cx);
             rooms.push(
                 h_flex()
                     .id(SharedString::from(format!("shared-{}", room.id)))
@@ -269,10 +270,10 @@ impl Render for ProfileCard {
             .id("profile-card")
             .track_focus(&self.focus)
             .occlude()
-            .w(px(WIDTH))
-            .max_h(px(560.))
+            .w(zpx(WIDTH))
+            .max_h(zpx(560.))
             .overflow_y_scroll()
-            .rounded(px(20.))
+            .rounded(zpx(20.))
             .bg(palette.card)
             .border_1()
             .border_color(palette.border_strong)
@@ -292,7 +293,7 @@ impl Render for ProfileCard {
                     .pb_4()
                     .pt_2()
                     .gap_1()
-                    .child(div().font_family(palette.heading_font.clone()).text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child(name))
+                    .child(div().font_family(palette.heading_font.clone()).text_size(zpx(22.)).font_weight(FontWeight::SEMIBOLD).child(name))
                     .child(div().text_xs().text_color(palette.text_tertiary).child(user.clone()))
                     .children(presence_line)
                     .children(status.map(|s| div().pt_1().text_sm().text_color(palette.text_secondary).child(s)))
@@ -306,7 +307,7 @@ impl Render for ProfileCard {
             );
 
         // Anchored where they were clicked, kept inside the window.
-        deferred(anchored().position(self.target.at).snap_to_window_with_margin(px(12.)).child(card)).with_priority(1)
+        deferred(anchored().position(self.target.at).snap_to_window_with_margin(zpx(12.)).child(card)).with_priority(1)
     }
 }
 

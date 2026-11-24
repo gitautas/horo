@@ -9,7 +9,7 @@
 
 use gpui::{
     AnyElement, AppContext, ClipboardItem, Context, Entity, FontWeight, Hsla, IntoElement, ParentElement, Render, SharedString,
-    Styled, Window, div, prelude::FluentBuilder, px,
+    Styled, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     Disableable,
@@ -20,6 +20,7 @@ use gpui_component::{
 };
 use horo_core::verification::{self, DeviceInfo, RecoveryState, RecoveryStatus};
 
+use crate::theme::zpx;
 use crate::{backend::Backend, store::Store, theme::Palette, verify::Stage};
 
 pub struct Security {
@@ -204,7 +205,7 @@ impl Security {
         let explanation = if recovery.state == RecoveryState::Incomplete {
             div()
                 .p_3()
-                .rounded(px(12.))
+                .rounded(zpx(12.))
                 .bg(Hsla { a: 0.08, ..palette.idle })
                 .border_1()
                 .border_color(Hsla { a: 0.35, ..palette.idle })
@@ -224,7 +225,7 @@ impl Security {
                 v_flex()
                     .gap_2()
                     .p_4()
-                    .rounded(px(12.))
+                    .rounded(zpx(12.))
                     .bg(palette.inset)
                     .border_1()
                     .border_color(palette.accent)
@@ -292,7 +293,7 @@ impl Render for Security {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = cx.global::<Palette>().clone();
         let heading = |text: &'static str| {
-            div().font_family(palette.heading_font.clone()).text_size(px(20.)).font_weight(FontWeight::SEMIBOLD).text_color(palette.text).child(text)
+            div().font_family(palette.heading_font.clone()).text_size(zpx(20.)).font_weight(FontWeight::SEMIBOLD).text_color(palette.text).child(text)
         };
         let loading = || div().py_4().text_sm().text_color(palette.text_tertiary).child("loading…");
 

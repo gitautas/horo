@@ -2,7 +2,7 @@
 
 use gpui::{
     AnyElement, Hsla, img, StyledImage, FocusHandle, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    Window, div, prelude::FluentBuilder, px,
+    Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     Icon, IconName, Sizable,
@@ -20,6 +20,7 @@ use horo_core::{
 
 use matrix_sdk::ruma::OwnedRoomId;
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     OpenSettings,
@@ -560,7 +561,7 @@ impl Shell {
 
         let me_face = me.map(|info| {
             let name = info.display_name.clone().unwrap_or_else(|| info.user_id.clone());
-            let face = avatar(&info.user_id, &name, info.avatar_url.as_deref(), px(38.), cx);
+            let face = avatar(&info.user_id, &name, info.avatar_url.as_deref(), zpx(38.), cx);
             let shown = if away { presence::Shown::Away } else { presence::Shown::Online };
             with_presence(face, Some(shown), palette.card, palette)
         });
@@ -568,20 +569,20 @@ impl Shell {
         v_flex()
             .id("rail")
             .relative()
-            .w(px(76.))
+            .w(zpx(76.))
             .h_full()
             .flex_none()
             .items_center()
             .gap(space(14.))
-            .pt(px(44.))
-            .pb(px(16.))
+            .pt(zpx(44.))
+            .pb(zpx(16.))
             .bg(palette.card)
             .border_r_1()
             .border_color(palette.border_subtle)
             // The window's title bar is gone; its top is where you drag it.
-            .child(drag_strip(px(40.)))
-            .child(img(logo()).w(px(18. * 830.3 / 295.9)).h(px(18.)).flex_none())
-            .child(div().w(px(26.)).h(px(2.)).rounded_full().bg(palette.border).flex_none())
+            .child(drag_strip(zpx(40.)))
+            .child(img(logo()).w(zpx(18. * 830.3 / 295.9)).h(zpx(18.)).flex_none())
+            .child(div().w(zpx(26.)).h(zpx(2.)).rounded_full().bg(palette.border).flex_none())
             .child(all)
             .child(
                 v_flex()
@@ -596,7 +597,7 @@ impl Shell {
                     .child(
                         div()
                             .id("rail-explore")
-                            .size(px(46.))
+                            .size(zpx(46.))
                             .flex_none()
                             .flex()
                             .items_center()
@@ -608,7 +609,7 @@ impl Shell {
                             .border_color(palette.border)
                             .hover(|d| d.bg(palette.raised))
                             .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("explore spaces").build(window, cx))
-                            .child(voice::icon("icons/compass.svg").size(px(20.)).text_color(palette.text_tertiary))
+                            .child(voice::icon("icons/compass.svg").size(zpx(20.)).text_color(palette.text_tertiary))
                             .on_click(cx.listener(|this, _, window, cx| this.open_explore(window, cx))),
                     ),
             )
@@ -621,7 +622,7 @@ impl Shell {
                             .id("rail-settings")
                             .cursor_pointer()
                             .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new(if cfg!(target_os = "macos") { "settings (⌘,)" } else { "settings (ctrl+,)" }).build(window, cx))
-                            .child(Icon::new(IconName::Settings).size(px(20.)).text_color(palette.text_tertiary))
+                            .child(Icon::new(IconName::Settings).size(zpx(20.)).text_color(palette.text_tertiary))
                             .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
                     )
                     .children(me_face),
@@ -642,20 +643,20 @@ impl Shell {
             let store = self.store.read(cx);
             presence::shown(store.presence.get(user), store.presence_supported)
         });
-        let picture = avatar(&room.id, &room.name, room.avatar_url.as_deref(), px(36.), cx);
+        let picture = avatar(&room.id, &room.name, room.avatar_url.as_deref(), zpx(36.), cx);
         let face = div()
             .relative()
             .flex_none()
             .child(picture)
             .when(!room.is_direct && !room.is_space, |d| d.child(channel_badge(room.is_video_room, 16., palette.card, palette)))
-            .children(shown.map(|s| presence_dot(s, px(12.), palette.app, palette)))
+            .children(shown.map(|s| presence_dot(s, zpx(12.), palette.app, palette)))
             .when(room.has_active_call, |d| {
                 d.child(
                     div()
                         .absolute()
-                        .right(px(-3.))
-                        .bottom(px(-3.))
-                        .size(px(14.))
+                        .right(zpx(-3.))
+                        .bottom(zpx(-3.))
+                        .size(zpx(14.))
                         .rounded_full()
                         .bg(palette.online)
                         .border_2()
@@ -663,7 +664,7 @@ impl Shell {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(voice::icon("icons/phone-call.svg").size(px(7.)).text_color(palette.app)),
+                        .child(voice::icon("icons/phone-call.svg").size(zpx(7.)).text_color(palette.app)),
                 )
             });
 
@@ -678,14 +679,14 @@ impl Shell {
                     .text_color(if room.has_unread { palette.text } else { palette.text_secondary })
                     .child(room.name.clone()),
             )
-            .when(room.is_encrypted, |d| d.child(voice::icon("icons/shield-check.svg").size(px(12.)).text_color(palette.accent).flex_none()))
-            .when(room.is_muted, |d| d.child(voice::icon("icons/bell-off.svg").size(px(12.)).text_color(palette.text_tertiary).flex_none()));
+            .when(room.is_encrypted, |d| d.child(voice::icon("icons/shield-check.svg").size(zpx(12.)).text_color(palette.accent).flex_none()))
+            .when(room.is_muted, |d| d.child(voice::icon("icons/bell-off.svg").size(zpx(12.)).text_color(palette.text_tertiary).flex_none()));
 
         let badge = room.has_unread.then(|| {
             let count = room.notification_count;
             div()
-                .min_w(px(19.))
-                .h(px(19.))
+                .min_w(zpx(19.))
+                .h(zpx(19.))
                 .px(space(6.))
                 .rounded_full()
                 .flex()
@@ -707,15 +708,15 @@ impl Shell {
             .gap(space(10.))
             .px(space(10.))
             .py(space(9.))
-            .mb(px(2.))
+            .mb(zpx(2.))
             .rounded(corner(16.))
             .cursor_pointer()
             .when(selected, |row| {
                 row.bg(Hsla { a: 0.07, ..gpui::white() }).shadow(vec![gpui::BoxShadow {
                     color: accent,
-                    offset: gpui::point(px(3.), px(0.)),
-                    blur_radius: px(0.),
-                    spread_radius: px(0.),
+                    offset: gpui::point(zpx(3.), zpx(0.)),
+                    blur_radius: zpx(0.),
+                    spread_radius: zpx(0.),
                     inset: true,
                 }])
             })
@@ -726,7 +727,7 @@ impl Shell {
                     .flex_1()
                     .min_w_0()
                     .child(name)
-                    .child(div().mt(px(1.)).truncate().text_size(text(12.)).text_color(palette.text_tertiary).child(preview.replace('\n', " "))),
+                    .child(div().mt(zpx(1.)).truncate().text_size(text(12.)).text_color(palette.text_tertiary).child(preview.replace('\n', " "))),
             )
             .child(
                 v_flex()
@@ -788,7 +789,7 @@ impl Shell {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(palette.text_tertiary)
                     .child(section.title())
-                    .child(div().flex_1().h(px(1.)).bg(palette.border_subtle))
+                    .child(div().flex_1().h(zpx(1.)).bg(palette.border_subtle))
                     .child(rooms.len().to_string()),
             );
             for room in rooms {
@@ -828,7 +829,7 @@ impl Shell {
 
         let filtered = self.filter != Filter::All;
         let search_box = h_flex()
-            .mt(px(12.))
+            .mt(zpx(12.))
             .gap(space(8.))
             .px(space(14.))
             .py(space(6.))
@@ -836,16 +837,16 @@ impl Shell {
             .bg(palette.inset)
             .border_1()
             .border_color(palette.border_subtle)
-            .child(Icon::new(IconName::Search).size(px(14.)).text_color(palette.text_tertiary))
+            .child(Icon::new(IconName::Search).size(zpx(14.)).text_color(palette.text_tertiary))
             .child(div().flex_1().text_size(text(13.)).child(Input::new(&self.search).appearance(false)))
             .child(
                 div()
                     .id("room-filters")
                     .relative()
                     .cursor_pointer()
-                    .child(voice::icon("icons/funnel.svg").size(px(15.)).text_color(if filtered || self.filters_open { palette.accent } else { palette.text_tertiary }))
+                    .child(voice::icon("icons/funnel.svg").size(zpx(15.)).text_color(if filtered || self.filters_open { palette.accent } else { palette.text_tertiary }))
                     .when(filtered && !self.filters_open, |d| {
-                        d.child(div().absolute().top(px(-2.)).right(px(-2.)).size(px(6.)).rounded_full().bg(palette.accent))
+                        d.child(div().absolute().top(zpx(-2.)).right(zpx(-2.)).size(zpx(6.)).rounded_full().bg(palette.accent))
                     })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.filters_open = !this.filters_open;
@@ -853,7 +854,7 @@ impl Shell {
                     })),
             );
         let chips = self.filters_open.then(|| {
-            h_flex().gap(space(6.)).mt(px(12.)).children([Filter::All, Filter::Unread, Filter::Dms, Filter::Muted].into_iter().map(|f| {
+            h_flex().gap(space(6.)).mt(zpx(12.)).children([Filter::All, Filter::Unread, Filter::Dms, Filter::Muted].into_iter().map(|f| {
                 let on = self.filter == f;
                 div()
                     .id(SharedString::from(format!("filter-{}", filter_name(f))))
@@ -876,14 +877,14 @@ impl Shell {
         let width = store_width(&self.store, Pane::RoomList, cx);
         v_flex()
             .relative()
-            .w(px(width))
+            .w(zpx(width))
             .h_full()
             .flex_none()
             .bg(palette.card)
             .child(resize_handle(Pane::RoomList, palette))
             .border_r_1()
             .border_color(palette.border_subtle)
-            .child(drag_strip(px(18.)))
+            .child(drag_strip(zpx(18.)))
             .child(
                 v_flex()
                     .px(space(18.))
@@ -907,7 +908,7 @@ impl Shell {
                                 h_flex()
                                     .flex_none()
                                     .gap(space(10.))
-                                    .pb(px(2.))
+                                    .pb(zpx(2.))
                                     .child(
                                         div()
                                             .font_family(palette.mono_font.clone())
@@ -918,7 +919,7 @@ impl Shell {
                                     .child(
                                         div()
                                             .id("create-room")
-                                            .size(px(26.))
+                                            .size(zpx(26.))
                                             .flex()
                                             .items_center()
                                             .justify_center()
@@ -929,7 +930,7 @@ impl Shell {
                                             .border_color(palette.border)
                                             .hover(|d| d.bg(palette.raised))
                                             .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("make or join a room").build(window, cx))
-                                            .child(voice::icon("icons/plus.svg").size(px(13.)).text_color(palette.text_secondary))
+                                            .child(voice::icon("icons/plus.svg").size(zpx(13.)).text_color(palette.text_secondary))
                                             .on_click(cx.listener(|this, _, window, cx| this.open_create(window, cx))),
                                     ),
                             ),
@@ -949,24 +950,24 @@ impl Shell {
             let store = self.store.read(cx);
             presence::shown(store.presence.get(user), store.presence_supported).zip(store.presence.get(user).cloned())
         });
-        let picture = avatar(&room.id, &room.name, room.avatar_url.as_deref(), px(42.), cx);
+        let picture = avatar(&room.id, &room.name, room.avatar_url.as_deref(), zpx(42.), cx);
         let face = div()
             .relative()
             .flex_none()
             .child(picture)
             .when(!room.is_direct, |d| d.child(channel_badge(room.is_video_room, 18., palette.app, palette)))
-            .children(shown.as_ref().map(|(s, _)| presence_dot(*s, px(13.), palette.app, palette)));
+            .children(shown.as_ref().map(|(s, _)| presence_dot(*s, zpx(13.), palette.app, palette)));
 
         let subtitle: Option<AnyElement> = if room.dm_user_id.is_some() {
             shown.map(|(state, dto)| {
                 let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or_default();
                 h_flex()
-                    .mt(px(3.))
+                    .mt(zpx(3.))
                     .gap(space(6.))
                     .font_family(palette.mono_font.clone())
                     .text_size(text(11.5))
                     .text_color(palette.text_tertiary)
-                    .child(div().size(px(7.)).rounded_full().flex_none().bg(match state {
+                    .child(div().size(zpx(7.)).rounded_full().flex_none().bg(match state {
                         presence::Shown::Online => palette.online,
                         presence::Shown::Away => palette.idle,
                         presence::Shown::Offline => palette.offline,
@@ -978,7 +979,7 @@ impl Shell {
             (room.topic.is_some() || room.canonical_alias.is_some()).then(|| {
                 h_flex()
                     .gap(space(6.))
-                    .max_w(px(520.))
+                    .max_w(zpx(520.))
                     .min_w_0()
                     .children(room.topic.clone().map(|t| div().truncate().text_size(text(12.5)).text_color(palette.text_secondary).child(t.replace('\n', " "))))
                     .children(room.canonical_alias.clone().map(|a| {
@@ -1000,7 +1001,7 @@ impl Shell {
             .tooltip(move |window, cx| {
                 gpui_component::tooltip::Tooltip::new(if in_this_call { "leave the call" } else { "start a voice call" }).build(window, cx)
             })
-            .child(voice::icon(if in_this_call { "icons/phone-off.svg" } else { "icons/phone-call.svg" }).size(px(17.)).text_color(
+            .child(voice::icon(if in_this_call { "icons/phone-off.svg" } else { "icons/phone-call.svg" }).size(zpx(17.)).text_color(
                 if in_this_call {
                     palette.app
                 } else if highlight {
@@ -1023,7 +1024,7 @@ impl Shell {
             .cursor_pointer()
             .bg(palette.raised)
             .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("room info").build(window, cx))
-            .child(voice::icon("icons/info.svg").size(px(17.)).text_color(if info_open { palette.accent } else { palette.text_secondary }))
+            .child(voice::icon("icons/info.svg").size(zpx(17.)).text_color(if info_open { palette.accent } else { palette.text_secondary }))
             .on_click(move |_, _, cx| store.update(cx, |s, cx| s.update_prefs(|p| p.show_info_panel = !p.show_info_panel, cx)));
 
         h_flex()
@@ -1035,7 +1036,7 @@ impl Shell {
             .border_b_1()
             .border_color(palette.border_subtle)
             .bg(Hsla { a: 0.6, ..palette.card })
-            .child(drag_strip(px(12.)))
+            .child(drag_strip(zpx(12.)))
             .child(face)
             .child(
                 v_flex()
@@ -1052,7 +1053,7 @@ impl Shell {
                                     .text_size(heading(19.))
                                     .child(room.name.clone()),
                             )
-                            .when(room.is_encrypted, |d| d.child(voice::icon("icons/lock.svg").size(px(14.)).text_color(palette.accent).flex_none())),
+                            .when(room.is_encrypted, |d| d.child(voice::icon("icons/lock.svg").size(zpx(14.)).text_color(palette.accent).flex_none())),
                     )
                     .children(subtitle),
             )
@@ -1060,7 +1061,7 @@ impl Shell {
                 h_flex()
                     .ml_auto()
                     .gap(space(8.))
-                    .child(div().mr(px(4.)).font_family(palette.mono_font.clone()).text_size(text(11.)).text_color(palette.text_tertiary).child(room.member_count.to_string()))
+                    .child(div().mr(zpx(4.)).font_family(palette.mono_font.clone()).text_size(text(11.)).text_color(palette.text_tertiary).child(room.member_count.to_string()))
                     .child(call_button)
                     .child(info_button),
             )
@@ -1092,8 +1093,8 @@ impl Shell {
                 .border_1()
                 .border_color(palette.border_subtle)
                 // The coloured left edge: gpui borders take one colour.
-                .child(div().absolute().left_0().top_0().bottom_0().w(px(2.)).bg(palette.accent_quaternary))
-                .child(voice::icon("icons/messages-square.svg").size(px(15.)).text_color(palette.accent_quaternary))
+                .child(div().absolute().left_0().top_0().bottom_0().w(zpx(2.)).bg(palette.accent_quaternary))
+                .child(voice::icon("icons/messages-square.svg").size(zpx(15.)).text_color(palette.accent_quaternary))
                 .child(
                     div()
                         .flex_1()
@@ -1195,10 +1196,12 @@ impl Render for Shell {
             // width when it's let go.
             .on_drag_move(cx.listener(|this, event: &gpui::DragMoveEvent<Pane>, window, cx| {
                 let pane = *event.drag(cx);
-                let x = f32::from(event.event.position.x);
+                // The pointer is in screen pixels; widths are kept in the
+                // design's, before zoom.
+                let (x, zoom) = (f32::from(event.event.position.x), crate::theme::zoom());
                 let width = match pane {
-                    Pane::RoomList => x - RAIL_WIDTH,
-                    Pane::InfoPanel => f32::from(window.viewport_size().width) - x,
+                    Pane::RoomList => x / zoom - RAIL_WIDTH,
+                    Pane::InfoPanel => (f32::from(window.viewport_size().width) - x) / zoom,
                 };
                 this.store.update(cx, |s, cx| s.preview_prefs(|p| pane.set(p, clamp_pane(width)), cx));
             }))
@@ -1259,7 +1262,7 @@ fn banner(store: &Entity<Store>, palette: &Palette, cx: &mut Context<Shell>) -> 
     Some(
         div()
             .absolute()
-            .bottom(px(22.))
+            .bottom(zpx(22.))
             .left_0()
             .right_0()
             .flex()
@@ -1267,7 +1270,7 @@ fn banner(store: &Entity<Store>, palette: &Palette, cx: &mut Context<Shell>) -> 
             .child(
                 h_flex()
                     .occlude()
-                    .max_w(px(520.))
+                    .max_w(zpx(520.))
                     .gap(space(12.))
                     .px(space(18.))
                     .py(space(12.))
@@ -1279,7 +1282,7 @@ fn banner(store: &Entity<Store>, palette: &Palette, cx: &mut Context<Shell>) -> 
                     .child(
                         voice::icon(if error { "icons/circle-alert.svg" } else { "icons/info.svg" })
                             .flex_none()
-                            .size(px(16.))
+                            .size(zpx(16.))
                             .text_color(if error { palette.danger } else { palette.accent_quaternary }),
                     )
                     .child(div().text_size(text(13.)).line_height(gpui::relative(1.45)).text_color(palette.text_secondary).child(banner.message))
@@ -1327,7 +1330,7 @@ fn update_banner(store: &Entity<Store>, palette: &Palette, cx: &mut gpui::App) -
     Some(
         div()
             .absolute()
-            .top(px(14.))
+            .top(zpx(14.))
             .left_0()
             .right_0()
             .flex()
@@ -1336,7 +1339,7 @@ fn update_banner(store: &Entity<Store>, palette: &Palette, cx: &mut gpui::App) -
                 h_flex()
                     .id("update-banner")
                     .occlude()
-                    .max_w(px(520.))
+                    .max_w(zpx(520.))
                     .gap(space(12.))
                     .px(space(16.))
                     .py(space(10.))
@@ -1345,7 +1348,7 @@ fn update_banner(store: &Entity<Store>, palette: &Palette, cx: &mut gpui::App) -
                     .border_1()
                     .border_color(palette.accent)
                     .shadow_lg()
-                    .child(voice::icon("icons/sparkles.svg").size(px(15.)).text_color(palette.accent))
+                    .child(voice::icon("icons/sparkles.svg").size(zpx(15.)).text_color(palette.accent))
                     .child(
                         div()
                             .text_size(text(13.))
@@ -1412,15 +1415,15 @@ pub fn resize_handle(pane: Pane, palette: &Palette) -> impl IntoElement {
         .absolute()
         .top_0()
         .bottom_0()
-        .w(px(8.))
+        .w(zpx(8.))
         .cursor_col_resize()
         .hover(|d| d.bg(Hsla { a: 0.35, ..palette.accent }))
         .on_drag(pane, |_, _, _, cx| cx.new(|_| gpui::EmptyView))
         // Not a click on whatever is under it.
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
     match pane {
-        Pane::RoomList => strip.right(px(-4.)),
-        Pane::InfoPanel => strip.left(px(-4.)),
+        Pane::RoomList => strip.right(zpx(-4.)),
+        Pane::InfoPanel => strip.left(zpx(-4.)),
     }
 }
 
@@ -1444,7 +1447,7 @@ fn space_tile(
 ) -> gpui::Stateful<gpui::Div> {
     let picture = mxc.and_then(|mxc| Media::image(mxc, Some((92, 92)), cx));
     let tile = div()
-        .size(px(46.))
+        .size(zpx(46.))
         .rounded(corner(16.))
         .overflow_hidden()
         .flex()
@@ -1460,9 +1463,9 @@ fn space_tile(
                     .border_color(palette.app)
                     .shadow(vec![gpui::BoxShadow {
                         color: Hsla { h: 0., s: 0., l: 0., a: 0.28 },
-                        offset: gpui::point(px(0.), px(2.)),
-                        blur_radius: px(0.),
-                        spread_radius: px(0.),
+                        offset: gpui::point(zpx(0.), zpx(2.)),
+                        blur_radius: zpx(0.),
+                        spread_radius: zpx(0.),
                         inset: false,
                     }])
             } else {
@@ -1483,10 +1486,10 @@ fn space_tile(
             d.child(
                 div()
                     .absolute()
-                    .top(px(-4.))
-                    .right(px(-4.))
-                    .min_w(px(18.))
-                    .h(px(18.))
+                    .top(zpx(-4.))
+                    .right(zpx(-4.))
+                    .min_w(zpx(18.))
+                    .h(zpx(18.))
                     .px(space(5.))
                     .rounded_full()
                     .bg(palette.accent_secondary)
@@ -1508,9 +1511,9 @@ fn space_tile(
 fn channel_badge(video: bool, size: f32, ring: Hsla, palette: &Palette) -> impl IntoElement {
     div()
         .absolute()
-        .left(px(-4.))
-        .bottom(px(-4.))
-        .size(px(size))
+        .left(zpx(-4.))
+        .bottom(zpx(-4.))
+        .size(zpx(size))
         .rounded_full()
         .bg(if video { palette.accent_tertiary } else { palette.inset })
         .border_2()
@@ -1520,9 +1523,9 @@ fn channel_badge(video: bool, size: f32, ring: Hsla, palette: &Palette) -> impl 
         .justify_center()
         .map(|d| {
             if video {
-                d.child(voice::icon("icons/video.svg").size(px(size * 0.5)).text_color(palette.app))
+                d.child(voice::icon("icons/video.svg").size(zpx(size * 0.5)).text_color(palette.app))
             } else {
-                d.child(div().text_size(px(size * 0.62)).font_weight(FontWeight::EXTRA_BOLD).text_color(palette.text_secondary).child("#"))
+                d.child(div().text_size(zpx(size * 0.62)).font_weight(FontWeight::EXTRA_BOLD).text_color(palette.text_secondary).child("#"))
             }
         })
 }
@@ -1581,17 +1584,17 @@ fn drop_zone(room: &str, in_thread: bool, composer: Entity<Composer>, palette: &
         .child(
             v_flex()
                 .items_center()
-                .gap(px(14.))
-                .px(px(64.))
-                .py(px(44.))
-                .rounded(px(28.))
+                .gap(zpx(14.))
+                .px(zpx(64.))
+                .py(zpx(44.))
+                .rounded(zpx(28.))
                 .border_2()
                 .border_dashed()
                 .border_color(palette.accent)
                 .bg(palette.raised)
                 .shadow_lg()
-                .child(div().font_family(palette.heading_font.clone()).font_weight(gpui::FontWeight::EXTRA_BOLD).text_size(px(22.)).child("drop it here~"))
-                .child(div().max_w(px(320.)).text_center().text_size(px(13.)).text_color(palette.text_secondary).child(where_to)),
+                .child(div().font_family(palette.heading_font.clone()).font_weight(gpui::FontWeight::EXTRA_BOLD).text_size(zpx(22.)).child("drop it here~"))
+                .child(div().max_w(zpx(320.)).text_center().text_size(zpx(13.)).text_color(palette.text_secondary).child(where_to)),
         )
 }
 

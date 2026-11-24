@@ -6,7 +6,7 @@
 
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement,
-    Styled, Window, div, img, prelude::FluentBuilder, px,
+    Styled, Window, div, img, prelude::FluentBuilder,
 };
 use gpui_component::{
     Disableable,
@@ -21,6 +21,7 @@ use horo_core::{
     matrix::auth,
 };
 
+use crate::theme::zpx;
 use crate::{
     backend::Backend,
     registration::next_stage,
@@ -304,12 +305,12 @@ fn field(input: &Entity<InputState>, icon_path: &'static str, masked: bool, pale
         .bg(palette.inset)
         .border_1()
         .border_color(palette.border_subtle)
-        .child(icon(icon_path).size(px(14.)).text_color(palette.text_tertiary))
+        .child(icon(icon_path).size(zpx(14.)).text_color(palette.text_tertiary))
         .child(div().flex_1().text_size(text(14.)).child(Input::new(input).appearance(false).when(masked, |i| i.mask_toggle())))
 }
 
 fn hint(words: impl Into<SharedString>, palette: &Palette) -> impl IntoElement {
-    div().mb(px(10.)).text_size(text(12.5)).line_height(gpui::relative(1.5)).text_color(palette.text_secondary).child(words.into())
+    div().mb(zpx(10.)).text_size(text(12.5)).line_height(gpui::relative(1.5)).text_color(palette.text_secondary).child(words.into())
 }
 
 /// A small link-coloured button in the mono face.
@@ -329,7 +330,7 @@ impl Login {
         let email = Self::value(&self.email, cx);
         match self.next() {
             Next::Details => v_flex()
-                .gap(px(10.))
+                .gap(zpx(10.))
                 .child(field(&self.username, "icons/user.svg", false, palette))
                 .child(field(&self.password, "icons/lock.svg", true, palette))
                 .child(field(&self.confirm, "icons/lock.svg", true, palette))
@@ -346,8 +347,8 @@ impl Login {
                     .child(
                         v_flex()
                             .gap(space(6.))
-                            .mt(px(4.))
-                            .mb(px(14.))
+                            .mt(zpx(4.))
+                            .mb(zpx(14.))
                             .children(policies.into_iter().enumerate().map(|(i, policy)| {
                                 let url = policy.url.clone();
                                 h_flex()
@@ -356,7 +357,7 @@ impl Login {
                                     .cursor_pointer()
                                     .text_size(text(13.))
                                     .text_color(palette.accent_quaternary)
-                                    .child(icon("icons/external-link.svg").size(px(13.)))
+                                    .child(icon("icons/external-link.svg").size(zpx(13.)))
                                     .child(policy.name)
                                     .on_click(move |_, _, cx| cx.open_url(&url))
                             }))
@@ -415,7 +416,7 @@ impl Login {
         let Some(info) = self.info.clone() else { return div().into_any_element() };
         let mut body = v_flex();
         if info.supports_password {
-            body = body.gap(px(10.)).child(field(&self.username, "icons/user.svg", false, palette)).child(field(&self.password, "icons/lock.svg", true, palette));
+            body = body.gap(zpx(10.)).child(field(&self.username, "icons/user.svg", false, palette)).child(field(&self.password, "icons/lock.svg", true, palette));
         }
         if info.supports_sso {
             let providers: Vec<(Option<String>, String)> = if info.sso_providers.is_empty() {
@@ -426,14 +427,14 @@ impl Login {
             body = body.child(
                 v_flex()
                     .when(info.supports_password, |d| {
-                        d.mt(px(6.)).child(
+                        d.mt(zpx(6.)).child(
                             h_flex()
                                 .gap(space(10.))
-                                .mt(px(4.))
-                                .mb(px(14.))
-                                .child(div().flex_1().h(px(1.)).bg(palette.border_subtle))
+                                .mt(zpx(4.))
+                                .mb(zpx(14.))
+                                .child(div().flex_1().h(zpx(1.)).bg(palette.border_subtle))
                                 .child(div().text_size(text(11.)).text_color(palette.text_tertiary).child("or"))
-                                .child(div().flex_1().h(px(1.)).bg(palette.border_subtle)),
+                                .child(div().flex_1().h(zpx(1.)).bg(palette.border_subtle)),
                         )
                     })
                     .gap(space(8.))
@@ -487,7 +488,7 @@ impl Render for Login {
                 .child(field(&self.server, "icons/globe.svg", false, &palette))
                 .child(
                     div()
-                        .mt(px(8.))
+                        .mt(zpx(8.))
                         .text_size(text(12.))
                         .line_height(gpui::relative(1.5))
                         .text_color(palette.text_tertiary)
@@ -500,11 +501,11 @@ impl Render for Login {
                     .child(
                         h_flex()
                             .gap(space(8.))
-                            .mb(px(12.))
+                            .mb(zpx(12.))
                             .font_family(palette.mono_font.clone())
                             .text_size(text(11.))
                             .text_color(palette.text_tertiary)
-                            .child(icon("icons/circle-check.svg").size(px(13.)).text_color(palette.accent))
+                            .child(icon("icons/circle-check.svg").size(zpx(13.)).text_color(palette.accent))
                             .child(div().flex_1().min_w_0().truncate().child(url))
                             .child(text_button("change-server", "change", true, &palette).on_click(cx.listener(|this, _, window, cx| this.go_to(Stage::Server, window, cx)))),
                     )
@@ -522,24 +523,24 @@ impl Render for Login {
 
         div().size_full().flex().items_center().justify_center().bg(palette.app).child(
             v_flex()
-                .w(px(396.))
+                .w(zpx(396.))
                 .p(space(30.))
                 .rounded(corner(28.))
                 .bg(palette.card)
                 .border_1()
                 .border_color(palette.border_subtle)
                 .shadow_lg()
-                .child(img(crate::views::shell::logo()).w(px(40. * 830.3 / 295.9)).h(px(40.)))
-                .child(div().mt(px(10.)).text_size(text(13.5)).text_color(palette.text_secondary).child("a cute matrix client~"))
+                .child(img(crate::views::shell::logo()).w(zpx(40. * 830.3 / 295.9)).h(zpx(40.)))
+                .child(div().mt(zpx(10.)).text_size(text(13.5)).text_color(palette.text_secondary).child("a cute matrix client~"))
                 .child(
                     v_flex()
-                        .mt(px(26.))
-                        .child(div().mb(px(8.)).text_size(text(11.)).font_weight(FontWeight::BOLD).text_color(palette.text_tertiary).child(caption))
+                        .mt(zpx(26.))
+                        .child(div().mb(zpx(8.)).text_size(text(11.)).font_weight(FontWeight::BOLD).text_color(palette.text_tertiary).child(caption))
                         .child(body),
                 )
                 .children(error.map(|e| {
                     div()
-                        .mt(px(16.))
+                        .mt(zpx(16.))
                         .px(space(14.))
                         .py(space(10.))
                         .rounded(corner(14.))
@@ -553,7 +554,7 @@ impl Render for Login {
                 }))
                 .when(show_submit, |d| {
                     d.child(
-                        h_flex().mt(px(22.)).child(
+                        h_flex().mt(zpx(22.)).child(
                             Button::new("login-submit")
                                 .primary()
                                 .w_full()
@@ -566,7 +567,7 @@ impl Render for Login {
                 })
                 .children(switch.map(|(prompt, action, target)| {
                     h_flex()
-                        .mt(px(14.))
+                        .mt(zpx(14.))
                         .gap_1()
                         .text_size(text(12.5))
                         .text_color(palette.text_tertiary)
@@ -582,12 +583,12 @@ impl Render for Login {
                 }))
                 .child(
                     h_flex()
-                        .mt(px(20.))
+                        .mt(zpx(20.))
                         .gap(space(8.))
                         .font_family(palette.mono_font.clone())
                         .text_size(text(10.5))
                         .text_color(palette.text_tertiary)
-                        .child(icon("icons/shield-check.svg").size(px(12.)).text_color(palette.accent))
+                        .child(icon("icons/shield-check.svg").size(zpx(12.)).text_color(palette.accent))
                         .child("keys stay on this device, in your system keychain"),
                 ),
         )
