@@ -4292,6 +4292,7 @@ dependencies = [
 name = "horo-rtc"
 version = "0.11.0"
 dependencies = [
+ "cc",
  "cpal",
  "futures-util",
  "hmac",

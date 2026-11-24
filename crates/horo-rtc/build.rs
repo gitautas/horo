@@ -7,6 +7,12 @@
 //! result is cached in Cargo's build directory; it's rebuilt when the
 //! submodule moves or the target changes.
 //!
+//! On Windows (MSVC) libvpx's configure writes Visual Studio projects
+//! instead of makefiles, as vcpkg's port uses it: configure and `make
+//! dist` under bash (Git for Windows' or MSYS2's, with `make` and `nasm`
+//! on the PATH), then MSBuild builds `vpxmd.lib` (the C runtime Rust links
+//! by default).
+//!
 //! `HORO_SYSTEM_VPX=1` links the system's libvpx instead (through
 //! pkg-config), for a quick local build without compiling libvpx.
 
@@ -39,12 +45,62 @@ fn main() {
 
     let target = env::var("TARGET").unwrap();
     let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("libvpx");
-    let built = out.join("libvpx.a");
-    if !built.exists() {
+    if target.ends_with("-windows-msvc") {
+        let lib_dir = out.join(if target.starts_with("aarch64") { "ARM64" } else { "x64" }).join("Release");
+        if !lib_dir.join("vpxmd.lib").exists() {
+            build_msvc(&source, &out, &target);
+        }
+        println!("cargo:rustc-link-search=native={}", lib_dir.display());
+        println!("cargo:rustc-link-lib=static=vpxmd");
+        return;
+    }
+    if !out.join("libvpx.a").exists() {
         build(&source, &out, &target);
     }
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=vpx");
+}
+
+/// The configure, generate and MSBuild steps for Windows.
+fn build_msvc(source: &Path, out: &Path, target: &str) {
+    let (vpx_target, platform) = match target {
+        "x86_64-pc-windows-msvc" => ("x86_64-win64-vs17", "x64"),
+        "aarch64-pc-windows-msvc" => ("arm64-win64-vs17", "ARM64"),
+        other => panic!("building libvpx for {other} isn't set up yet; set HORO_SYSTEM_VPX=1 to use an installed one"),
+    };
+    let _ = std::fs::remove_dir_all(out);
+    std::fs::create_dir_all(out).unwrap();
+
+    // bash wants `/c/…` rather than `C:\…`.
+    let unix = |path: &Path| {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf()).to_string_lossy().replace('\\', "/");
+        let path = path.trim_start_matches("//?/");
+        match path.split_once(":/") {
+            Some((drive, rest)) if drive.len() == 1 => format!("/{}/{rest}", drive.to_lowercase()),
+            _ => path.to_owned(),
+        }
+    };
+    let configure = format!(
+        "{} --target={vpx_target} --as=nasm --enable-static --disable-shared --enable-vp8 --disable-vp9 --enable-realtime-only \
+         --disable-examples --disable-tools --disable-docs --disable-unit-tests --disable-webm-io --disable-libyuv",
+        unix(&source.join("configure")),
+    );
+    run(Command::new("bash").current_dir(out).args(["--noprofile", "--norc", "-c", &configure]), "configuring libvpx");
+    // Writes vpx.vcxproj and the headers it needs.
+    run(Command::new("bash").current_dir(out).args(["--noprofile", "--norc", "-c", "make dist"]), "generating libvpx's projects");
+
+    let msbuild = cc::windows_registry::find_tool(target, "msbuild.exe").unwrap_or_else(|| panic!("MSBuild not found: install Visual Studio's C++ build tools"));
+    run(
+        msbuild
+            .to_command()
+            .current_dir(out)
+            .arg("vpx.vcxproj")
+            .args(["/m", "/nologo", "/p:Configuration=Release", &format!("/p:Platform={platform}")])
+            // The project puts its output under $(SolutionDir), which only a
+            // solution build sets: it's this directory.
+            .arg(format!("/p:SolutionDir={}\\", out.display())),
+        "building libvpx",
+    );
 }
 
 /// libvpx's own name for a Rust target.

@@ -58,6 +58,14 @@ jobs:
           workspaces: '. -> src-tauri/target'
           key: ci-voice-${{ matrix.os }}
 
+      # libvpx's Windows build: configure and `make dist` under Git's bash,
+      # nasm for its assembly, then MSBuild (crates/horo-rtc/build.rs).
+      - name: Install libvpx build tools (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install nasm make -y --no-progress
+          echo "C:\Program Files\NASM" >> $env:GITHUB_PATH
+
       - run: cargo clippy -p horo-rtc --all-targets
 
       - run: cargo test -p horo-rtc --lib

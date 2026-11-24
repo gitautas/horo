@@ -130,3 +130,5 @@ required-features = ["media"]
 
 [build-dependencies]
 pkg-config = "0.3"
+# Finds MSBuild on Windows.
+cc = "1"
