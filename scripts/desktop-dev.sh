@@ -24,10 +24,15 @@ mkdir -p "$app/Contents/MacOS"
 # A copy still running would only be brought forward by `open`, on the old
 # build: quit it first, the way the app quits itself (a kill makes macOS
 # offer to reopen its windows next time).
-if pgrep -f "$app/Contents/MacOS/horo" >/dev/null; then
+# Matched by the bundle's tail, not its full path: a copy started by hand
+# (`horo-dev.app/Contents/MacOS/horo > log`) has a relative one. Two copies
+# share one session and device, and kick each other out of calls.
+running="horo-dev.app/Contents/MacOS/horo"
+for _ in 1 2 3; do
+  pgrep -f "$running" >/dev/null || break
   osascript -e 'tell application id "lt.uwu.horo.dev" to quit' >/dev/null 2>&1 || true
-  for _ in $(seq 40); do pgrep -f "$app/Contents/MacOS/horo" >/dev/null || break; sleep 0.25; done
-fi
+  for _ in $(seq 40); do pgrep -f "$running" >/dev/null || break; sleep 0.25; done
+done
 # Replace the binary rather than write over it: macOS caches a binary's
 # code signature by file, and launching a rewritten file under the old
 # cached signature fails with "Launchd job spawn failed" (POSIX 162).

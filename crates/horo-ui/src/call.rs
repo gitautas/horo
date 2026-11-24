@@ -295,6 +295,7 @@ impl Store {
     /// camera's own queue.
     #[cfg(target_os = "macos")]
     pub fn set_call_camera(&mut self, on: bool, cx: &mut Context<Self>) {
+        tracing::info!("camera {} (call live: {})", if on { "on" } else { "off" }, self.call_live.is_some());
         let Some(live) = &mut self.call_live else { return };
         if let Some(view) = &mut self.call {
             view.camera = on;
@@ -308,7 +309,11 @@ impl Store {
         let device = self.prefs.video_input.clone();
         let feed = live.feed.clone();
         let task = cx.background_spawn(async move {
+            let first = std::sync::atomic::AtomicBool::new(true);
             let on_frame: crate::camera::OnFrame = Box::new(move |buffer| {
+                if first.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::info!("camera: first picture");
+                }
                 if let Some(frame) = crate::camera::to_i420(buffer)
                     && let Ok(mut feed) = feed.lock()
                 {
@@ -321,6 +326,10 @@ impl Store {
             let opened = task.await;
             let _ = this.update(cx, |store, cx| {
                 let wanted = store.call.as_ref().is_some_and(|c| c.camera);
+                match &opened {
+                    Ok(_) => tracing::info!("camera opened (still wanted: {wanted})"),
+                    Err(e) => tracing::warn!("camera didn't open: {e}"),
+                }
                 match opened {
                     Ok(camera) if wanted => {
                         if let Some(live) = &mut store.call_live {
