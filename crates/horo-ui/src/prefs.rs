@@ -36,6 +36,14 @@ pub struct Prefs {
     pub info_panel_width: f32,
     /// The whole window's zoom, as a factor (1 is the design's size).
     pub zoom: f32,
+    /// The look: theme, accent, shade and contrast; a font to read in
+    /// (empty for the theme's); the message text size in px.
+    pub theme: crate::theme::ThemeName,
+    pub accent: crate::theme::Accent,
+    pub shade: crate::theme::Shade,
+    pub contrast: crate::theme::Contrast,
+    pub font_family: String,
+    pub message_font_size: f32,
     /// The release whose notice was waved away (a newer one speaks up).
     pub dismissed_update: Option<String>,
     /// 0 (default yellow) to 5, for emoji that take one.
@@ -54,6 +62,20 @@ pub const INFO_PANEL_WIDTH: f32 = 296.;
 pub const PANE_MIN: f32 = 240.;
 pub const PANE_MAX: f32 = 420.;
 
+impl Prefs {
+    /// The appearance settings, as the theme takes them.
+    pub fn appearance(&self) -> crate::theme::Appearance {
+        crate::theme::Appearance {
+            theme: self.theme,
+            accent: self.accent,
+            shade: self.shade,
+            contrast: self.contrast,
+            font_family: self.font_family.clone(),
+            message_font_size: self.message_font_size,
+        }
+    }
+}
+
 pub const MAX_RECENT_REACTIONS: usize = 6;
 
 impl Default for Prefs {
@@ -69,6 +91,12 @@ impl Default for Prefs {
             info_panel_width: INFO_PANEL_WIDTH,
             dismissed_update: None,
             zoom: 1.,
+            theme: Default::default(),
+            accent: Default::default(),
+            shade: Default::default(),
+            contrast: Default::default(),
+            font_family: String::new(),
+            message_font_size: crate::theme::MESSAGE_SIZE_DEFAULT,
             audio_input: None,
             video_input: None,
             audio_output: None,

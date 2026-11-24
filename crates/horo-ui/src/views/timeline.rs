@@ -1293,7 +1293,7 @@ impl Timeline {
                     .w_full()
                     .text_color(if muted { palette.text_tertiary } else { palette.text })
                     .when(muted, |d| d.italic())
-                    .when(event.is_emoji_only, |d| d.text_size(zpx(32.)))
+                    .when(event.is_emoji_only, |d| d.text_size(crate::theme::emoji_message_text()))
                     .child(text)
                     .into_any_element()
             }
@@ -1329,7 +1329,7 @@ impl Timeline {
         let body = v_flex()
             .w_full()
             .max_w(zpx(640.))
-            .text_size(zpx(14.5))
+            .text_size(crate::theme::message_text())
             .line_height(gpui::relative(1.55))
             .child(self.body(event, palette, cx))
             .when(event.is_edited, |d| d.child(div().text_size(text(10.)).text_color(palette.text_tertiary).child("(edited)")));

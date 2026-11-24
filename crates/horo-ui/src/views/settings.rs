@@ -52,6 +52,10 @@ pub struct Settings {
     /// "sign out and erase keys" has been pressed once.
     confirm_wipe: bool,
     volume: Entity<SliderState>,
+    /// Appearance: message text size, zoom, and a font typed by name.
+    text_size: Entity<SliderState>,
+    zoom: Entity<SliderState>,
+    font: Entity<InputState>,
     /// Microphones and speakers, once listed.
     devices: Option<(Vec<DeviceInfo>, Vec<DeviceInfo>)>,
     /// The chosen microphone, listened to while the voice section is open.
@@ -137,6 +141,49 @@ impl Settings {
         })
         .detach();
 
+        // Sizes apply when the slider is let go: each relays the window out.
+        let prefs = store.read(cx).prefs.clone();
+        let text_size = cx.new(|_| {
+            SliderState::new()
+                .min(crate::theme::MESSAGE_SIZE_MIN)
+                .max(crate::theme::MESSAGE_SIZE_MAX)
+                .step(0.5)
+                .default_value(prefs.message_font_size)
+        });
+        cx.subscribe(&text_size, |this, _, event: &SliderEvent, cx| {
+            if let SliderEvent::Release(value) = event {
+                let size = value.start();
+                this.store.update(cx, |s, cx| s.set_appearance(|p| p.message_font_size = size, cx));
+            }
+        })
+        .detach();
+        let zoom = cx.new(|_| SliderState::new().min(crate::theme::ZOOM_MIN).max(crate::theme::ZOOM_MAX).step(crate::theme::ZOOM_STEP).default_value(prefs.zoom));
+        cx.subscribe(&zoom, |this, _, event: &SliderEvent, cx| {
+            if let SliderEvent::Release(value) = event {
+                let zoom = value.start();
+                this.store.update(cx, |s, cx| {
+                    let step = (zoom - s.prefs.zoom).abs() > f32::EPSILON;
+                    if step {
+                        s.set_appearance(|p| p.zoom = zoom, cx);
+                    }
+                });
+            }
+        })
+        .detach();
+        let font = cx.new(|cx| {
+            let typed = if crate::theme::FONT_PRESETS.iter().any(|(_, f)| *f == prefs.font_family) { String::new() } else { prefs.font_family.clone() };
+            InputState::new(window, cx).placeholder("or any installed font, by name").default_value(typed)
+        });
+        cx.subscribe(&font, |this, input, event: &InputEvent, cx| {
+            if let InputEvent::PressEnter { .. } | InputEvent::Blur = event {
+                let family = input.read(cx).value().trim().to_owned();
+                if !family.is_empty() && family != this.store.read(cx).prefs.font_family {
+                    this.store.update(cx, |s, cx| s.set_appearance(|p| p.font_family = family, cx));
+                }
+            }
+        })
+        .detach();
+
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         let mut settings = Settings {
@@ -153,6 +200,9 @@ impl Settings {
             error: None,
             confirm_wipe: false,
             volume,
+            text_size,
+            zoom,
+            font,
             devices: None,
             meter: None,
             #[cfg(target_os = "macos")]
@@ -757,6 +807,135 @@ impl Settings {
             .into_any_element()
     }
 
+    /// Theme, accent, shade and contrast; the font; message text; zoom.
+    fn appearance(&mut self, prefs: &crate::prefs::Prefs, palette: &Palette, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        use crate::theme::{Accent, Contrast, FONT_PRESETS, Shade, ThemeName, corner, space, text};
+        // A shortcut's zoom moves the slider too.
+        if (self.zoom.read(cx).value().start() - prefs.zoom).abs() > f32::EPSILON {
+            let zoom = prefs.zoom;
+            self.zoom.update(cx, |s, cx| s.set_value(zoom, window, cx));
+        }
+
+        let set = |change: fn(&mut crate::prefs::Prefs, u8), value: u8| {
+            move |this: &mut Settings, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Settings>| {
+                this.store.update(cx, |s, cx| s.set_appearance(|p| change(p, value), cx));
+            }
+        };
+        let chip = |id: SharedString, words: String, on: bool| {
+            div()
+                .id(id)
+                .px(space(12.))
+                .py(space(6.))
+                .rounded_full()
+                .border_1()
+                .border_color(if on { palette.accent } else { palette.border })
+                .when(on, |d| d.bg(gpui::Hsla { a: 0.12, ..palette.accent }))
+                .text_size(text(12.5))
+                .text_color(if on { palette.text } else { palette.text_secondary })
+                .cursor_pointer()
+                .hover(|d| d.text_color(palette.text))
+                .child(words)
+        };
+
+        let themes = h_flex().gap_2().children(ThemeName::ALL.into_iter().enumerate().map(|(i, t)| {
+            let on = prefs.theme == t;
+            v_flex()
+                .id(("theme", i))
+                .flex_1()
+                .gap_1()
+                .p(space(12.))
+                .rounded(corner(14.))
+                .border_1()
+                .border_color(if on { palette.accent } else { palette.border })
+                .bg(if on { palette.raised } else { palette.inset })
+                .cursor_pointer()
+                .child(div().font_family(palette.heading_font.clone()).text_size(crate::theme::heading(15.)).child(t.label()))
+                .child(div().text_size(text(11.5)).text_color(palette.text_tertiary).child(t.hint()))
+                .on_click(cx.listener(set(|p, v| p.theme = ThemeName::ALL[v as usize], i as u8)))
+        }));
+
+        let swatches = h_flex().gap_3().children(Accent::ALL.into_iter().enumerate().map(|(i, a)| {
+            let on = prefs.accent == a;
+            let colour = crate::theme::Palette::build(&crate::theme::Appearance { accent: a, ..prefs.appearance() }).accent;
+            v_flex()
+                .id(("accent", i))
+                .items_center()
+                .gap_1()
+                .cursor_pointer()
+                .child(div().size(zpx(26.)).rounded_full().bg(colour).border_2().border_color(if on { palette.text } else { gpui::transparent_black() }))
+                .child(div().text_size(text(11.)).text_color(if on { palette.text } else { palette.text_tertiary }).child(a.label(prefs.theme)))
+                .on_click(cx.listener(set(|p, v| p.accent = Accent::ALL[v as usize], i as u8)))
+        }));
+
+        let shades = h_flex().gap_2().flex_wrap().children(Shade::ALL.into_iter().enumerate().map(|(i, v)| {
+            chip(SharedString::from(format!("shade-{i}")), v.label().into(), prefs.shade == v)
+                .on_click(cx.listener(set(|p, v| p.shade = Shade::ALL[v as usize], i as u8)))
+        }));
+        let contrasts = h_flex().gap_2().children(Contrast::ALL.into_iter().enumerate().map(|(i, v)| {
+            chip(SharedString::from(format!("contrast-{i}")), v.label().into(), prefs.contrast == v)
+                .on_click(cx.listener(set(|p, v| p.contrast = Contrast::ALL[v as usize], i as u8)))
+        }));
+        let fonts = h_flex().gap_2().flex_wrap().children(FONT_PRESETS.iter().enumerate().map(|(i, (label, family))| {
+            let family = (*family).to_owned();
+            chip(SharedString::from(format!("font-{i}")), (*label).into(), prefs.font_family == family).on_click(cx.listener(move |this, _, window, cx| {
+                let family = family.clone();
+                this.font.update(cx, |s, cx| s.set_value("", window, cx));
+                this.store.update(cx, |s, cx| s.set_appearance(|p| p.font_family = family, cx));
+            }))
+        }));
+
+        let slider_row = |slider: &Entity<SliderState>, value: String| {
+            h_flex()
+                .gap_3()
+                .child(div().flex_1().child(Slider::new(slider)))
+                .child(div().w(zpx(52.)).text_sm().text_color(palette.text_secondary).child(value))
+        };
+        let zoom_changed = (prefs.zoom - 1.).abs() > f32::EPSILON;
+        v_flex()
+            .gap_4()
+            .child(heading(palette, "appearance"))
+            .child(
+                card(palette)
+                    .child(field(palette, "theme", None))
+                    .child(themes)
+                    .child(field(palette, "accent", None))
+                    .child(swatches)
+                    .child(field(palette, "shade", Some("how far the surfaces lean toward black.")))
+                    .child(shades)
+                    .child(field(palette, "contrast", Some("how strongly quiet text and hairlines stand out.")))
+                    .child(contrasts),
+            )
+            .child(
+                card(palette)
+                    .child(field(palette, "font", Some("what you read in; a name that isn't installed falls back to the theme's.")))
+                    .child(fonts)
+                    .child(Input::new(&self.font))
+                    .child(field(palette, "message text", None))
+                    .child(slider_row(&self.text_size, format!("{}px", prefs.message_font_size)))
+                    .child(
+                        div()
+                            .p(space(12.))
+                            .rounded(corner(12.))
+                            .bg(palette.inset)
+                            .text_size(crate::theme::message_text())
+                            .line_height(gpui::relative(1.55))
+                            .child("the quick brown fox jumps over the lazy dog~ ąčęėįšųūž"),
+                    )
+                    .child(field(palette, "zoom", Some("the whole window: ⌘= and ⌘- step it, ⌘0 puts it back.")))
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .child(div().flex_1().child(slider_row(&self.zoom, format!("{:.0}%", prefs.zoom * 100.))))
+                            .when(zoom_changed, |row| {
+                                row.child(Button::new("zoom-reset").small().ghost().label("reset").on_click(cx.listener(|this, _, _, cx| {
+                                    this.store.update(cx, |s, cx| s.zoom(None, cx));
+                                })))
+                            }),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn about(&self, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         v_flex()
             .gap_4()
@@ -856,6 +1035,10 @@ impl Render for Settings {
                 self.notifications(&prefs, &palette, cx)
             }
             (SettingsSection::Packs, _) => self.packs.clone().map(|s| s.into_any_element()).unwrap_or_else(|| div().into_any_element()),
+            (SettingsSection::Appearance, _) => {
+                let prefs = self.store.read(cx).prefs.clone();
+                self.appearance(&prefs, &palette, window, cx)
+            }
             (SettingsSection::About, _) => self.about(&palette, cx),
             _ => div().into_any_element(),
         };

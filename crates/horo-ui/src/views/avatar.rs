@@ -7,20 +7,16 @@ use gpui::{AnyElement, App, Div, Hsla, Pixels, div, img, prelude::*, rgb};
 
 use crate::{media::Media, presence::Shown, theme::Palette};
 
-/// `--accent-primary` … `--accent-quaternary` in the horo theme: gold,
-/// clay, heather, sage. NEON's order in src/lib/display.ts.
-const ACCENTS: [u32; 4] = [0xF2BA25, 0xE2795B, 0xA98FC0, 0x7FBFA9];
-
-/// The horo theme's `--radius-scale`: corners are drawn at this fraction.
-pub const RADIUS_SCALE: f32 = 0.45;
-
 /// FNV-1a over UTF-16 code units, as `hash` in src/lib/display.ts.
 fn hash(input: &str) -> u32 {
     input.encode_utf16().fold(2_166_136_261u32, |h, unit| (h ^ unit as u32).wrapping_mul(16_777_619))
 }
 
 pub fn accent_for(id: &str) -> Hsla {
-    rgb(ACCENTS[hash(id) as usize % ACCENTS.len()]).into()
+    // `--accent-primary` … `--accent-quaternary` as the appearance
+    // settings have them (NEON's order in src/lib/display.ts).
+    let colours = crate::theme::name_colours();
+    rgb(colours[hash(id) as usize % colours.len()]).into()
 }
 
 /// Two characters for a tile, as `initialsFor`: the first letters of the
@@ -46,7 +42,7 @@ pub fn initials(name: &str) -> String {
 
 /// The corner for a tile `size` across: `round(size * 0.36)`, scaled.
 fn corner(size: Pixels) -> Pixels {
-    gpui::px((f32::from(size) * 0.36).round() * RADIUS_SCALE)
+    gpui::px((f32::from(size) * 0.36).round() * crate::theme::radius_scale())
 }
 
 /// The monogram tile.

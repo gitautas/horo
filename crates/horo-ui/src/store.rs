@@ -211,16 +211,18 @@ pub enum SettingsSection {
     Voice,
     Notifications,
     Packs,
+    Appearance,
     About,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 6] = [
+    pub const ALL: [SettingsSection; 7] = [
         SettingsSection::Account,
         SettingsSection::Security,
         SettingsSection::Voice,
         SettingsSection::Notifications,
         SettingsSection::Packs,
+        SettingsSection::Appearance,
         SettingsSection::About,
     ];
 
@@ -231,6 +233,7 @@ impl SettingsSection {
             SettingsSection::Voice => "media",
             SettingsSection::Notifications => "notifications",
             SettingsSection::Packs => "emotes & stickers",
+            SettingsSection::Appearance => "appearance",
             SettingsSection::About => "about",
         }
     }
@@ -298,8 +301,9 @@ impl Store {
             call_live: None,
             incoming: None,
         };
-        // The saved zoom, before anything is drawn.
+        // The saved look and zoom, before anything is drawn.
         crate::theme::set_zoom(store.prefs.zoom);
+        crate::theme::apply(&store.prefs.appearance(), cx);
         store.pump_events(cx);
         store.watch_idle(cx);
         // Quitting mid-call leaves it properly: otherwise our membership
@@ -947,6 +951,16 @@ impl Store {
         crate::theme::set_zoom(zoom);
         self.zoom_epoch += 1;
         self.update_prefs(|p| p.zoom = zoom, cx);
+        cx.refresh_windows();
+    }
+
+    /// Change an appearance setting: saved, applied, and the window
+    /// redrawn (sizes may have changed with it, so views measure again).
+    pub fn set_appearance(&mut self, change: impl FnOnce(&mut Prefs), cx: &mut Context<Self>) {
+        self.update_prefs(change, cx);
+        crate::theme::apply(&self.prefs.appearance(), cx);
+        crate::theme::set_zoom(self.prefs.zoom);
+        self.zoom_epoch += 1;
         cx.refresh_windows();
     }
 

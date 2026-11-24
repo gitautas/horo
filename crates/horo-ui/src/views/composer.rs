@@ -1039,7 +1039,7 @@ impl Render for Composer {
                                 .child(icon("icons/circle-plus.svg").size(zpx(22.)).text_color(palette.text_tertiary))
                                 .on_click(cx.listener(|this, _, window, cx| this.attach(window, cx))),
                         )
-                        .child(div().flex_1().min_w_0().py(space(4.)).text_size(zpx(14.5)).child(Textarea::new(&self.input).appearance(false).on_paste({
+                        .child(div().flex_1().min_w_0().py(space(4.)).text_size(crate::theme::message_text()).child(Textarea::new(&self.input).appearance(false).on_paste({
                             let this = cx.weak_entity();
                             move |item, _, cx| this.update(cx, |composer, cx| composer.paste(item, cx)).unwrap_or(false)
                         })))
