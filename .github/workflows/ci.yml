@@ -45,6 +45,9 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+        # horo-rtc builds libvpx from third_party/libvpx.
+        with:
+          submodules: true
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -72,6 +75,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+        # horo-rtc builds libvpx from third_party/libvpx.
+        with:
+          submodules: true
 
       - name: Install Linux build dependencies
         run: |
@@ -80,7 +86,7 @@ jobs:
             libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
             libdbus-1-dev pkg-config patchelf xdg-utils \
-            libasound2-dev
+            libasound2-dev nasm
 
       - uses: dtolnay/rust-toolchain@stable
         with:
