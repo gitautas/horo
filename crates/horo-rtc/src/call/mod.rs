@@ -340,7 +340,10 @@ impl Drop for Call {
 }
 
 fn participant(p: &proto::ParticipantInfo) -> Participant {
-    let track = p.tracks.iter().find(|t| t.r#type == proto::TrackType::Video as i32 && t.source == proto::TrackSource::Camera as i32);
+    // Someone can have more than one camera track (republished, or an old
+    // one muted): the one that's on is the one to show.
+    let cameras = || p.tracks.iter().filter(|t| t.r#type == proto::TrackType::Video as i32 && t.source == proto::TrackSource::Camera as i32);
+    let track = cameras().find(|t| !t.muted).or_else(|| cameras().next());
     Participant {
         sid: p.sid.clone(),
         identity: p.identity.clone(),
@@ -831,6 +834,9 @@ impl Engine {
                     }
                 }
                 if changed {
+                    for p in self.participants.values() {
+                        tracing::info!("{}: {} camera {:?} (on: {})", self.identity, p.identity, p.camera_sid, p.camera);
+                    }
                     self.size_cameras();
                     let _ = self.events.send(CallEvent::Participants(sorted(&self.participants)));
                 }
