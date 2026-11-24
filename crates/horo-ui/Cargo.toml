@@ -15,6 +15,8 @@ matrix-sdk.workspace = true
 # (docs/spikes/gpui-desktop.md on the spike branch); both pinned together.
 gpui = { package = "gpui-pre", version = "=0.3.12" }
 gpui-component = "0.10"
+# Its text selection, for selectable message text (views/selectable.rs).
+gpui-base = "0.10"
 # The icons gpui-component draws (Lucide), embedded; the app registers them.
 gpui-kit-assets = "0.10"
 tokio.workspace = true

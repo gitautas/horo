@@ -1294,7 +1294,7 @@ impl Timeline {
                     .text_color(if muted { palette.text_tertiary } else { palette.text })
                     .when(muted, |d| d.italic())
                     .when(event.is_emoji_only, |d| d.text_size(crate::theme::emoji_message_text()))
-                    .child(text)
+                    .child(content::plain(format!("select/{}", event_key(event)), text, palette))
                     .into_any_element()
             }
         }

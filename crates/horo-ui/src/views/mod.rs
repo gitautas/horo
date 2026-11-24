@@ -20,6 +20,7 @@ pub mod room_info;
 pub mod room_settings;
 pub mod shell;
 pub mod security;
+pub mod selectable;
 pub mod settings;
 pub mod timeline;
 pub mod verification;

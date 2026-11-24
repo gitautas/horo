@@ -146,25 +146,41 @@ fn tokens(text: &str) -> Vec<std::ops::Range<usize>> {
     out
 }
 
-/// Styled runs, with links that open when clicked.
+/// Styled runs, selectable, with links that open when clicked.
 fn words(id: &str, inline: &Inline, colour: Hsla, palette: &Palette) -> AnyElement {
     let runs = runs(inline, colour, palette);
     let styled = StyledText::new(inline.text.clone()).with_runs(runs);
+    let layout = styled.layout().clone();
+    let select = |inner: AnyElement| {
+        super::selectable::selectable(ElementId::Name(SharedString::from(format!("select/{id}"))), inline.text.clone(), layout.clone(), inner, selection(palette))
+    };
     if inline.links.is_empty() {
-        return div().child(styled).into_any_element();
+        return div().child(select(styled.into_any_element())).into_any_element();
     }
     let ranges = inline.links.iter().map(|(r, _)| r.clone()).collect();
     let targets: Vec<String> = inline.links.iter().map(|(_, href)| href.clone()).collect();
-    div()
-        .child(InteractiveText::new(ElementId::Name(SharedString::from(id.to_owned())), styled).on_click(ranges, move |ix, _, cx| {
-            if let Some(href) = targets.get(ix)
-                && crate::rich::mentioned_user(href).is_none()
-                && (href.starts_with("https://") || href.starts_with("http://") || href.starts_with("mailto:"))
-            {
-                cx.open_url(href);
-            }
-        }))
-        .into_any_element()
+    let linked = InteractiveText::new(ElementId::Name(SharedString::from(id.to_owned())), styled).on_click(ranges, move |ix, _, cx| {
+        if let Some(href) = targets.get(ix)
+            && crate::rich::mentioned_user(href).is_none()
+            && (href.starts_with("https://") || href.starts_with("http://") || href.starts_with("mailto:"))
+        {
+            cx.open_url(href);
+        }
+    });
+    div().child(select(linked.into_any_element())).into_any_element()
+}
+
+/// Selected text's background.
+pub fn selection(palette: &Palette) -> Hsla {
+    Hsla { a: 0.3, ..palette.accent }
+}
+
+/// Plain text, selectable.
+pub fn plain(id: impl Into<SharedString>, text: impl Into<SharedString>, palette: &Palette) -> AnyElement {
+    let text: SharedString = text.into();
+    let styled = StyledText::new(text.clone());
+    let layout = styled.layout().clone();
+    super::selectable::selectable(ElementId::Name(id.into()), text, layout, styled, selection(palette)).into_any_element()
 }
 
 /// Runs covering all of `inline.text`, one per change of style.

@@ -4334,6 +4334,7 @@ dependencies = [
  "block2 0.6.2",
  "chrono",
  "dispatch2",
+ "gpui-base",
  "gpui-component",
  "gpui-kit-assets",
  "gpui-pre",
