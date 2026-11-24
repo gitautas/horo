@@ -17,11 +17,13 @@ use gpui::{
     prelude::FluentBuilder,
 };
 use gpui_component::{
+    Sizable,
     Icon,
     button::{Button, ButtonVariants},
     h_flex, v_flex,
 };
 use horo_core::dto::RoomSummary;
+use horo_rtc::call::screen_key;
 
 use crate::theme::zpx;
 use crate::{
@@ -36,6 +38,7 @@ pub fn icon(path: &'static str) -> Icon {
 }
 
 /// Someone in a call, as listed.
+#[derive(Clone)]
 struct Person {
     user_id: String,
     /// Their identity in the call (one device), when known.
@@ -120,65 +123,28 @@ pub fn panel(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<A
     };
     let failed = matches!(call.status, CallStatus::Failed(_));
 
-    let (open, mute, leave) = (store.clone(), store.clone(), store.clone());
-    #[cfg(target_os = "macos")]
-    let camera_button = {
-        let (toggle, on) = (store.clone(), call.camera);
-        Button::new("call-camera")
-            .ghost()
-            .icon(icon(if on { "icons/video.svg" } else { "icons/video-off.svg" }))
-            .tooltip(if on { "turn your camera off" } else { "turn your camera on" })
-            .when(on, |b| b.primary())
-            .on_click(move |_, _, cx| toggle.update(cx, |s, cx| s.set_call_camera(!on, cx)))
-    };
-    #[cfg(target_os = "macos")]
-    let share_button = {
-        let (toggle, on) = (store.clone(), call.sharing);
-        Button::new("call-screen")
-            .ghost()
-            .icon(icon(if on { "icons/screen-share-off.svg" } else { "icons/screen-share.svg" }))
-            .tooltip(if on { "stop sharing your screen" } else { "share your screen" })
-            .when(on, |b| b.primary())
-            .on_click(move |_, _, cx| toggle.update(cx, |s, cx| s.set_call_screen(!on, cx)))
-    };
+    let (open, leave, expand) = (store.clone(), store.clone(), store.clone());
     let room_id = call.room_id.clone();
-    let controls = if failed {
-        h_flex().child(
-            Button::new("call-dismiss")
-                .ghost()
-                .label("dismiss")
-                .on_click(move |_, _, cx| leave.update(cx, |s, cx| s.clear_failed_call(cx))),
-        )
+    let corner = if failed {
+        Button::new("call-dismiss").ghost().label("dismiss").on_click(move |_, _, cx| leave.update(cx, |s, cx| s.clear_failed_call(cx)))
     } else {
-        let muted = call.muted;
-        let row = h_flex().gap_1();
-        #[cfg(target_os = "macos")]
-        let row = row.child(share_button).child(camera_button);
-        row.child(
-                Button::new("call-mute")
-                    .ghost()
-                    .icon(icon(if muted { "icons/mic-off.svg" } else { "icons/mic.svg" }))
-                    .tooltip(if muted { "unmute" } else { "mute" })
-                    .when(muted, |b| b.danger())
-                    .on_click(move |_, _, cx| mute.update(cx, |s, cx| s.set_call_muted(!muted, cx))),
-            )
-            .child(
-                Button::new("call-leave")
-                    .danger()
-                    .icon(icon("icons/phone-off.svg"))
-                    .tooltip("leave the call")
-                    .on_click(move |_, _, cx| leave.update(cx, |s, cx| s.leave_call(cx))),
-            )
+        Button::new("call-expand-panel")
+            .ghost()
+            .small()
+            .icon(icon("icons/maximize-2.svg"))
+            .tooltip("fill the window with the call")
+            .on_click(move |_, _, cx| expand.update(cx, |s, cx| s.set_call_fullscreen(true, cx)))
     };
 
     Some(
-        h_flex()
-            .gap_2()
+        v_flex()
+            .gap_1()
             .px_3()
             .py_2()
             .border_t_1()
             .border_color(palette.border_subtle)
             .child(
+                h_flex().gap_2().child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
@@ -197,8 +163,10 @@ pub fn panel(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<A
                                 open.update(cx, |s, cx| s.open_room(room_id, cx))
                             }),
                     ),
+                )
+                .child(corner),
             )
-            .child(controls)
+            .when(!failed, |d| d.child(controls(store, &call)))
             .into_any_element(),
     )
 }
@@ -231,49 +199,170 @@ pub fn roster(room: &RoomSummary, store: &Entity<Store>, palette: &Palette, cx: 
     Some(v_flex().pb_1().children(rows).into_any_element())
 }
 
-/// The call's people, above the timeline of the call's room.
-pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<AnyElement> {
-    let call = store.read(cx).call.clone().filter(|c| c.room_id == room_id && c.is_live())?;
-    let connecting = call.status == CallStatus::Connecting;
-    let mut tiles = Vec::new();
-    let everyone = people(&call, &store.read(cx).profiles);
+/// What a tile in the call shows.
+#[derive(Clone)]
+enum Shows {
+    /// Someone's shared screen.
+    Screen { identity: String },
+    /// Ours, while we share it (not echoed back at us: a hall of mirrors).
+    Sharing,
+    /// Our camera, straight from it rather than round the server.
+    OwnCamera,
+    /// Someone's camera.
+    Camera { identity: String },
+    /// Someone without a picture: their face.
+    Face,
+}
+
+/// One tile: what it shows, whose it is, and the key focusing it.
+struct Tile {
+    key: String,
+    shows: Shows,
+    person: Person,
+}
+
+/// Every tile in the call, in order: a shared screen before its sharer.
+fn tiles(call: &CallView, store: &Entity<Store>, cx: &mut App) -> Vec<Tile> {
+    let everyone = people(call, &store.read(cx).profiles);
     want(store, &everyone, cx);
-    let screens = store.read(cx).call_live.as_ref().map(|l| l.screens.clone());
-    let me = call.identity.clone();
+    let mut out = Vec::new();
     for person in everyone {
-        // A shared screen: its own, bigger tile, before the person's.
+        let id = person.identity.clone();
+        let mine = id.is_some() && id == call.identity;
+        let key = id.clone().unwrap_or_else(|| person.user_id.clone());
         if person.screen
-            && let Some(picture) = person.identity.as_deref().and_then(|id| camera_picture(screens.as_ref()?, &horo_rtc::call::screen_key(id), SCREEN_W, SCREEN_H))
+            && let Some(identity) = &id
         {
-            tiles.push(screen_tile(picture, &format!("{}'s screen", person.real_name), &person, palette).into_any_element());
+            out.push(Tile { key: screen_key(identity), shows: Shows::Screen { identity: identity.clone() }, person: person.clone() });
         }
-        if person.identity.is_some() && person.identity == me && call.sharing {
-            tiles.push(sharing_tile(palette).into_any_element());
+        if mine && call.sharing {
+            out.push(Tile { key: "sharing".into(), shows: Shows::Sharing, person: person.clone() });
         }
-        // Our own camera, straight from it rather than round the server.
-        if call.camera
-            && person.identity.is_some()
-            && person.identity == me
-            && let Some(picture) = own_camera(store, cx)
+        let shows = if mine && call.camera {
+            Shows::OwnCamera
+        } else if person.camera
+            && let Some(identity) = &id
         {
-            tiles.push(video_tile(picture, &person, palette).into_any_element());
-            continue;
-        }
-        if person.camera
-            && let Some(picture) = person.identity.as_deref().and_then(|id| camera_picture(screens.as_ref()?, id, VIDEO_W, VIDEO_H))
-        {
-            tiles.push(video_tile(picture, &person, palette).into_any_element());
-            continue;
-        }
-        let face = avatar(&person.user_id, &person.real_name, person.avatar.as_deref(), zpx(56.), cx);
-        tiles.push(
+            Shows::Camera { identity: identity.clone() }
+        } else {
+            Shows::Face
+        };
+        out.push(Tile { key, shows, person });
+    }
+    out
+}
+
+/// How big a tile is drawn: so many design pixels, or all its parent has.
+#[derive(Clone, Copy)]
+enum Size {
+    Fixed(f32, f32),
+    Fill,
+}
+
+/// A tile's own size in the grid: screens big, cameras 16:9, faces small.
+fn natural(shows: &Shows) -> (f32, f32) {
+    match shows {
+        Shows::Screen { .. } => (480., 270.),
+        Shows::Sharing | Shows::OwnCamera | Shows::Camera { .. } => (240., 135.),
+        Shows::Face => (96., 104.),
+    }
+}
+
+/// The size of the tiles beside a focused one.
+const FILM: (f32, f32) = (176., 99.);
+
+/// One tile, drawn at `size`. Clicking it focuses it; clicking the focused
+/// one goes back to everyone alike.
+fn draw(tile: &Tile, size: Size, focused: bool, store: &Entity<Store>, palette: &Palette, cx: &mut App) -> AnyElement {
+    let screens = store.read(cx).call_live.as_ref().map(|l| l.screens.clone());
+    // A face can be cropped to fill a small tile; a screen, or anything
+    // shown big, is shown whole.
+    let fit = if matches!(size, Size::Fill) || matches!(tile.shows, Shows::Screen { .. }) { gpui::ObjectFit::Contain } else { gpui::ObjectFit::Cover };
+    let picture = match &tile.shows {
+        Shows::Screen { identity } => screens.as_ref().and_then(|s| camera_picture(s, &screen_key(identity), fit)),
+        Shows::Camera { identity } => screens.as_ref().and_then(|s| camera_picture(s, identity, fit)),
+        Shows::OwnCamera => own_camera(store, fit, cx),
+        Shows::Sharing | Shows::Face => None,
+    };
+    let person = &tile.person;
+    let screen = matches!(tile.shows, Shows::Screen { .. });
+    let label = if screen { format!("{}'s screen", person.real_name) } else { person.name.clone() };
+    let key = tile.key.clone();
+    let click = store.clone();
+    let base = div()
+        .id(gpui::SharedString::from(format!("tile-{key}")))
+        .relative()
+        .flex_none()
+        .overflow_hidden()
+        .rounded(zpx(16.))
+        .cursor_pointer()
+        .map(|d| match size {
+            Size::Fixed(w, h) => d.w(zpx(w)).h(zpx(h)),
+            Size::Fill => d.size_full(),
+        })
+        .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(if focused { "back to everyone" } else { "show bigger" }).build(window, cx))
+        .on_click(move |_, _, cx| {
+            let key = (!focused).then(|| key.clone());
+            click.update(cx, |s, cx| s.set_call_focus(key, cx));
+        });
+    let small = matches!(size, Size::Fixed(_, h) if h < 120.);
+
+    if let Some(picture) = picture {
+        return base
+            .bg(if screen { Hsla::black() } else { palette.inset })
+            .when(!screen, |d| d.border_2().border_color(if person.speaking { palette.online } else { gpui::transparent_black() }))
+            .child(picture)
+            .child(
+                h_flex()
+                    .absolute()
+                    .left(zpx(6.))
+                    .bottom(zpx(6.))
+                    .right(zpx(6.))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .px(zpx(6.))
+                            .py(zpx(2.))
+                            .rounded(zpx(8.))
+                            .bg(Hsla { a: 0.65, ..palette.app })
+                            .min_w_0()
+                            .child(div().truncate().text_xs().child(label))
+                            .when(person.muted && !screen, |row| row.child(icon("icons/mic-off.svg").size(zpx(12.)).text_color(palette.danger))),
+                    ),
+            )
+            .into_any_element();
+    }
+    if matches!(tile.shows, Shows::Sharing) {
+        return base
+            .child(
+                v_flex()
+                    .size_full()
+                    .gap_2()
+                    .items_center()
+                    .justify_center()
+                    .bg(palette.card)
+                    .border_1()
+                    .border_color(palette.accent)
+                    .rounded(zpx(16.))
+                    .child(icon("icons/screen-share.svg").size(zpx(28.)).text_color(palette.accent))
+                    .when(!small, |d| d.child(div().text_xs().text_color(palette.text_secondary).child("you're sharing your screen"))),
+            )
+            .into_any_element();
+    }
+    // A face (or a picture still on its way).
+    let face_size = match size {
+        Size::Fixed(_, h) => (h * 0.54).min(72.),
+        Size::Fill => 112.,
+    };
+    let face = avatar(&person.user_id, &person.real_name, person.avatar.as_deref(), zpx(face_size), cx);
+    base.bg(palette.card)
+        .child(
             v_flex()
-                .w(zpx(96.))
-                .py_2()
+                .size_full()
                 .gap_1()
+                .px_1()
                 .items_center()
-                .rounded(zpx(16.))
-                .bg(palette.card)
+                .justify_center()
                 .child(
                     div()
                         .rounded_full()
@@ -282,83 +371,174 @@ pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut A
                         .border_color(if person.speaking { palette.online } else { gpui::transparent_black() })
                         .child(face),
                 )
-                .child(h_flex().gap_1().max_w(zpx(88.)).child(div().truncate().text_xs().child(person.name)).when(person.muted, |row| {
-                    row.child(icon("icons/mic-off.svg").size(zpx(12.)).text_color(palette.danger))
-                }))
-                .into_any_element(),
-        );
-    }
-    Some(
-        h_flex()
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .max_w_full()
+                        .child(div().truncate().text_xs().child(label))
+                        .when(person.muted, |row| row.child(icon("icons/mic-off.svg").size(zpx(12.)).text_color(palette.danger))),
+                ),
+        )
+        .into_any_element()
+}
+
+/// The call's tiles: everyone alike, or one big with the rest beside it.
+/// `full` when the call fills the window (bigger tiles, the big one
+/// taking what room there is).
+fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, full: bool, cx: &mut App) -> AnyElement {
+    let tiles = tiles(call, store, cx);
+    let focused = call.focus.as_ref().and_then(|key| tiles.iter().position(|t| &t.key == key));
+    let Some(focused) = focused else {
+        let scale = if full { 1.5 } else { 1. };
+        let drawn: Vec<AnyElement> = tiles
+            .iter()
+            .map(|t| {
+                let (w, h) = natural(&t.shows);
+                draw(t, Size::Fixed(w * scale, h * scale), false, store, palette, cx)
+            })
+            .collect();
+        return h_flex()
             .flex_wrap()
             .gap_2()
+            .when(full, |d| d.flex_1().min_h_0().justify_center().content_center())
+            .children(drawn)
+            .into_any_element();
+    };
+    let big = draw(&tiles[focused], Size::Fill, true, store, palette, cx);
+    let others: Vec<AnyElement> = tiles
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != focused)
+        .map(|(_, t)| draw(t, Size::Fixed(FILM.0, FILM.1), false, store, palette, cx))
+        .collect();
+    v_flex()
+        .gap_2()
+        .when(full, |d| d.flex_1().min_h_0())
+        .child(div().w_full().map(|d| if full { d.flex_1().min_h_0() } else { d.h(zpx(420.)) }).child(big))
+        .when(!others.is_empty(), |d| d.child(h_flex().flex_wrap().gap_2().when(full, |d| d.justify_center()).children(others)))
+        .into_any_element()
+}
+
+/// The call's people, above the timeline of the call's room (unless the
+/// call fills the window).
+pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<AnyElement> {
+    let call = store.read(cx).call.clone().filter(|c| c.room_id == room_id && c.is_live() && !c.fullscreen)?;
+    let connecting = call.status == CallStatus::Connecting;
+    let expand = store.clone();
+    Some(
+        div()
+            .relative()
             .px_4()
             .py_3()
             .border_b_1()
             .border_color(palette.border_subtle)
-            .when(connecting, |strip| strip.child(div().text_sm().text_color(palette.text_tertiary).child("joining the call…")))
-            .children(tiles)
+            .when(connecting, |strip| strip.child(div().pb_2().text_sm().text_color(palette.text_tertiary).child("joining the call…")))
+            .child(stage(&call, store, palette, false, cx))
+            .child(
+                div().absolute().top(zpx(14.)).right(zpx(18.)).child(
+                    Button::new("call-expand")
+                        .ghost()
+                        .small()
+                        .icon(icon("icons/maximize-2.svg"))
+                        .tooltip("fill the window")
+                        .on_click(move |_, _, cx| expand.update(cx, |s, cx| s.set_call_fullscreen(true, cx))),
+                ),
+            )
             .into_any_element(),
     )
 }
 
-/// How big a camera's tile is: 16:9.
-const VIDEO_W: f32 = 240.;
-const VIDEO_H: f32 = 135.;
+/// The call filling the window: its tiles as big as they'll go, and its
+/// controls under them. Escape (or the button) puts it back.
+pub fn fullscreen(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<AnyElement> {
+    let state = store.read(cx);
+    let call = state.call.clone().filter(|c| c.fullscreen && c.is_live())?;
+    let room_name = state.rooms.iter().find(|r| r.id == call.room_id).map(|r| r.name.clone()).unwrap_or_else(|| call.room_id.clone());
+    let back = store.clone();
+    Some(
+        v_flex()
+            .id("call-fullscreen")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .bg(palette.app)
+            .p_4()
+            .gap_3()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(icon("icons/phone-call.svg").size(zpx(16.)).text_color(palette.online))
+                    .child(div().flex_1().truncate().font_family(palette.heading_font.clone()).text_lg().font_weight(FontWeight::SEMIBOLD).child(room_name))
+                    .child(
+                        Button::new("call-shrink")
+                            .ghost()
+                            .icon(icon("icons/minimize-2.svg"))
+                            .tooltip("back to the room (esc)")
+                            .on_click(move |_, _, cx| back.update(cx, |s, cx| s.set_call_fullscreen(false, cx))),
+                    ),
+            )
+            .child(stage(&call, store, palette, true, cx))
+            .child(h_flex().justify_center().child(controls(store, &call)))
+            .into_any_element(),
+    )
+}
 
-/// Someone's camera, as an element: on macOS a surface over the newest
-/// picture (converted once per picture, not once per redraw).
-/// How big a shared screen's tile is.
-const SCREEN_W: f32 = 480.;
-const SCREEN_H: f32 = 270.;
-
-/// A tile with someone's shared screen in it.
-fn screen_tile(picture: AnyElement, label: &str, person: &Person, palette: &Palette) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(gpui::SharedString::from(format!("screen-{}", person.identity.as_deref().unwrap_or(&person.user_id))))
-        .relative()
-        .w(zpx(SCREEN_W))
-        .h(zpx(SCREEN_H))
-        .rounded(zpx(16.))
-        .overflow_hidden()
-        .bg(Hsla::black())
-        .child(picture)
-        .child(
-            div()
-                .absolute()
-                .left(zpx(6.))
-                .bottom(zpx(6.))
-                .px(zpx(6.))
-                .py(zpx(2.))
-                .rounded(zpx(8.))
-                .bg(Hsla { a: 0.65, ..palette.app })
-                .max_w(zpx(SCREEN_W - 12.))
-                .truncate()
-                .text_xs()
-                .child(label.to_owned()),
+/// Our camera, screen, microphone, hearing and the way out.
+fn controls(store: &Entity<Store>, call: &CallView) -> gpui::Div {
+    let row = h_flex().gap_1();
+    #[cfg(target_os = "macos")]
+    let row = {
+        let (share, sharing) = (store.clone(), call.sharing);
+        let (camera, camera_on) = (store.clone(), call.camera);
+        row.child(
+            Button::new("call-screen")
+                .ghost()
+                .icon(icon(if sharing { "icons/screen-share-off.svg" } else { "icons/screen-share.svg" }))
+                .tooltip(if sharing { "stop sharing your screen" } else { "share your screen" })
+                .when(sharing, |b| b.primary())
+                .on_click(move |_, _, cx| share.update(cx, |s, cx| s.set_call_screen(!sharing, cx))),
         )
+        .child(
+            Button::new("call-camera")
+                .ghost()
+                .icon(icon(if camera_on { "icons/video.svg" } else { "icons/video-off.svg" }))
+                .tooltip(if camera_on { "turn your camera off" } else { "turn your camera on" })
+                .when(camera_on, |b| b.primary())
+                .on_click(move |_, _, cx| camera.update(cx, |s, cx| s.set_call_camera(!camera_on, cx))),
+        )
+    };
+    let (mute, deafen, leave) = (store.clone(), store.clone(), store.clone());
+    let (muted, deafened) = (call.muted, call.deafened);
+    row.child(
+        Button::new("call-mute")
+            .ghost()
+            .icon(icon(if muted { "icons/mic-off.svg" } else { "icons/mic.svg" }))
+            .tooltip(if muted { "unmute" } else { "mute" })
+            .when(muted, |b| b.danger())
+            .on_click(move |_, _, cx| mute.update(cx, |s, cx| s.set_call_muted(!muted, cx))),
+    )
+    .child(
+        Button::new("call-deafen")
+            .ghost()
+            .icon(icon(if deafened { "icons/headphone-off.svg" } else { "icons/headphones.svg" }))
+            .tooltip(if deafened { "undeafen" } else { "deafen" })
+            .when(deafened, |b| b.danger())
+            .on_click(move |_, _, cx| deafen.update(cx, |s, cx| s.set_call_deafened(!deafened, cx))),
+    )
+    .child(
+        Button::new("call-leave")
+            .danger()
+            .icon(icon("icons/phone-off.svg"))
+            .tooltip("leave the call")
+            .on_click(move |_, _, cx| leave.update(cx, |s, cx| s.leave_call(cx))),
+    )
 }
 
-/// While we share: a quiet tile saying so (our own screen echoed back at
-/// us would only be a hall of mirrors).
-fn sharing_tile(palette: &Palette) -> gpui::Stateful<gpui::Div> {
-    v_flex()
-        .id("sharing-you")
-        .w(zpx(VIDEO_W))
-        .h(zpx(VIDEO_H))
-        .gap_2()
-        .items_center()
-        .justify_center()
-        .rounded(zpx(16.))
-        .bg(palette.card)
-        .border_1()
-        .border_color(palette.accent)
-        .child(icon("icons/screen-share.svg").size(zpx(28.)).text_color(palette.accent))
-        .child(div().text_xs().text_color(palette.text_secondary).child("you're sharing your screen"))
-}
-
+/// Someone's camera (or screen, under its key), as an element filling its
+/// tile: on macOS a surface over the newest picture (converted once per
+/// picture, not once per redraw).
 #[cfg(target_os = "macos")]
-fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str, width: f32, height: f32) -> Option<AnyElement> {
+fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str, fit: gpui::ObjectFit) -> Option<AnyElement> {
     use std::{cell::RefCell, collections::HashMap};
     type Converted = (u64, objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>);
     thread_local! {
@@ -375,55 +555,24 @@ fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str, width: f32,
             }
         }
     })?;
-    // A screen is shown whole (its edges matter); a face can be cropped.
-    let fit = if width > VIDEO_W { gpui::ObjectFit::Contain } else { gpui::ObjectFit::Cover };
-    Some(gpui::surface(buffer).w(zpx(width)).h(zpx(height)).object_fit(fit).into_any_element())
+    Some(gpui::surface(buffer).size_full().object_fit(fit).into_any_element())
 }
 
 /// What our camera sees now.
 #[cfg(target_os = "macos")]
-fn own_camera(store: &Entity<Store>, cx: &mut App) -> Option<AnyElement> {
+fn own_camera(store: &Entity<Store>, fit: gpui::ObjectFit, cx: &mut App) -> Option<AnyElement> {
     let buffer = store.update(cx, |s, _| s.call_live.as_mut()?.camera.as_mut()?.mirrored_frame())?;
-    Some(gpui::surface(buffer).w(zpx(VIDEO_W)).h(zpx(VIDEO_H)).object_fit(gpui::ObjectFit::Cover).into_any_element())
+    Some(gpui::surface(buffer).size_full().object_fit(fit).into_any_element())
 }
 
 #[cfg(not(target_os = "macos"))]
-fn own_camera(_store: &Entity<Store>, _cx: &mut App) -> Option<AnyElement> {
+fn own_camera(_store: &Entity<Store>, _fit: gpui::ObjectFit, _cx: &mut App) -> Option<AnyElement> {
     None
 }
 
 #[cfg(not(target_os = "macos"))]
-fn camera_picture(_screens: &horo_rtc::call::Screens, _identity: &str, _width: f32, _height: f32) -> Option<AnyElement> {
+fn camera_picture(_screens: &horo_rtc::call::Screens, _identity: &str, _fit: gpui::ObjectFit) -> Option<AnyElement> {
     None
-}
-
-/// A tile with someone's camera in it, their name over the corner.
-fn video_tile(picture: AnyElement, person: &Person, palette: &Palette) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(gpui::SharedString::from(format!("video-{}", person.identity.as_deref().unwrap_or(&person.user_id))))
-        .relative()
-        .w(zpx(VIDEO_W))
-        .h(zpx(VIDEO_H))
-        .rounded(zpx(16.))
-        .overflow_hidden()
-        .bg(palette.inset)
-        .border_2()
-        .border_color(if person.speaking { palette.online } else { gpui::transparent_black() })
-        .child(picture)
-        .child(
-            h_flex()
-                .absolute()
-                .left(zpx(6.))
-                .bottom(zpx(6.))
-                .gap_1()
-                .px(zpx(6.))
-                .py(zpx(2.))
-                .rounded(zpx(8.))
-                .bg(Hsla { a: 0.65, ..palette.app })
-                .max_w(zpx(VIDEO_W - 12.))
-                .child(div().truncate().text_xs().child(person.name.clone()))
-                .when(person.muted, |row| row.child(icon("icons/mic-off.svg").size(zpx(12.)).text_color(palette.danger))),
-        )
 }
 
 /// Whether anyone in our call has a camera on (the window then redraws
@@ -438,6 +587,7 @@ pub fn ringing(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option
     let incoming = state.incoming.clone()?;
     let room = state.rooms.iter().find(|r| r.id == incoming.room_id).cloned();
     let name = room.as_ref().map(|r| r.name.clone()).unwrap_or_else(|| incoming.room_id.clone());
+    let video = room.as_ref().is_some_and(|r| r.is_video_room);
     let picture = avatar(&incoming.room_id, &name, room.as_ref().and_then(|r| r.avatar_url.as_deref()), zpx(72.), cx);
     let (answer, decline) = (store.clone(), store.clone());
     Some(
@@ -455,7 +605,7 @@ pub fn ringing(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option
                     .shadow_lg()
                     .child(picture)
                     .child(div().font_family(palette.heading_font.clone()).text_size(zpx(24.)).font_weight(FontWeight::SEMIBOLD).child(name))
-                    .child(div().text_sm().text_color(palette.text_secondary).child("is calling you~"))
+                    .child(div().text_sm().text_color(palette.text_secondary).child(if video { "incoming video call~" } else { "incoming call~" }))
                     .child(
                         h_flex()
                             .gap_3()

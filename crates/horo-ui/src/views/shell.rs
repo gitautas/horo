@@ -1168,6 +1168,11 @@ impl Render for Shell {
                     this.store.update(cx, |s, cx| s.close_lightbox(cx));
                     cx.stop_propagation();
                 }
+                // Then the call filling the window.
+                else if event.keystroke.key == "escape" && this.store.read(cx).call.as_ref().is_some_and(|c| c.fullscreen) {
+                    this.store.update(cx, |s, cx| s.set_call_fullscreen(false, cx));
+                    cx.stop_propagation();
+                }
                 // And a message's menu before the composer's reply.
                 else if event.keystroke.key == "escape"
                     && let Some((_, timeline, _)) = &this.timeline
@@ -1208,18 +1213,19 @@ impl Render for Shell {
             .on_drop(cx.listener(|this, _: &Pane, _, cx| this.store.update(cx, |s, cx| s.update_prefs(|_| {}, cx))))
             .child(self.rail(&palette, cx))
             .child(self.room_list(&palette, cx))
+            // Cameras move: draw again next frame while one is in the call.
+            .when(voice::any_camera(&self.store, cx), |d| {
+                window.request_animation_frame();
+                d
+            })
             .map(|d| match self.invite.clone() {
                 Some(invite) => d.child(invite),
                 None => d
-                    // Cameras move: draw again next frame while one is in the call.
-                    .when(voice::any_camera(&self.store, cx), |d| {
-                        window.request_animation_frame();
-                        d
-                    })
                     .child(self.room_pane(&palette, cx)).when(self.store.read(cx).prefs.show_info_panel, |d| d.children(self.info.clone())),
             })
             .relative()
             .children(self.settings.clone())
+            .children(voice::fullscreen(&self.store, &palette, cx))
             .children(lightbox::lightbox(&self.store, &palette, window, cx))
             .children(voice::ringing(&self.store, &palette, cx))
             .children(self.explore.clone())

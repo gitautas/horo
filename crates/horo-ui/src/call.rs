@@ -36,6 +36,12 @@ pub struct CallView {
     pub room_id: String,
     pub status: CallStatus,
     pub muted: bool,
+    /// We hear nobody (and, while it lasts, send nothing).
+    pub deafened: bool,
+    /// The tile shown big (a key from the voice view), if any.
+    pub focus: Option<String>,
+    /// The call fills the window.
+    pub fullscreen: bool,
     /// Our camera is on.
     pub camera: bool,
     /// We're sharing our screen.
@@ -101,6 +107,9 @@ impl Store {
             room_id: room_id.clone(),
             status: CallStatus::Connecting,
             muted: false,
+            deafened: false,
+            focus: None,
+            fullscreen: false,
             camera: false,
             sharing: false,
             identity: None,
@@ -301,6 +310,37 @@ impl Store {
             view.muted = muted;
         }
         cx.notify();
+    }
+
+    /// Stop (or start again) hearing the call. Deafening mutes us too, as
+    /// someone who can't hear shouldn't be heard; undeafening leaves the
+    /// microphone as it is.
+    pub fn set_call_deafened(&mut self, deafened: bool, cx: &mut Context<Self>) {
+        if let Some(live) = &self.call_live {
+            live.call.set_deafened(deafened);
+        }
+        if let Some(view) = &mut self.call {
+            view.deafened = deafened;
+        }
+        if deafened {
+            self.set_call_muted(true, cx);
+        }
+        cx.notify();
+    }
+
+    /// Show `key`'s tile big, or (None) everyone alike.
+    pub fn set_call_focus(&mut self, key: Option<String>, cx: &mut Context<Self>) {
+        if let Some(view) = &mut self.call {
+            view.focus = key;
+            cx.notify();
+        }
+    }
+
+    pub fn set_call_fullscreen(&mut self, on: bool, cx: &mut Context<Self>) {
+        if let Some(view) = &mut self.call {
+            view.fullscreen = on;
+            cx.notify();
+        }
     }
 
     /// Turn our camera on or off in the call. It opens off the UI thread

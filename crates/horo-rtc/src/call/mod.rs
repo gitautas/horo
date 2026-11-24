@@ -170,6 +170,7 @@ struct Remote {
 pub struct Call {
     commands: mpsc::UnboundedSender<Command>,
     muted: Arc<AtomicBool>,
+    deafened: Arc<AtomicBool>,
     /// Our own identity in the room.
     pub identity: String,
     task: tokio::task::JoinHandle<()>,
@@ -284,8 +285,9 @@ impl Call {
         let mut gate = NoiseGate::new(crate::audio::SAMPLE_RATE);
         gate.set_threshold(options.gate_threshold);
         let microphone = Microphone { gate, encoder: Encoder::new()?, rtp: 0, packets: packets_tx, muted: muted.clone(), events: events_tx, echo: None };
-        let speaker = Speaker { remotes, frames: Vec::new(), echo: None };
-        Ok(Joined { call: Call { commands, muted, identity, task }, microphone, speaker, events, screens, camera, screen })
+        let deafened = Arc::new(AtomicBool::new(false));
+        let speaker = Speaker { remotes, frames: Vec::new(), echo: None, deafened: deafened.clone() };
+        Ok(Joined { call: Call { commands, muted, deafened, identity, task }, microphone, speaker, events, screens, camera, screen })
     }
 
     /// Stop sending the microphone, and tell the room.
@@ -307,6 +309,16 @@ impl Call {
 
     pub fn is_muted(&self) -> bool {
         self.muted.load(Ordering::Relaxed)
+    }
+
+    /// Stop playing everyone else (the microphone is the caller's to mute
+    /// too, as deafening usually does).
+    pub fn set_deafened(&self, deafened: bool) {
+        self.deafened.store(deafened, Ordering::Relaxed);
+    }
+
+    pub fn is_deafened(&self) -> bool {
+        self.deafened.load(Ordering::Relaxed)
     }
 
     /// The network changed (the OS said so): reconnect now, on the new one,
@@ -1037,6 +1049,9 @@ pub struct Speaker {
     remotes: Arc<Mutex<Remotes>>,
     frames: Vec<[f32; FRAME]>,
     echo: Option<EchoCanceller>,
+    /// Deafened: everyone else is still received (and their buffers kept
+    /// moving) but not played.
+    deafened: Arc<AtomicBool>,
 }
 
 impl Speaker {
@@ -1073,6 +1088,9 @@ impl Speaker {
             }
         }
         drop(remotes);
+        if self.deafened.load(Ordering::Relaxed) {
+            used = 0;
+        }
         mix(self.frames[..used].iter(), out);
         if let Some(echo) = &self.echo {
             echo.render(out);
