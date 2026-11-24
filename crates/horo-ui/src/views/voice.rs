@@ -309,7 +309,7 @@ fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str) -> Option<A
 /// What our camera sees now.
 #[cfg(target_os = "macos")]
 fn own_camera(store: &Entity<Store>, cx: &mut App) -> Option<AnyElement> {
-    let buffer = store.update(cx, |s, _| s.call_live.as_mut()?.camera.as_mut()?.frame())?;
+    let buffer = store.update(cx, |s, _| s.call_live.as_mut()?.camera.as_mut()?.mirrored_frame())?;
     Some(gpui::surface(buffer).w(px(VIDEO_W)).h(px(VIDEO_H)).object_fit(gpui::ObjectFit::Cover).into_any_element())
 }
 

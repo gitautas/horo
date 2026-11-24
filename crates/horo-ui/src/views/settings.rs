@@ -655,7 +655,7 @@ impl Settings {
             Some(false) => message(palette, "horo isn't allowed to use the camera — allow it in system settings › privacy & security › camera."),
             None => message(palette, "asking for the camera…"),
             Some(true) => match self.camera.as_mut().map(|c| &mut c.state) {
-                Some(PreviewState::Live(camera)) => match camera.frame() {
+                Some(PreviewState::Live(camera)) => match camera.mirrored_frame() {
                     Some(frame) => gpui::surface(frame).w(px(PREVIEW_W)).h(px(PREVIEW_H)).object_fit(gpui::ObjectFit::Cover).into_any_element(),
                     None => message(palette, "waiting for the camera…"),
                 },

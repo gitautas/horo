@@ -135,6 +135,8 @@ pub struct Camera {
     /// Kept alive for as long as the output holds it weakly.
     _sink: Retained<Sink>,
     frame: Option<CFRetained<CVPixelBuffer>>,
+    /// `frame`, flipped, for showing you yourself.
+    mirrored: Option<CFRetained<CVPixelBuffer>>,
 }
 
 // SAFETY: a capture session may be configured and stopped from any thread
@@ -189,7 +191,7 @@ impl Camera {
             }
             session.addOutput(&output);
             session.startRunning();
-            Ok(Camera { session, latest, _sink: sink, frame: None })
+            Ok(Camera { session, latest, _sink: sink, frame: None, mirrored: None })
         }
     }
 
@@ -199,8 +201,19 @@ impl Camera {
             && let Some(Frame(frame)) = latest.take()
         {
             self.frame = Some(frame);
+            self.mirrored = None;
         }
         self.frame.clone()
+    }
+
+    /// The newest frame as a mirror shows it: how people expect to see
+    /// themselves (what's sent stays the right way round).
+    pub fn mirrored_frame(&mut self) -> Option<CFRetained<CVPixelBuffer>> {
+        let frame = self.frame()?;
+        if self.mirrored.is_none() {
+            self.mirrored = mirror(&frame);
+        }
+        self.mirrored.clone().or(Some(frame))
     }
 }
 
@@ -254,4 +267,48 @@ pub fn to_i420(buffer: &CVPixelBuffer) -> Option<horo_rtc::video::Frame> {
         CVPixelBufferUnlockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly);
     }
     Some(frame)
+}
+
+/// A camera picture (bi-planar 4:2:0) flipped left to right.
+fn mirror(source: &CVPixelBuffer) -> Option<CFRetained<CVPixelBuffer>> {
+    use objc2_core_video::{
+        CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferGetHeight, CVPixelBufferGetHeightOfPlane,
+        CVPixelBufferGetPixelFormatType, CVPixelBufferGetWidth, CVPixelBufferGetWidthOfPlane, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags,
+        CVPixelBufferUnlockBaseAddress,
+    };
+    let (w, h) = (CVPixelBufferGetWidth(source), CVPixelBufferGetHeight(source));
+    // SAFETY: CoreVideo calls on a buffer we were handed and one we create;
+    // every read and write stays inside the planes' rows as CoreVideo
+    // reports them, between lock and unlock.
+    unsafe {
+        let metal = NSNumber::new_bool(true);
+        let attributes: Retained<NSDictionary<NSString, AnyObject>> = NSDictionary::from_slices(&[ns(kCVPixelBufferMetalCompatibilityKey)], &[metal.as_ref() as &AnyObject]);
+        let attrs = &*(Retained::as_ptr(&attributes) as *const objc2_core_foundation::CFDictionary);
+        let mut out: *mut CVPixelBuffer = std::ptr::null_mut();
+        if CVPixelBufferCreate(None, w, h, CVPixelBufferGetPixelFormatType(source), Some(attrs), std::ptr::NonNull::new(&mut out)?) != 0 {
+            return None;
+        }
+        let target = CFRetained::from_raw(std::ptr::NonNull::new(out)?);
+        CVPixelBufferLockBaseAddress(source, CVPixelBufferLockFlags::ReadOnly);
+        CVPixelBufferLockBaseAddress(&target, CVPixelBufferLockFlags(0));
+        // Plane 0 is one byte a pixel; plane 1 two (U and V together).
+        for (plane, bytes) in [(0, 1usize), (1, 2usize)] {
+            let (from, to) = (CVPixelBufferGetBaseAddressOfPlane(source, plane) as *const u8, CVPixelBufferGetBaseAddressOfPlane(&target, plane) as *mut u8);
+            if from.is_null() || to.is_null() {
+                continue;
+            }
+            let (pw, ph) = (CVPixelBufferGetWidthOfPlane(source, plane), CVPixelBufferGetHeightOfPlane(source, plane));
+            let (from_stride, to_stride) = (CVPixelBufferGetBytesPerRowOfPlane(source, plane), CVPixelBufferGetBytesPerRowOfPlane(&target, plane));
+            for row in 0..ph {
+                let src = std::slice::from_raw_parts(from.add(row * from_stride), pw * bytes);
+                let dst = std::slice::from_raw_parts_mut(to.add(row * to_stride), pw * bytes);
+                for (out, pixel) in dst.chunks_exact_mut(bytes).zip(src.chunks_exact(bytes).rev()) {
+                    out.copy_from_slice(pixel);
+                }
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(&target, CVPixelBufferLockFlags(0));
+        CVPixelBufferUnlockBaseAddress(source, CVPixelBufferLockFlags::ReadOnly);
+        Some(target)
+    }
 }
