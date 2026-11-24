@@ -131,6 +131,9 @@ pub struct AddTrack {
     /// A video track's size; 0 for audio.
     pub width: u32,
     pub height: u32,
+    /// Simulcast layers (rid, width, height), smallest first; none for a
+    /// single picture.
+    pub layers: Vec<(String, u32, u32)>,
 }
 
 /// The handle to a live signal connection. Cheap to clone; dropping every
@@ -192,6 +195,33 @@ impl SignalClient {
             muted: track.muted,
             width: track.width,
             height: track.height,
+            layers: track
+                .layers
+                .iter()
+                .enumerate()
+                .map(|(i, (rid, width, height))| proto::VideoLayer {
+                    quality: match i {
+                        0 => proto::VideoQuality::Low,
+                        1 => proto::VideoQuality::Medium,
+                        _ => proto::VideoQuality::High,
+                    } as i32,
+                    width: *width,
+                    height: *height,
+                    rid: rid.clone(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }))
+    }
+
+    /// Ask for a subscribed video track at about this size: the server
+    /// sends the simulcast layer that fits.
+    pub fn track_settings(&self, track_sid: &str, width: u32, height: u32) -> Result<()> {
+        self.send(signal_request::Message::TrackSetting(proto::UpdateTrackSettings {
+            track_sids: vec![track_sid.into()],
+            width,
+            height,
             ..Default::default()
         }))
     }

@@ -137,6 +137,7 @@ async fn publishing_a_track_is_acknowledged() {
             muted: false,
             width: 0,
             height: 0,
+            layers: Vec::new(),
         })
         .unwrap();
 

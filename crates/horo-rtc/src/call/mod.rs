@@ -53,6 +53,9 @@ const MIC_CID: &str = "microphone";
 const CAMERA_CID: &str = "camera";
 /// The camera size we tell the server we publish (what it plans layers by).
 const CAMERA_SIZE: (u32, u32) = (1280, 720);
+/// Our camera's simulcast layers, smallest first, as LiveKit names them:
+/// a quarter, half and the whole picture.
+pub const CAMERA_LAYERS: [&str; 3] = ["q", "h", "f"];
 /// A remote track silent this long is left out of the mix; when it speaks
 /// again its jitter buffer starts afresh rather than "catching up".
 const IDLE: Duration = Duration::from_secs(1);
@@ -112,6 +115,8 @@ pub struct Participant {
     pub name: String,
     /// Their camera is on.
     pub camera: bool,
+    /// The server's id for their camera track, if they publish one.
+    pub camera_sid: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -212,6 +217,7 @@ async fn open_link(url: &str, token: &str, network: &Network, muted: bool) -> Re
         muted,
         width: 0,
         height: 0,
+        layers: Vec::new(),
     })?;
     let (sdp, mic_mid) = publisher.offer_audio(&format!("{identity}-mic"), MIC_CID).await?;
     signal.offer(sdp, 0)?;
@@ -231,7 +237,7 @@ impl Call {
         let remotes = Arc::new(Mutex::new(Remotes::default()));
         let screens = Screens::default();
         let (broken_tx, broken) = mpsc::unbounded_channel();
-        let (video_tx, video_packets) = mpsc::unbounded_channel();
+        let (video_tx, video_packets) = mpsc::unbounded_channel::<(&'static str, u64, Vec<u8>)>();
         let camera_on = Arc::new(AtomicBool::new(false));
         let camera_keyframe = Arc::new(AtomicBool::new(true));
 
@@ -257,6 +263,7 @@ impl Call {
             camera_mid: None,
             camera_sid: None,
             owners: HashMap::new(),
+            sized: std::collections::HashSet::new(),
             events: events_tx.clone(),
             pub_ice: IceConnectionState::New,
             sub_ice: IceConnectionState::New,
@@ -333,9 +340,19 @@ impl Drop for Call {
 }
 
 fn participant(p: &proto::ParticipantInfo) -> Participant {
-    let camera = p.tracks.iter().any(|t| t.r#type == proto::TrackType::Video as i32 && t.source == proto::TrackSource::Camera as i32 && !t.muted);
-    Participant { sid: p.sid.clone(), identity: p.identity.clone(), name: p.name.clone(), camera }
+    let track = p.tracks.iter().find(|t| t.r#type == proto::TrackType::Video as i32 && t.source == proto::TrackSource::Camera as i32);
+    Participant {
+        sid: p.sid.clone(),
+        identity: p.identity.clone(),
+        name: p.name.clone(),
+        camera: track.is_some_and(|t| !t.muted),
+        camera_sid: track.map(|t| t.sid.clone()),
+    }
 }
+
+/// The size we ask other people's cameras for: enough for a call tile on a
+/// high-density screen, and the server sends the layer that fits.
+const VIEW_SIZE: (u32, u32) = (640, 360);
 
 fn sorted(participants: &HashMap<String, Participant>) -> Vec<Participant> {
     let mut list: Vec<Participant> = participants.values().cloned().collect();
@@ -404,6 +421,8 @@ struct Engine {
     camera_sid: Option<String>,
     /// Which participant each subscriber media line belongs to (by mid).
     owners: HashMap<String, String>,
+    /// Camera tracks we've told the server what size we want.
+    sized: std::collections::HashSet<String>,
     events: mpsc::UnboundedSender<CallEvent>,
     pub_ice: IceConnectionState,
     sub_ice: IceConnectionState,
@@ -423,11 +442,23 @@ fn ice_up(state: IceConnectionState) -> bool {
 }
 
 impl Engine {
+    /// Ask for each new camera track at [`VIEW_SIZE`] (by default the
+    /// server sends the biggest layer).
+    fn size_cameras(&mut self) {
+        let new: Vec<String> = self.participants.values().filter_map(|p| p.camera_sid.clone()).filter(|sid| !self.sized.contains(sid)).collect();
+        for sid in new {
+            if self.link.signal.track_settings(&sid, VIEW_SIZE.0, VIEW_SIZE.1).is_ok() {
+                self.sized.insert(sid);
+            }
+        }
+    }
+
     /// Take in a join response: who we are, who's here.
     fn joined(&mut self, join: &proto::JoinResponse) {
         self.own_sid = join.participant.as_ref().map(|p| p.sid.clone()).unwrap_or_default();
         self.ping = (join.ping_interval, join.ping_timeout);
         self.participants = join.other_participants.iter().map(|p| (p.sid.clone(), participant(p))).collect();
+        self.size_cameras();
         let _ = self.events.send(CallEvent::Participants(sorted(&self.participants)));
     }
 
@@ -436,7 +467,7 @@ impl Engine {
         mut packets: mpsc::UnboundedReceiver<(u64, Vec<u8>)>,
         mut commands: mpsc::UnboundedReceiver<Command>,
         mut broken: mpsc::UnboundedReceiver<Mid>,
-        mut video_packets: mpsc::UnboundedReceiver<(u64, Vec<u8>)>,
+        mut video_packets: mpsc::UnboundedReceiver<(&'static str, u64, Vec<u8>)>,
     ) {
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         let reason = loop {
@@ -460,11 +491,11 @@ impl Engine {
                     Some(event) => self.on_subscriber(event),
                     None => Err(Trouble::Rejoin("subscriber gone".into())),
                 },
-                Some((rtp, packet)) = video_packets.recv() => {
+                Some((rid, rtp, packet)) = video_packets.recv() => {
                     if self.publishing
                         && let Some(mid) = self.camera_mid
                     {
-                        let _ = self.link.publisher.write_video(mid, rtp, packet);
+                        let _ = self.link.publisher.write_video(mid, Some(rid), rtp, packet);
                     }
                     Ok(())
                 }
@@ -622,6 +653,7 @@ impl Engine {
         self.remotes.lock().unwrap().tracks.clear();
         self.video.reset();
         self.owners.clear();
+        self.sized.clear();
         self.camera_mid = None;
         self.camera_sid = None;
         self.joined(&join);
@@ -692,8 +724,9 @@ impl Engine {
             muted: false,
             width: CAMERA_SIZE.0,
             height: CAMERA_SIZE.1,
+            layers: CAMERA_LAYERS.iter().zip([4, 2, 1]).map(|(rid, d)| ((*rid).to_owned(), CAMERA_SIZE.0 / d, CAMERA_SIZE.1 / d)).collect(),
         })?;
-        let (sdp, mid) = self.link.publisher.offer_video(&format!("{}-camera", self.identity), CAMERA_CID).await?;
+        let (sdp, mid) = self.link.publisher.offer_video(&format!("{}-camera", self.identity), CAMERA_CID, &CAMERA_LAYERS).await?;
         self.link.signal.offer(sdp, 1)?;
         self.camera_mid = Some(mid);
         self.camera_keyframe.store(true, Ordering::Relaxed);
@@ -798,6 +831,7 @@ impl Engine {
                     }
                 }
                 if changed {
+                    self.size_cameras();
                     let _ = self.events.send(CallEvent::Participants(sorted(&self.participants)));
                 }
             }

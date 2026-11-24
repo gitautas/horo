@@ -139,6 +139,7 @@ async fn participant(server: &Server, room: &str, identity: &str, role: Role, co
                 muted: false,
                 width: 0,
                 height: 0,
+                layers: Vec::new(),
             })
             .unwrap();
         let (sdp, mid) = publisher.offer_audio("tone-stream", "tone").await.expect("offer");

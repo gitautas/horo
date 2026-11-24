@@ -196,13 +196,13 @@ pub enum PeerEvent {
 }
 
 enum Command {
-    OfferMedia { kind: MediaKind, stream_id: String, track_id: String, reply: oneshot::Sender<Result<(String, Mid)>> },
+    OfferMedia { kind: MediaKind, stream_id: String, track_id: String, rids: Vec<String>, reply: oneshot::Sender<Result<(String, Mid)>> },
     AcceptAnswer { sdp: String, reply: oneshot::Sender<Result<()>> },
     AcceptOffer { sdp: String, reply: oneshot::Sender<Result<String>> },
     RemoteCandidate(String),
     WriteAudio { mid: Mid, rtp_time: u64, data: Vec<u8> },
     RequestKeyframe { mid: Mid },
-    WriteVideo { mid: Mid, rtp_time: u64, data: Vec<u8> },
+    WriteVideo { mid: Mid, rid: Option<&'static str>, rtp_time: u64, data: Vec<u8> },
     Restart { config: Box<PeerConfig>, offer: bool, reply: oneshot::Sender<Result<Option<String>>> },
     Sever,
     Close,
@@ -263,13 +263,15 @@ impl Peer {
     /// `msid` carries `stream_id` and `track_id`; LiveKit matches the latter
     /// against the `cid` of the track it was asked to publish.
     pub async fn offer_audio(&self, stream_id: &str, track_id: &str) -> Result<(String, Mid)> {
-        self.ask(|reply| Command::OfferMedia { kind: MediaKind::Audio, stream_id: stream_id.into(), track_id: track_id.into(), reply }).await
+        self.ask(|reply| Command::OfferMedia { kind: MediaKind::Audio, stream_id: stream_id.into(), track_id: track_id.into(), rids: Vec::new(), reply }).await
     }
 
     /// Add a send-only video line (a camera), as [`Peer::offer_audio`]
-    /// does audio: the new offer, for the server to answer.
-    pub async fn offer_video(&self, stream_id: &str, track_id: &str) -> Result<(String, Mid)> {
-        self.ask(|reply| Command::OfferMedia { kind: MediaKind::Video, stream_id: stream_id.into(), track_id: track_id.into(), reply }).await
+    /// does audio: the new offer, for the server to answer. `rids` names
+    /// its simulcast layers, if it has them.
+    pub async fn offer_video(&self, stream_id: &str, track_id: &str, rids: &[&str]) -> Result<(String, Mid)> {
+        let rids = rids.iter().map(|r| (*r).to_owned()).collect();
+        self.ask(|reply| Command::OfferMedia { kind: MediaKind::Video, stream_id: stream_id.into(), track_id: track_id.into(), rids, reply }).await
     }
 
     pub async fn accept_answer(&self, sdp: &str) -> Result<()> {
@@ -292,9 +294,10 @@ impl Peer {
         self.commands.send(Command::WriteAudio { mid, rtp_time, data }).map_err(|_| PeerError::Closed)
     }
 
-    /// One encoded VP8 frame on a send line, at its RTP time (90 kHz).
-    pub fn write_video(&self, mid: Mid, rtp_time: u64, data: Vec<u8>) -> Result<()> {
-        self.commands.send(Command::WriteVideo { mid, rtp_time, data }).map_err(|_| PeerError::Closed)
+    /// One encoded VP8 frame on a send line (on simulcast layer `rid`),
+    /// at its RTP time (90 kHz).
+    pub fn write_video(&self, mid: Mid, rid: Option<&'static str>, rtp_time: u64, data: Vec<u8>) -> Result<()> {
+        self.commands.send(Command::WriteVideo { mid, rid, rtp_time, data }).map_err(|_| PeerError::Closed)
     }
 
     /// Ask the sender of a received video track for a full picture (PLI).
@@ -723,10 +726,17 @@ impl Driver {
 
     fn command(&mut self, command: Command) -> Result<()> {
         match command {
-            Command::OfferMedia { kind, stream_id, track_id, reply } => {
+            Command::OfferMedia { kind, stream_id, track_id, rids, reply } => {
                 let result = (|| {
                     let mut change = self.rtc.sdp_api();
-                    let mid = change.add_media(kind, Direction::SendOnly, Some(stream_id), Some(track_id), None);
+                    let simulcast = (!rids.is_empty()).then(|| {
+                        let mut simulcast = str0m::media::Simulcast::new();
+                        for rid in &rids {
+                            simulcast.add_send_layer(str0m::media::SimulcastLayer::new(rid));
+                        }
+                        simulcast
+                    });
+                    let mid = change.add_media(kind, Direction::SendOnly, Some(stream_id), Some(track_id), simulcast);
                     let (offer, pending) = change.apply().ok_or_else(|| PeerError::Sdp("nothing to offer".into()))?;
                     self.pending_offer = Some(pending);
                     self.drain()?;
@@ -777,10 +787,14 @@ impl Driver {
                 writer.write(pt, Instant::now(), MediaTime::new(rtp_time, str0m::media::Frequency::FORTY_EIGHT_KHZ), data)?;
                 self.drain()?;
             }
-            Command::WriteVideo { mid, rtp_time, data } => {
+            Command::WriteVideo { mid, rid, rtp_time, data } => {
                 let Some(writer) = self.rtc.writer(mid) else { return Ok(()) };
                 let Some(pt) = writer.payload_params().find(|p| p.spec().codec == Codec::Vp8).map(|p| p.pt()) else {
                     return Ok(()); // not negotiated (yet)
+                };
+                let writer = match rid {
+                    Some(rid) => writer.rid(str0m::media::Rid::from(rid)),
+                    None => writer,
                 };
                 writer.write(pt, Instant::now(), MediaTime::new(rtp_time, str0m::media::Frequency::NINETY_KHZ), data)?;
                 self.drain()?;

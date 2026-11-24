@@ -24,13 +24,16 @@ use crate::{
 /// The fastest we send: 30 pictures a second.
 const MIN_INTERVAL: Duration = Duration::from_millis(30);
 
-/// Our camera, on its way out: pictures in, VP8 frames to the engine.
-/// Lives wherever the camera's pictures arrive (its capture thread).
+/// Our camera, on its way out: pictures in, VP8 frames to the engine,
+/// three times over (a quarter, half and the whole picture: simulcast,
+/// so each viewer can be sent the size they show it at). Lives wherever
+/// the camera's pictures arrive (its capture thread).
 pub struct CameraFeed {
-    encoder: Option<Vp8Encoder>,
+    /// One encoder a layer, smallest first.
+    encoders: [Option<Vp8Encoder>; 3],
     started: Instant,
     last: Option<Instant>,
-    packets: mpsc::UnboundedSender<(u64, Vec<u8>)>,
+    packets: mpsc::UnboundedSender<(&'static str, u64, Vec<u8>)>,
     /// The camera is on in the call (pictures pushed while it's off are
     /// dropped).
     pub(super) on: Arc<AtomicBool>,
@@ -39,13 +42,14 @@ pub struct CameraFeed {
 }
 
 impl CameraFeed {
-    pub(super) fn new(packets: mpsc::UnboundedSender<(u64, Vec<u8>)>, on: Arc<AtomicBool>, keyframe: Arc<AtomicBool>) -> CameraFeed {
-        CameraFeed { encoder: None, started: Instant::now(), last: None, packets, on, keyframe }
+    pub(super) fn new(packets: mpsc::UnboundedSender<(&'static str, u64, Vec<u8>)>, on: Arc<AtomicBool>, keyframe: Arc<AtomicBool>) -> CameraFeed {
+        CameraFeed { encoders: [None, None, None], started: Instant::now(), last: None, packets, on, keyframe }
     }
 
-    /// The bitrate for a picture size: about 1.2 Mbit/s at 720p.
+    /// The bitrate for a picture size: about 1.2 Mbit/s at 720p, in
+    /// proportion below (with a floor, as tiny pictures still cost).
     fn bitrate(width: u32, height: u32) -> u32 {
-        ((u64::from(width) * u64::from(height) * 1200 / (1280 * 720)) as u32).clamp(300, 2500)
+        ((u64::from(width) * u64::from(height) * 1200 / (1280 * 720)) as u32).clamp(100, 2500)
     }
 
     /// Encode and send one picture (at most 30 a second; more are dropped).
@@ -58,27 +62,38 @@ impl CameraFeed {
             return;
         }
         self.last = Some(now);
-        if self.encoder.as_ref().is_none_or(|e| e.size() != (frame.width, frame.height)) {
-            match Vp8Encoder::new(frame.width, frame.height, Self::bitrate(frame.width, frame.height)) {
-                Ok(encoder) => self.encoder = Some(encoder),
-                Err(e) => {
-                    tracing::warn!("camera: {e}");
-                    return;
-                }
-            }
-            self.keyframe.store(true, Ordering::Relaxed);
-        }
-        let Some(encoder) = &mut self.encoder else { return };
+        let half = frame.half();
+        let quarter = half.half();
         let elapsed = now.duration_since(self.started);
-        let keyframe = self.keyframe.swap(false, Ordering::Relaxed);
-        match encoder.encode(frame, elapsed.as_millis() as i64, keyframe) {
-            Ok(packets) => {
-                let rtp = (elapsed.as_micros() * 9 / 100) as u64;
-                for packet in packets {
-                    let _ = self.packets.send((rtp, packet.data));
-                }
+        let rtp = (elapsed.as_micros() * 9 / 100) as u64;
+        // All layers key together: a viewer switched between them needs one.
+        let mut keyframe = self.keyframe.swap(false, Ordering::Relaxed);
+        for slot in &self.encoders {
+            if slot.is_none() {
+                keyframe = true;
             }
-            Err(e) => tracing::warn!("camera: {e}"),
+        }
+        for (i, (layer, rid)) in [&quarter, &half, frame].into_iter().zip(super::CAMERA_LAYERS).enumerate() {
+            let slot = &mut self.encoders[i];
+            if slot.as_ref().is_none_or(|e| e.size() != (layer.width, layer.height)) {
+                match Vp8Encoder::new(layer.width, layer.height, Self::bitrate(layer.width, layer.height)) {
+                    Ok(encoder) => *slot = Some(encoder),
+                    Err(e) => {
+                        tracing::warn!("camera ({rid}): {e}");
+                        continue;
+                    }
+                }
+                keyframe = true;
+            }
+            let Some(encoder) = slot else { continue };
+            match encoder.encode(layer, elapsed.as_millis() as i64, keyframe) {
+                Ok(packets) => {
+                    for packet in packets {
+                        let _ = self.packets.send((rid, rtp, packet.data));
+                    }
+                }
+                Err(e) => tracing::warn!("camera ({rid}): {e}"),
+            }
         }
     }
 }
@@ -239,9 +254,17 @@ fn spawn_decoder(mid: Mid, identity: String, screens: Screens, broken: mpsc::Unb
                     return;
                 }
             };
+            let mut size = (0, 0);
             while let Ok(data) = rx.recv() {
                 match decoder.decode(&data) {
-                    Ok(Some(frame)) => screens.set(&identity, frame),
+                    Ok(Some(frame)) => {
+                        // Which layer the server sends shows as a size change.
+                        if size != (frame.width, frame.height) {
+                            size = (frame.width, frame.height);
+                            tracing::info!("{identity}: receiving {}x{}", size.0, size.1);
+                        }
+                        screens.set(&identity, frame)
+                    }
                     Ok(None) => {}
                     Err(e) => {
                         tracing::debug!("{identity}: {e}");

@@ -64,6 +64,34 @@ impl Frame {
         Frame { width, height, data }
     }
 
+    /// Half the size each way, each pixel the average of four (an odd
+    /// edge keeps its last row or column).
+    pub fn half(&self) -> Frame {
+        let (w, h) = (self.width.div_ceil(2).max(1), self.height.div_ceil(2).max(1));
+        let mut out = Frame::black(w, h);
+        let shrink = |src: &[u8], sw: u32, sh: u32, dst: &mut [u8], dw: u32, dh: u32| {
+            let (sw, sh, dw) = (sw as usize, sh as usize, dw as usize);
+            for y in 0..dh as usize {
+                let (y0, y1) = ((2 * y).min(sh - 1), (2 * y + 1).min(sh - 1));
+                for x in 0..dw {
+                    let (x0, x1) = ((2 * x).min(sw - 1), (2 * x + 1).min(sw - 1));
+                    let sum = u32::from(src[y0 * sw + x0]) + u32::from(src[y0 * sw + x1]) + u32::from(src[y1 * sw + x0]) + u32::from(src[y1 * sw + x1]);
+                    dst[y * dw + x] = ((sum + 2) / 4) as u8;
+                }
+            }
+        };
+        let (scw, sch) = Frame::chroma_size(self.width, self.height);
+        let (dcw, dch) = Frame::chroma_size(w, h);
+        let luma = (w * h) as usize;
+        let chroma = (dcw * dch) as usize;
+        let (y, rest) = out.data.split_at_mut(luma);
+        let (u, v) = rest.split_at_mut(chroma);
+        shrink(self.y(), self.width, self.height, y, w, h);
+        shrink(self.u(), scw, sch, u, dcw, dch);
+        shrink(self.v(), scw, sch, v, dcw, dch);
+        out
+    }
+
     pub fn y(&self) -> &[u8] {
         &self.data[..(self.width * self.height) as usize]
     }
@@ -276,6 +304,18 @@ mod tests {
         let original = card(w, h, 9 * 4);
         let error: f64 = last.y().iter().zip(original.y()).map(|(a, b)| (f64::from(*a) - f64::from(*b)).abs()).sum::<f64>() / f64::from(w * h);
         assert!(error < 6., "mean luma error {error}");
+    }
+
+    #[test]
+    fn halving_averages_and_rounds_sizes_up() {
+        let mut frame = Frame::black(4, 2);
+        frame.data[..8].copy_from_slice(&[0, 100, 200, 200, 100, 0, 200, 200]);
+        let half = frame.half();
+        assert_eq!((half.width, half.height), (2, 1));
+        assert_eq!(half.y(), &[50, 200]);
+        assert_eq!(Frame::black(5, 3).half().width, 3);
+        let quarter = Frame::black(1280, 720).half().half();
+        assert_eq!((quarter.width, quarter.height), (320, 180));
     }
 
     #[test]
