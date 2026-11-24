@@ -114,6 +114,16 @@ pub fn panel(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<A
     let failed = matches!(call.status, CallStatus::Failed(_));
 
     let (open, mute, leave) = (store.clone(), store.clone(), store.clone());
+    #[cfg(target_os = "macos")]
+    let camera_button = {
+        let (toggle, on) = (store.clone(), call.camera);
+        Button::new("call-camera")
+            .ghost()
+            .icon(icon(if on { "icons/video.svg" } else { "icons/video-off.svg" }))
+            .tooltip(if on { "turn your camera off" } else { "turn your camera on" })
+            .when(on, |b| b.primary())
+            .on_click(move |_, _, cx| toggle.update(cx, |s, cx| s.set_call_camera(!on, cx)))
+    };
     let room_id = call.room_id.clone();
     let controls = if failed {
         h_flex().child(
@@ -124,9 +134,10 @@ pub fn panel(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<A
         )
     } else {
         let muted = call.muted;
-        h_flex()
-            .gap_1()
-            .child(
+        let row = h_flex().gap_1();
+        #[cfg(target_os = "macos")]
+        let row = row.child(camera_button);
+        row.child(
                 Button::new("call-mute")
                     .ghost()
                     .icon(icon(if muted { "icons/mic-off.svg" } else { "icons/mic.svg" }))
@@ -211,7 +222,17 @@ pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut A
     let everyone = people(&call, &store.read(cx).profiles);
     want(store, &everyone, cx);
     let screens = store.read(cx).call_live.as_ref().map(|l| l.screens.clone());
+    let me = call.identity.clone();
     for person in everyone {
+        // Our own camera, straight from it rather than round the server.
+        if call.camera
+            && person.identity.is_some()
+            && person.identity == me
+            && let Some(picture) = own_camera(store, cx)
+        {
+            tiles.push(video_tile(picture, &person, palette).into_any_element());
+            continue;
+        }
         if person.camera
             && let Some(picture) = person.identity.as_deref().and_then(|id| camera_picture(screens.as_ref()?, id))
         {
@@ -282,6 +303,18 @@ fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str) -> Option<A
     Some(gpui::surface(buffer).w(px(VIDEO_W)).h(px(VIDEO_H)).object_fit(gpui::ObjectFit::Cover).into_any_element())
 }
 
+/// What our camera sees now.
+#[cfg(target_os = "macos")]
+fn own_camera(store: &Entity<Store>, cx: &mut App) -> Option<AnyElement> {
+    let buffer = store.update(cx, |s, _| s.call_live.as_mut()?.camera.as_mut()?.frame())?;
+    Some(gpui::surface(buffer).w(px(VIDEO_W)).h(px(VIDEO_H)).object_fit(gpui::ObjectFit::Cover).into_any_element())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn own_camera(_store: &Entity<Store>, _cx: &mut App) -> Option<AnyElement> {
+    None
+}
+
 #[cfg(not(target_os = "macos"))]
 fn camera_picture(_screens: &horo_rtc::call::Screens, _identity: &str) -> Option<AnyElement> {
     None
@@ -319,7 +352,7 @@ fn video_tile(picture: AnyElement, person: &Person, palette: &Palette) -> gpui::
 /// Whether anyone in our call has a camera on (the window then redraws
 /// every frame for them).
 pub fn any_camera(store: &Entity<Store>, cx: &App) -> bool {
-    store.read(cx).call.as_ref().is_some_and(|c| c.participants.iter().any(|p| p.camera))
+    store.read(cx).call.as_ref().is_some_and(|c| c.camera || c.participants.iter().any(|p| p.camera))
 }
 
 /// Someone calling you: answer or decline, over everything.

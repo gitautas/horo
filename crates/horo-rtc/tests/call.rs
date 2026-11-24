@@ -137,6 +137,8 @@ async fn participant(server: &Server, room: &str, identity: &str, role: Role, co
                 kind: proto::TrackType::Audio,
                 source: proto::TrackSource::Microphone,
                 muted: false,
+                width: 0,
+                height: 0,
             })
             .unwrap();
         let (sdp, mid) = publisher.offer_audio("tone-stream", "tone").await.expect("offer");

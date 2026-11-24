@@ -14,10 +14,74 @@ use std::{
 
 use tokio::sync::mpsc;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::{
     Mid,
-    video::{Frame, Vp8Decoder},
+    video::{Frame, Vp8Decoder, Vp8Encoder},
 };
+
+/// The fastest we send: 30 pictures a second.
+const MIN_INTERVAL: Duration = Duration::from_millis(30);
+
+/// Our camera, on its way out: pictures in, VP8 frames to the engine.
+/// Lives wherever the camera's pictures arrive (its capture thread).
+pub struct CameraFeed {
+    encoder: Option<Vp8Encoder>,
+    started: Instant,
+    last: Option<Instant>,
+    packets: mpsc::UnboundedSender<(u64, Vec<u8>)>,
+    /// The camera is on in the call (pictures pushed while it's off are
+    /// dropped).
+    pub(super) on: Arc<AtomicBool>,
+    /// The next picture should be a keyframe (a new viewer, a loss).
+    pub(super) keyframe: Arc<AtomicBool>,
+}
+
+impl CameraFeed {
+    pub(super) fn new(packets: mpsc::UnboundedSender<(u64, Vec<u8>)>, on: Arc<AtomicBool>, keyframe: Arc<AtomicBool>) -> CameraFeed {
+        CameraFeed { encoder: None, started: Instant::now(), last: None, packets, on, keyframe }
+    }
+
+    /// The bitrate for a picture size: about 1.2 Mbit/s at 720p.
+    fn bitrate(width: u32, height: u32) -> u32 {
+        ((u64::from(width) * u64::from(height) * 1200 / (1280 * 720)) as u32).clamp(300, 2500)
+    }
+
+    /// Encode and send one picture (at most 30 a second; more are dropped).
+    pub fn push(&mut self, frame: &Frame) {
+        if !self.on.load(Ordering::Relaxed) {
+            return;
+        }
+        let now = Instant::now();
+        if self.last.is_some_and(|at| now.duration_since(at) < MIN_INTERVAL) {
+            return;
+        }
+        self.last = Some(now);
+        if self.encoder.as_ref().is_none_or(|e| e.size() != (frame.width, frame.height)) {
+            match Vp8Encoder::new(frame.width, frame.height, Self::bitrate(frame.width, frame.height)) {
+                Ok(encoder) => self.encoder = Some(encoder),
+                Err(e) => {
+                    tracing::warn!("camera: {e}");
+                    return;
+                }
+            }
+            self.keyframe.store(true, Ordering::Relaxed);
+        }
+        let Some(encoder) = &mut self.encoder else { return };
+        let elapsed = now.duration_since(self.started);
+        let keyframe = self.keyframe.swap(false, Ordering::Relaxed);
+        match encoder.encode(frame, elapsed.as_millis() as i64, keyframe) {
+            Ok(packets) => {
+                let rtp = (elapsed.as_micros() * 9 / 100) as u64;
+                for packet in packets {
+                    let _ = self.packets.send((rtp, packet.data));
+                }
+            }
+            Err(e) => tracing::warn!("camera: {e}"),
+        }
+    }
+}
 
 /// The least time between two keyframe requests on one track: a sender
 /// asked again before it could answer just wastes bandwidth.

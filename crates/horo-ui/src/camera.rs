@@ -13,7 +13,7 @@ use dispatch2::DispatchQueue;
 use objc2::{AnyThread, DefinedClass, define_class, msg_send, rc::Retained, runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject}};
 use objc2_av_foundation::{
     AVAuthorizationStatus, AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceDiscoverySession, AVCaptureDeviceInput, AVCaptureDevicePosition,
-    AVCaptureDeviceTypeBuiltInWideAngleCamera, AVCaptureDeviceTypeContinuityCamera, AVCaptureDeviceTypeExternal, AVCaptureOutput, AVCaptureSession,
+    AVCaptureDeviceTypeBuiltInWideAngleCamera, AVCaptureSessionPreset1280x720, AVCaptureDeviceTypeContinuityCamera, AVCaptureDeviceTypeExternal, AVCaptureOutput, AVCaptureSession,
     AVCaptureVideoDataOutput, AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaTypeVideo,
 };
 use objc2_core_foundation::{CFRetained, CFString};
@@ -38,10 +38,20 @@ unsafe impl Send for Frame {}
 
 type Latest = Arc<Mutex<Option<Frame>>>;
 
+/// Called with each picture, on the capture queue (a call's encoder).
+pub type OnFrame = Box<dyn Fn(&CVPixelBuffer) + Send + Sync>;
+
+/// What the delegate holds: the newest picture for the preview, and
+/// whoever else wants every one.
+struct SinkState {
+    latest: Latest,
+    on_frame: Option<OnFrame>,
+}
+
 define_class!(
     #[unsafe(super(NSObject))]
     #[name = "HoroCameraSink"]
-    #[ivars = Latest]
+    #[ivars = SinkState]
     struct Sink;
 
     unsafe impl NSObjectProtocol for Sink {}
@@ -50,9 +60,11 @@ define_class!(
         #[unsafe(method(captureOutput:didOutputSampleBuffer:fromConnection:))]
         fn did_output(&self, _output: &AVCaptureOutput, sample: &CMSampleBuffer, _connection: &AVCaptureConnection) {
             // SAFETY: a plain accessor on the buffer we were handed.
-            if let Some(image) = unsafe { sample.image_buffer() }
-                && let Ok(mut latest) = self.ivars().lock()
-            {
+            let Some(image) = (unsafe { sample.image_buffer() }) else { return };
+            if let Some(on_frame) = &self.ivars().on_frame {
+                on_frame(&image);
+            }
+            if let Ok(mut latest) = self.ivars().latest.lock() {
                 *latest = Some(Frame(image));
             }
         }
@@ -60,8 +72,8 @@ define_class!(
 );
 
 impl Sink {
-    fn new(latest: Latest) -> Retained<Sink> {
-        let this = Sink::alloc().set_ivars(latest);
+    fn new(latest: Latest, on_frame: Option<OnFrame>) -> Retained<Sink> {
+        let this = Sink::alloc().set_ivars(SinkState { latest, on_frame });
         // SAFETY: NSObject's init, on a freshly allocated object.
         unsafe { msg_send![super(this), init] }
     }
@@ -135,6 +147,11 @@ impl Camera {
     /// Start `id` (the system's preferred camera when `None`, or when
     /// that one isn't plugged in).
     pub fn start(id: Option<&str>) -> Result<Camera, String> {
+        Camera::start_with(id, None)
+    }
+
+    /// As [`Camera::start`], with `on_frame` hearing every picture.
+    pub fn start_with(id: Option<&str>, on_frame: Option<OnFrame>) -> Result<Camera, String> {
         // SAFETY: AVFoundation calls with valid, retained arguments.
         unsafe {
             let devices = discovery().devices();
@@ -149,6 +166,10 @@ impl Camera {
                 return Err("the camera is busy".into());
             }
             session.addInput(&input);
+            // 720p: plenty for a call, and what the encoder can keep up with.
+            if session.canSetSessionPreset(AVCaptureSessionPreset1280x720) {
+                session.setSessionPreset(AVCaptureSessionPreset1280x720);
+            }
 
             let output = AVCaptureVideoDataOutput::new();
             let format = NSNumber::new_u32(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
@@ -160,7 +181,7 @@ impl Camera {
             output.setVideoSettings(Some(&settings));
             output.setAlwaysDiscardsLateVideoFrames(true);
             let latest: Latest = Arc::default();
-            let sink = Sink::new(latest.clone());
+            let sink = Sink::new(latest.clone(), on_frame);
             let queue = DispatchQueue::new("horo.camera", None);
             output.setSampleBufferDelegate_queue(Some(ProtocolObject::from_ref(&*sink)), Some(&queue));
             if !session.canAddOutput(&output) {
@@ -188,4 +209,49 @@ impl Drop for Camera {
         // SAFETY: a plain call; the light goes off with the view.
         unsafe { self.session.stopRunning() };
     }
+}
+
+/// A camera picture (bi-planar 4:2:0, full range) as the I420 frame the
+/// VP8 encoder takes, in the video range (16–235) receivers expect.
+pub fn to_i420(buffer: &CVPixelBuffer) -> Option<horo_rtc::video::Frame> {
+    use objc2_core_video::{CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferGetHeight, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress};
+    static LUMA: std::sync::OnceLock<[u8; 256]> = std::sync::OnceLock::new();
+    static CHROMA: std::sync::OnceLock<[u8; 256]> = std::sync::OnceLock::new();
+    let luma = LUMA.get_or_init(|| std::array::from_fn(|v| (16 + v * 219 / 255) as u8));
+    let chroma = CHROMA.get_or_init(|| std::array::from_fn(|v| (128 + (v as i32 - 128) * 224 / 255) as u8));
+
+    let (w, h) = (CVPixelBufferGetWidth(buffer), CVPixelBufferGetHeight(buffer));
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let mut frame = horo_rtc::video::Frame::black(w as u32, h as u32);
+    let (cw, ch) = horo_rtc::video::Frame::chroma_size(w as u32, h as u32);
+    let (cw, ch) = (cw as usize, ch as usize);
+    // SAFETY: reads stay inside each plane's rows as CoreVideo reports
+    // them, between lock and unlock.
+    unsafe {
+        CVPixelBufferLockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly);
+        let y_base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) as *const u8;
+        let uv_base = CVPixelBufferGetBaseAddressOfPlane(buffer, 1) as *const u8;
+        let (y_stride, uv_stride) = (CVPixelBufferGetBytesPerRowOfPlane(buffer, 0), CVPixelBufferGetBytesPerRowOfPlane(buffer, 1));
+        if !y_base.is_null() && !uv_base.is_null() {
+            let (y, rest) = frame.data.split_at_mut(w * h);
+            let (u, v) = rest.split_at_mut(cw * ch);
+            for row in 0..h {
+                let src = std::slice::from_raw_parts(y_base.add(row * y_stride), w);
+                for (out, &value) in y[row * w..(row + 1) * w].iter_mut().zip(src) {
+                    *out = luma[value as usize];
+                }
+            }
+            for row in 0..ch {
+                let src = std::slice::from_raw_parts(uv_base.add(row * uv_stride), cw * 2);
+                for col in 0..cw {
+                    u[row * cw + col] = chroma[src[col * 2] as usize];
+                    v[row * cw + col] = chroma[src[col * 2 + 1] as usize];
+                }
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly);
+    }
+    Some(frame)
 }

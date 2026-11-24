@@ -151,15 +151,24 @@ pub fn pixel_buffer(frame: &horo_rtc::video::Frame) -> Option<CFRetained<CVPixel
         let uv_base = CVPixelBufferGetBaseAddressOfPlane(&buffer, 1) as *mut u8;
         let uv_stride = CVPixelBufferGetBytesPerRowOfPlane(&buffer, 1);
         if !y_base.is_null() && !uv_base.is_null() {
+            // VP8 pictures are in the video range (16–235); the surface
+            // draws full range, so stretch them back out.
+            static LUMA: std::sync::OnceLock<[u8; 256]> = std::sync::OnceLock::new();
+            static CHROMA: std::sync::OnceLock<[u8; 256]> = std::sync::OnceLock::new();
+            let luma = LUMA.get_or_init(|| std::array::from_fn(|v| ((v as i32 - 16) * 255 / 219).clamp(0, 255) as u8));
+            let chroma = CHROMA.get_or_init(|| std::array::from_fn(|v| (128 + (v as i32 - 128) * 255 / 224).clamp(0, 255) as u8));
             let (y, u, v) = (frame.y(), frame.u(), frame.v());
             for row in 0..h {
-                std::ptr::copy_nonoverlapping(y[row * w..].as_ptr(), y_base.add(row * y_stride), w);
+                let line = std::slice::from_raw_parts_mut(y_base.add(row * y_stride), w);
+                for (out, &value) in line.iter_mut().zip(&y[row * w..(row + 1) * w]) {
+                    *out = luma[value as usize];
+                }
             }
             for row in 0..ch {
                 let line = std::slice::from_raw_parts_mut(uv_base.add(row * uv_stride), cw * 2);
                 for col in 0..cw {
-                    line[col * 2] = u[row * cw + col];
-                    line[col * 2 + 1] = v[row * cw + col];
+                    line[col * 2] = chroma[u[row * cw + col] as usize];
+                    line[col * 2 + 1] = chroma[v[row * cw + col] as usize];
                 }
             }
         }

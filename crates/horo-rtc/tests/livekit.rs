@@ -135,6 +135,8 @@ async fn publishing_a_track_is_acknowledged() {
             kind: proto::TrackType::Audio,
             source: proto::TrackSource::Microphone,
             muted: false,
+            width: 0,
+            height: 0,
         })
         .unwrap();
 

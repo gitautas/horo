@@ -128,6 +128,9 @@ pub struct AddTrack {
     pub kind: proto::TrackType,
     pub source: proto::TrackSource,
     pub muted: bool,
+    /// A video track's size; 0 for audio.
+    pub width: u32,
+    pub height: u32,
 }
 
 /// The handle to a live signal connection. Cheap to clone; dropping every
@@ -187,6 +190,8 @@ impl SignalClient {
             r#type: track.kind as i32,
             source: track.source as i32,
             muted: track.muted,
+            width: track.width,
+            height: track.height,
             ..Default::default()
         }))
     }

@@ -45,10 +45,14 @@ use tokio::sync::mpsc;
 pub mod devices;
 pub mod video;
 
-pub use video::{Picture, Screens};
+pub use video::{CameraFeed, Picture, Screens};
 
 /// The client track id of our microphone, echoed back by the server.
 const MIC_CID: &str = "microphone";
+/// And of our camera.
+const CAMERA_CID: &str = "camera";
+/// The camera size we tell the server we publish (what it plans layers by).
+const CAMERA_SIZE: (u32, u32) = (1280, 720);
 /// A remote track silent this long is left out of the mix; when it speaks
 /// again its jitter buffer starts afresh rather than "catching up".
 const IDLE: Duration = Duration::from_secs(1);
@@ -133,6 +137,7 @@ pub enum CallEvent {
 
 enum Command {
     Mute(bool),
+    Camera(bool),
     Reconnect,
     Sever { signalling: bool },
     KillPublisher,
@@ -167,6 +172,9 @@ pub struct Joined {
     pub events: mpsc::UnboundedReceiver<CallEvent>,
     /// Everyone's camera, newest picture each.
     pub screens: Screens,
+    /// Where our own camera's pictures go, once [`Call::set_camera`]
+    /// has turned it on.
+    pub camera: CameraFeed,
 }
 
 /// The connection to the room: signalling and both peers, with their event
@@ -202,6 +210,8 @@ async fn open_link(url: &str, token: &str, network: &Network, muted: bool) -> Re
         kind: proto::TrackType::Audio,
         source: proto::TrackSource::Microphone,
         muted,
+        width: 0,
+        height: 0,
     })?;
     let (sdp, mic_mid) = publisher.offer_audio(&format!("{identity}-mic"), MIC_CID).await?;
     signal.offer(sdp, 0)?;
@@ -221,6 +231,9 @@ impl Call {
         let remotes = Arc::new(Mutex::new(Remotes::default()));
         let screens = Screens::default();
         let (broken_tx, broken) = mpsc::unbounded_channel();
+        let (video_tx, video_packets) = mpsc::unbounded_channel();
+        let camera_on = Arc::new(AtomicBool::new(false));
+        let camera_keyframe = Arc::new(AtomicBool::new(true));
 
         let mut engine = Engine {
             url: livekit_url.to_owned(),
@@ -239,6 +252,10 @@ impl Call {
             participants: HashMap::new(),
             remotes: remotes.clone(),
             video: video::Receiver::new(screens.clone(), broken_tx),
+            camera_on: camera_on.clone(),
+            camera_keyframe: camera_keyframe.clone(),
+            camera_mid: None,
+            camera_sid: None,
             owners: HashMap::new(),
             events: events_tx.clone(),
             pub_ice: IceConnectionState::New,
@@ -249,19 +266,26 @@ impl Call {
             route_checked: Instant::now(),
         };
         engine.joined(&join);
-        let task = tokio::spawn(engine.run(packets, commands_rx, broken));
+        let task = tokio::spawn(engine.run(packets, commands_rx, broken, video_packets));
 
         let mut gate = NoiseGate::new(crate::audio::SAMPLE_RATE);
         gate.set_threshold(options.gate_threshold);
         let microphone = Microphone { gate, encoder: Encoder::new()?, rtp: 0, packets: packets_tx, muted: muted.clone(), events: events_tx, echo: None };
         let speaker = Speaker { remotes, frames: Vec::new(), echo: None };
-        Ok(Joined { call: Call { commands, muted, identity, task }, microphone, speaker, events, screens })
+        let camera = CameraFeed::new(video_tx, camera_on, camera_keyframe);
+        Ok(Joined { call: Call { commands, muted, identity, task }, microphone, speaker, events, screens, camera })
     }
 
     /// Stop sending the microphone, and tell the room.
     pub fn set_muted(&self, muted: bool) {
         self.muted.store(muted, Ordering::Relaxed);
         let _ = self.commands.send(Command::Mute(muted));
+    }
+
+    /// Turn our camera on in the call (publishing it the first time) or
+    /// off (muted: it stops being sent).
+    pub fn set_camera(&self, on: bool) {
+        let _ = self.commands.send(Command::Camera(on));
     }
 
     pub fn is_muted(&self) -> bool {
@@ -372,6 +396,12 @@ struct Engine {
     remotes: Arc<Mutex<Remotes>>,
     /// Remote cameras.
     video: video::Receiver,
+    /// Our camera: whether it's on, its send line once added, and the
+    /// server's id for it once published.
+    camera_on: Arc<AtomicBool>,
+    camera_keyframe: Arc<AtomicBool>,
+    camera_mid: Option<Mid>,
+    camera_sid: Option<String>,
     /// Which participant each subscriber media line belongs to (by mid).
     owners: HashMap<String, String>,
     events: mpsc::UnboundedSender<CallEvent>,
@@ -401,7 +431,13 @@ impl Engine {
         let _ = self.events.send(CallEvent::Participants(sorted(&self.participants)));
     }
 
-    async fn run(mut self, mut packets: mpsc::UnboundedReceiver<(u64, Vec<u8>)>, mut commands: mpsc::UnboundedReceiver<Command>, mut broken: mpsc::UnboundedReceiver<Mid>) {
+    async fn run(
+        mut self,
+        mut packets: mpsc::UnboundedReceiver<(u64, Vec<u8>)>,
+        mut commands: mpsc::UnboundedReceiver<Command>,
+        mut broken: mpsc::UnboundedReceiver<Mid>,
+        mut video_packets: mpsc::UnboundedReceiver<(u64, Vec<u8>)>,
+    ) {
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         let reason = loop {
             let step: Result<(), Trouble> = tokio::select! {
@@ -424,6 +460,14 @@ impl Engine {
                     Some(event) => self.on_subscriber(event),
                     None => Err(Trouble::Rejoin("subscriber gone".into())),
                 },
+                Some((rtp, packet)) = video_packets.recv() => {
+                    if self.publishing
+                        && let Some(mid) = self.camera_mid
+                    {
+                        let _ = self.link.publisher.write_video(mid, rtp, packet);
+                    }
+                    Ok(())
+                }
                 Some((rtp, packet)) = packets.recv() => {
                     if self.publishing {
                         // A failed write means the peer is closing; its event says why.
@@ -438,6 +482,7 @@ impl Engine {
                         }
                         Ok(())
                     }
+                    Some(Command::Camera(on)) => self.set_camera(on).await,
                     Some(Command::Reconnect) => Err(Trouble::Lost("the network changed".into(), ReconnectReason::RrSwitchCandidate)),
                     Some(Command::KillPublisher) => {
                         self.link.publisher.close();
@@ -577,7 +622,15 @@ impl Engine {
         self.remotes.lock().unwrap().tracks.clear();
         self.video.reset();
         self.owners.clear();
+        self.camera_mid = None;
+        self.camera_sid = None;
         self.joined(&join);
+        // A new session has no camera track: publish it again if it's on.
+        if self.camera_on.load(Ordering::Relaxed)
+            && let Err(e) = self.publish_camera().await
+        {
+            tracing::warn!("{}: republishing the camera: {e}", self.identity);
+        }
         Ok(())
     }
 
@@ -628,8 +681,43 @@ impl Engine {
         }
     }
 
+    /// Add the camera's track and send line (the first time it's turned on
+    /// in a session).
+    async fn publish_camera(&mut self) -> Result<()> {
+        self.link.signal.add_track(AddTrack {
+            cid: CAMERA_CID.into(),
+            name: CAMERA_CID.into(),
+            kind: proto::TrackType::Video,
+            source: proto::TrackSource::Camera,
+            muted: false,
+            width: CAMERA_SIZE.0,
+            height: CAMERA_SIZE.1,
+        })?;
+        let (sdp, mid) = self.link.publisher.offer_video(&format!("{}-camera", self.identity), CAMERA_CID).await?;
+        self.link.signal.offer(sdp, 1)?;
+        self.camera_mid = Some(mid);
+        self.camera_keyframe.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn set_camera(&mut self, on: bool) -> Result<(), Trouble> {
+        self.camera_on.store(on, Ordering::Relaxed);
+        if on && self.camera_mid.is_none() {
+            if let Err(e) = self.publish_camera().await {
+                tracing::warn!("{}: publishing the camera: {e}", self.identity);
+            }
+        } else if let Some(sid) = &self.camera_sid {
+            let _ = self.link.signal.mute(sid, !on);
+            if on {
+                self.camera_keyframe.store(true, Ordering::Relaxed);
+            }
+        }
+        Ok(())
+    }
+
     fn on_publisher(&mut self, event: PeerEvent) -> Result<(), Trouble> {
         match event {
+            PeerEvent::KeyframeRequest { .. } => self.camera_keyframe.store(true, Ordering::Relaxed),
             PeerEvent::Connected => {
                 self.publishing = true;
                 if !self.ever_connected {
@@ -679,6 +767,9 @@ impl Engine {
                 if let Err(e) = self.link.subscriber.add_remote_candidate(&candidate) {
                     tracing::debug!("subscriber candidate {candidate:?}: {e}");
                 }
+            }
+            SignalEvent::TrackPublished { cid, track } if cid == CAMERA_CID => {
+                self.camera_sid = track.map(|t| t.sid);
             }
             SignalEvent::TrackPublished { cid, track } if cid == MIC_CID => {
                 self.mic_sid = track.map(|t| t.sid);

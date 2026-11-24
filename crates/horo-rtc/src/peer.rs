@@ -182,6 +182,8 @@ pub enum PeerEvent {
     /// `contiguous` is false when packets before it went missing: the
     /// picture can't be trusted until the next keyframe.
     Video { mid: Mid, rtp_time: u64, data: Arc<[u8]>, keyframe: bool, contiguous: bool },
+    /// The remote wants a full picture on a track we send (PLI or FIR).
+    KeyframeRequest { mid: Mid },
     /// A TURN relay failed after the call started; ICE may still have others.
     RelayLost(String),
     /// Nothing has arrived from the remote for [`PATH_TIMEOUT`] (`alive:
@@ -194,12 +196,13 @@ pub enum PeerEvent {
 }
 
 enum Command {
-    OfferAudio { stream_id: String, track_id: String, reply: oneshot::Sender<Result<(String, Mid)>> },
+    OfferMedia { kind: MediaKind, stream_id: String, track_id: String, reply: oneshot::Sender<Result<(String, Mid)>> },
     AcceptAnswer { sdp: String, reply: oneshot::Sender<Result<()>> },
     AcceptOffer { sdp: String, reply: oneshot::Sender<Result<String>> },
     RemoteCandidate(String),
     WriteAudio { mid: Mid, rtp_time: u64, data: Vec<u8> },
     RequestKeyframe { mid: Mid },
+    WriteVideo { mid: Mid, rtp_time: u64, data: Vec<u8> },
     Restart { config: Box<PeerConfig>, offer: bool, reply: oneshot::Sender<Result<Option<String>>> },
     Sever,
     Close,
@@ -260,7 +263,13 @@ impl Peer {
     /// `msid` carries `stream_id` and `track_id`; LiveKit matches the latter
     /// against the `cid` of the track it was asked to publish.
     pub async fn offer_audio(&self, stream_id: &str, track_id: &str) -> Result<(String, Mid)> {
-        self.ask(|reply| Command::OfferAudio { stream_id: stream_id.into(), track_id: track_id.into(), reply }).await
+        self.ask(|reply| Command::OfferMedia { kind: MediaKind::Audio, stream_id: stream_id.into(), track_id: track_id.into(), reply }).await
+    }
+
+    /// Add a send-only video line (a camera), as [`Peer::offer_audio`]
+    /// does audio: the new offer, for the server to answer.
+    pub async fn offer_video(&self, stream_id: &str, track_id: &str) -> Result<(String, Mid)> {
+        self.ask(|reply| Command::OfferMedia { kind: MediaKind::Video, stream_id: stream_id.into(), track_id: track_id.into(), reply }).await
     }
 
     pub async fn accept_answer(&self, sdp: &str) -> Result<()> {
@@ -281,6 +290,11 @@ impl Peer {
     /// Send one encoded Opus frame; `rtp_time` counts samples at 48 kHz.
     pub fn write_audio(&self, mid: Mid, rtp_time: u64, data: Vec<u8>) -> Result<()> {
         self.commands.send(Command::WriteAudio { mid, rtp_time, data }).map_err(|_| PeerError::Closed)
+    }
+
+    /// One encoded VP8 frame on a send line, at its RTP time (90 kHz).
+    pub fn write_video(&self, mid: Mid, rtp_time: u64, data: Vec<u8>) -> Result<()> {
+        self.commands.send(Command::WriteVideo { mid, rtp_time, data }).map_err(|_| PeerError::Closed)
     }
 
     /// Ask the sender of a received video track for a full picture (PLI).
@@ -696,6 +710,7 @@ impl Driver {
                 let rtp_time = data.time.rebase(str0m::media::Frequency::FORTY_EIGHT_KHZ).numer();
                 PeerEvent::Audio { mid: data.mid, rtp_time, data: data.data }
             }
+            Event::KeyframeRequest(request) => PeerEvent::KeyframeRequest { mid: request.mid },
             Event::MediaData(data) if data.params.spec().codec == Codec::Vp8 => {
                 let rtp_time = data.time.rebase(str0m::media::Frequency::NINETY_KHZ).numer();
                 let keyframe = data.is_keyframe();
@@ -708,10 +723,10 @@ impl Driver {
 
     fn command(&mut self, command: Command) -> Result<()> {
         match command {
-            Command::OfferAudio { stream_id, track_id, reply } => {
+            Command::OfferMedia { kind, stream_id, track_id, reply } => {
                 let result = (|| {
                     let mut change = self.rtc.sdp_api();
-                    let mid = change.add_media(MediaKind::Audio, Direction::SendOnly, Some(stream_id), Some(track_id), None);
+                    let mid = change.add_media(kind, Direction::SendOnly, Some(stream_id), Some(track_id), None);
                     let (offer, pending) = change.apply().ok_or_else(|| PeerError::Sdp("nothing to offer".into()))?;
                     self.pending_offer = Some(pending);
                     self.drain()?;
@@ -760,6 +775,14 @@ impl Driver {
                     return Ok(()); // not negotiated yet
                 };
                 writer.write(pt, Instant::now(), MediaTime::new(rtp_time, str0m::media::Frequency::FORTY_EIGHT_KHZ), data)?;
+                self.drain()?;
+            }
+            Command::WriteVideo { mid, rtp_time, data } => {
+                let Some(writer) = self.rtc.writer(mid) else { return Ok(()) };
+                let Some(pt) = writer.payload_params().find(|p| p.spec().codec == Codec::Vp8).map(|p| p.pt()) else {
+                    return Ok(()); // not negotiated (yet)
+                };
+                writer.write(pt, Instant::now(), MediaTime::new(rtp_time, str0m::media::Frequency::NINETY_KHZ), data)?;
                 self.drain()?;
             }
             Command::RequestKeyframe { mid } => {

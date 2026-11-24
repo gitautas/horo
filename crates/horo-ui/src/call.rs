@@ -8,7 +8,7 @@
 //! are folded into the view on gpui's executor. Audio only for now: the
 //! engine has no video yet.
 
-use std::{sync::Arc, time::Duration};
+use std::{sync::{Arc, Mutex}, time::Duration};
 
 use gpui::{AppContext as _, Context};
 use horo_rtc::call::{
@@ -36,6 +36,8 @@ pub struct CallView {
     pub room_id: String,
     pub status: CallStatus,
     pub muted: bool,
+    /// Our camera is on.
+    pub camera: bool,
     /// Our identity in the room (`@user:server:DEVICE`), once connected.
     pub identity: Option<String>,
     /// Everyone else.
@@ -63,6 +65,11 @@ pub struct Live {
     refresher: Option<tokio::task::AbortHandle>,
     /// Everyone's camera, newest picture each.
     pub screens: horo_rtc::call::Screens,
+    /// Where our camera's pictures go.
+    feed: Arc<Mutex<horo_rtc::call::CameraFeed>>,
+    /// Our camera, while it's on (and its picture, for our own tile).
+    #[cfg(target_os = "macos")]
+    pub camera: Option<crate::camera::Camera>,
 }
 
 /// The Matrix user in a MatrixRTC identity: `@user:server:DEVICE` minus
@@ -88,6 +95,7 @@ impl Store {
             room_id: room_id.clone(),
             status: CallStatus::Connecting,
             muted: false,
+            camera: false,
             identity: None,
             participants: Vec::new(),
             speaking: Vec::new(),
@@ -119,7 +127,7 @@ impl Store {
                         return Err(format!("couldn't connect to the call: {e}"));
                     }
                 };
-                let Joined { call, microphone, speaker, events, screens } = joined;
+                let Joined { call, microphone, speaker, events, screens, camera } = joined;
                 let audio = match devices::start(microphone, speaker, devices) {
                     Ok(audio) => audio,
                     Err(e) => {
@@ -128,7 +136,7 @@ impl Store {
                         return Err(format!("couldn't start your microphone or speaker: {e}"));
                     }
                 };
-                Ok((call, audio, events, screens))
+                Ok((call, audio, events, screens, camera))
             }
         });
 
@@ -137,7 +145,7 @@ impl Store {
             let Ok(Some(mut events)) = this.update(cx, |store, cx| {
                 let still_wanted = store.call.as_ref().is_some_and(|c| c.room_id == room_id);
                 match outcome {
-                    Ok((call, audio, events, screens)) if still_wanted => {
+                    Ok((call, audio, events, screens, feed)) if still_wanted => {
                         let backend = Backend::global(cx);
                         let refresher = backend.spawn({
                             let (state, room) = (backend.state.clone(), room.clone());
@@ -156,13 +164,34 @@ impl Store {
                         if let Some(view) = &mut store.call {
                             view.identity = Some(call.identity.clone());
                         }
-                        store.call_live = Some(Live { room_id: room, call, audio, refresher: Some(refresher), screens });
+                        store.call_live = Some(Live {
+                            room_id: room,
+                            call,
+                            audio,
+                            refresher: Some(refresher),
+                            screens,
+                            feed: Arc::new(Mutex::new(feed)),
+                            #[cfg(target_os = "macos")]
+                            camera: None,
+                        });
                         cx.notify();
                         Some(events)
                     }
                     // Left (or moved on) while it was connecting.
-                    Ok((call, audio, _, screens)) => {
-                        store.hang_up(Live { room_id: room, call, audio, refresher: None, screens }, cx);
+                    Ok((call, audio, _, screens, feed)) => {
+                        store.hang_up(
+                            Live {
+                                room_id: room,
+                                call,
+                                audio,
+                                refresher: None,
+                                screens,
+                                feed: Arc::new(Mutex::new(feed)),
+                                #[cfg(target_os = "macos")]
+                                camera: None,
+                            },
+                            cx,
+                        );
                         None
                     }
                     Err(error) => {
@@ -258,6 +287,61 @@ impl Store {
         if let Some(view) = &mut self.call {
             view.muted = muted;
         }
+        cx.notify();
+    }
+
+    /// Turn our camera on or off in the call. It opens off the UI thread
+    /// (that takes a moment); each picture goes to the encoder from the
+    /// camera's own queue.
+    #[cfg(target_os = "macos")]
+    pub fn set_call_camera(&mut self, on: bool, cx: &mut Context<Self>) {
+        let Some(live) = &mut self.call_live else { return };
+        if let Some(view) = &mut self.call {
+            view.camera = on;
+        }
+        live.call.set_camera(on);
+        if !on {
+            live.camera = None;
+            cx.notify();
+            return;
+        }
+        let device = self.prefs.video_input.clone();
+        let feed = live.feed.clone();
+        let task = cx.background_spawn(async move {
+            let on_frame: crate::camera::OnFrame = Box::new(move |buffer| {
+                if let Some(frame) = crate::camera::to_i420(buffer)
+                    && let Ok(mut feed) = feed.lock()
+                {
+                    feed.push(&frame);
+                }
+            });
+            crate::camera::Camera::start_with(device.as_deref(), Some(on_frame))
+        });
+        cx.spawn(async move |this, cx| {
+            let opened = task.await;
+            let _ = this.update(cx, |store, cx| {
+                let wanted = store.call.as_ref().is_some_and(|c| c.camera);
+                match opened {
+                    Ok(camera) if wanted => {
+                        if let Some(live) = &mut store.call_live {
+                            live.camera = Some(camera);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        if let Some(live) = &store.call_live {
+                            live.call.set_camera(false);
+                        }
+                        if let Some(view) = &mut store.call {
+                            view.camera = false;
+                        }
+                        store.show_banner(crate::store::Tone::Error, format!("couldn't open the camera: {e}"), cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
         cx.notify();
     }
 
