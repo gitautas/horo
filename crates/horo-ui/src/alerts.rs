@@ -4,7 +4,8 @@
 //! count comes from the homeserver, which has already run your push rules
 //! (muted rooms, keywords, mentions only). [`Watch::inspect`] compares each
 //! room with how it was last time and says which banners to show and which
-//! sound to play. [`show`] puts a banner on screen.
+//! sound to play. [`show`] puts a banner on screen; clicking one opens its
+//! room ([`clicks`] says which).
 
 use std::collections::HashMap;
 
@@ -140,34 +141,46 @@ fn truncate(text: &str) -> String {
     }
 }
 
-/// Which app the banners come from on macOS: this bundle's identifier,
-/// read from its Info.plist, so they carry horo's name and icon. Elsewhere
-/// the system works it out.
+/// Rooms whose banner was clicked, for the window to open.
+static CLICKED: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>> = std::sync::Mutex::new(None);
+
+/// Hear which room's banner gets clicked. One listener: a second call
+/// replaces the first.
+pub fn clicks() -> tokio::sync::mpsc::UnboundedReceiver<String> {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    if let Ok(mut clicked) = CLICKED.lock() {
+        *clicked = Some(tx);
+    }
+    rx
+}
+
+fn clicked(room_id: String) {
+    if let Some(tx) = CLICKED.lock().ok().and_then(|c| c.clone()) {
+        let _ = tx.send(room_id);
+    }
+}
+
+/// Set up banners. On macOS, inside an app bundle, they go through the
+/// User Notifications framework, which says when one is clicked (the first
+/// time, macOS asks whether horo may send them). Outside a bundle (a bare
+/// `cargo run`) that framework won't start, so banners go the old way and
+/// clicking one only brings the app forward.
 pub fn init() {
     #[cfg(target_os = "macos")]
     {
-        let id = std::env::current_exe()
-            .ok()
-            .and_then(|exe| std::fs::read_to_string(exe.parent()?.parent()?.join("Info.plist")).ok())
-            .and_then(|plist| {
-                let after = plist.split("<key>CFBundleIdentifier</key>").nth(1)?;
-                let start = after.find("<string>")? + "<string>".len();
-                let end = after[start..].find("</string>")? + start;
-                Some(after[start..end].trim().to_owned())
-            });
-        match id {
-            Some(id) => {
-                if let Err(e) = notify_rust::set_application(&id) {
-                    tracing::warn!("notifications won't carry horo's name: {e}");
-                }
-            }
-            None => tracing::info!("not running from an app bundle; banners will name another app"),
+        if !mac::start() {
+            tracing::info!("not running from an app bundle; banners won't open their room");
         }
     }
 }
 
-/// Put a banner up, off the UI thread (macOS's call can block).
+/// Put a banner up.
 pub fn show(alert: Alert) {
+    #[cfg(target_os = "macos")]
+    if mac::show(&alert) {
+        return;
+    }
+    // Off the UI thread: the call can block.
     let spawned = std::thread::Builder::new().name("horo-notify".into()).spawn(move || {
         if let Err(e) = notify_rust::Notification::new().summary(&alert.title).body(&alert.body).show() {
             tracing::warn!("couldn't show a notification: {e}");
@@ -175,6 +188,118 @@ pub fn show(alert: Alert) {
     });
     if let Err(e) = spawned {
         tracing::warn!("couldn't show a notification: {e}");
+    }
+}
+
+/// The User Notifications side: a delegate that hears clicks, and banners
+/// whose identifier carries their room.
+#[cfg(target_os = "macos")]
+mod mac {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    };
+
+    use objc2::{AnyThread, define_class, msg_send, rc::Retained, runtime::{NSObject, NSObjectProtocol, ProtocolObject}};
+    use objc2_foundation::{NSBundle, NSError, NSString};
+    use objc2_user_notifications::{
+        UNAuthorizationOptions, UNMutableNotificationContent, UNNotification, UNNotificationPresentationOptions, UNNotificationRequest, UNNotificationResponse,
+        UNUserNotificationCenter, UNUserNotificationCenterDelegate,
+    };
+
+    use super::Alert;
+
+    /// Between the room id and a counter in a banner's identifier (room ids
+    /// don't contain one).
+    const SEPARATOR: char = '|';
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[name = "HoroNotificationDelegate"]
+        #[ivars = ()]
+        struct Delegate;
+
+        unsafe impl NSObjectProtocol for Delegate {}
+
+        unsafe impl UNUserNotificationCenterDelegate for Delegate {
+            /// Clicked: open its room.
+            #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
+            fn did_receive(&self, _center: &UNUserNotificationCenter, response: &UNNotificationResponse, done: &block2::DynBlock<dyn Fn()>) {
+                let id = response.notification().request().identifier().to_string();
+                if let Some((room, _)) = id.rsplit_once(SEPARATOR) {
+                    super::clicked(room.to_owned());
+                }
+                done.call(());
+            }
+
+            /// Shown even while horo is in front: whether to interrupt was
+            /// already decided (not for the room you're reading).
+            #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
+            fn will_present(&self, _center: &UNUserNotificationCenter, _notification: &UNNotification, done: &block2::DynBlock<dyn Fn(UNNotificationPresentationOptions)>) {
+                done.call((UNNotificationPresentationOptions::Banner | UNNotificationPresentationOptions::List,));
+            }
+        }
+    );
+
+    /// The delegate, kept alive (the center holds it weakly).
+    struct Kept(#[allow(dead_code)] Retained<Delegate>);
+    // SAFETY: only stored here so it lives; never touched again.
+    unsafe impl Send for Kept {}
+    static DELEGATE: Mutex<Option<Kept>> = Mutex::new(None);
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    /// Become the notification center's delegate and ask to show banners.
+    /// False outside an app bundle, where the framework can't be used.
+    pub fn start() -> bool {
+        // The framework throws without a bundle identifier.
+        if NSBundle::mainBundle().bundleIdentifier().is_none() {
+            return false;
+        }
+        let center = UNUserNotificationCenter::currentNotificationCenter();
+        let delegate: Retained<Delegate> = {
+            let this = Delegate::alloc().set_ivars(());
+            // SAFETY: NSObject's init, on a freshly allocated object.
+            unsafe { msg_send![super(this), init] }
+        };
+        center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        if let Ok(mut kept) = DELEGATE.lock() {
+            *kept = Some(Kept(delegate));
+        }
+        let answered = block2::RcBlock::new(|granted: objc2::runtime::Bool, error: *mut NSError| {
+            if !granted.as_bool() {
+                // SAFETY: a non-null error the framework handed over.
+                let why = unsafe { error.as_ref() }.map(|e| e.localizedDescription().to_string()).unwrap_or_else(|| "turned off in system settings".into());
+                tracing::info!("banners aren't allowed: {why}");
+            }
+        });
+        // Our own sounds play: the banner only needs to show.
+        center.requestAuthorizationWithOptions_completionHandler(UNAuthorizationOptions::Alert, &answered);
+        STARTED.store(true, Ordering::Relaxed);
+        true
+    }
+
+    /// Post `alert`. False if the framework isn't in use (show it the old
+    /// way).
+    pub fn show(alert: &Alert) -> bool {
+        if !STARTED.load(Ordering::Relaxed) {
+            return false;
+        }
+        let content = UNMutableNotificationContent::new();
+        content.setTitle(&NSString::from_str(&alert.title));
+        content.setBody(&NSString::from_str(&alert.body));
+        // One stack per room in notification centre.
+        content.setThreadIdentifier(&NSString::from_str(&alert.room_id));
+        let id = format!("{}{SEPARATOR}{}", alert.room_id, NEXT.fetch_add(1, Ordering::Relaxed));
+        let request = UNNotificationRequest::requestWithIdentifier_content_trigger(&NSString::from_str(&id), &content, None);
+        let posted = block2::RcBlock::new(|error: *mut NSError| {
+            // SAFETY: a non-null error the framework handed over.
+            if let Some(e) = unsafe { error.as_ref() } {
+                tracing::warn!("couldn't show a notification: {}", e.localizedDescription());
+            }
+        });
+        UNUserNotificationCenter::currentNotificationCenter().addNotificationRequest_withCompletionHandler(&request, Some(&posted));
+        true
     }
 }
 

@@ -26,6 +26,25 @@ impl AppView {
             this.store.update(cx, |s, _| s.set_window_active(active));
         })
         .detach();
+        // A clicked banner opens its room, with the window brought forward.
+        let mut clicks = crate::alerts::clicks();
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(room) = clicks.recv().await {
+                let opened = this.update_in(cx, |this, window, cx| {
+                    cx.activate(true);
+                    window.activate_window();
+                    this.store.update(cx, |s, cx| {
+                        s.settings = None;
+                        s.lightbox = None;
+                        s.open_room(room, cx);
+                    });
+                });
+                if opened.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         AppView { store, login: None, shell: None }
     }
 
