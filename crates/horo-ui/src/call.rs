@@ -380,21 +380,41 @@ impl Store {
         live.call.set_screen(on);
         if !on {
             live.screen = None;
+            crate::screen::done_picking();
             cx.notify();
             return;
         }
         let feed = live.screen_feed.clone();
-        let task = cx.background_spawn(async move {
-            let on_frame: crate::screen::OnFrame = Box::new(move |buffer| {
-                if let Some(frame) = crate::camera::to_i420(buffer)
-                    && let Ok(mut feed) = feed.lock()
-                {
-                    feed.push(&frame);
-                }
-            });
-            crate::screen::ScreenShare::start(on_frame)
-        });
+        // The system's picker first: a window, an app or a display.
+        let picked = crate::screen::pick();
         cx.spawn(async move |this, cx| {
+            let picked = match picked.await {
+                Ok(Ok(Some(picked))) => picked,
+                // Cancelled: nothing's shared.
+                Ok(Ok(None)) | Err(_) => {
+                    crate::screen::done_picking();
+                    let _ = this.update(cx, |store, cx| store.set_call_screen(false, cx));
+                    return;
+                }
+                Ok(Err(e)) => {
+                    crate::screen::done_picking();
+                    let _ = this.update(cx, |store, cx| {
+                        store.set_call_screen(false, cx);
+                        store.show_banner(crate::store::Tone::Error, format!("couldn't share: {e}"), cx);
+                    });
+                    return;
+                }
+            };
+            let task = cx.background_spawn(async move {
+                let on_frame: crate::screen::OnFrame = Box::new(move |buffer| {
+                    if let Some(frame) = crate::camera::to_i420(buffer)
+                        && let Ok(mut feed) = feed.lock()
+                    {
+                        feed.push(&frame);
+                    }
+                });
+                crate::screen::ScreenShare::start(picked, on_frame)
+            });
             let started = task.await;
             let _ = this.update(cx, |store, cx| {
                 let wanted = store.call.as_ref().is_some_and(|c| c.sharing);
