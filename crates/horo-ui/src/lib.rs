@@ -55,7 +55,7 @@ macro_rules! own_icons {
 const OWN_ICONS: &[(&str, &[u8])] = own_icons![
     "phone", "phone-off", "phone-incoming", "phone-call", "mic-off", "headphones", "compass", "shield-check", "bell-off",
     "video", "lock", "funnel", "circle-plus", "smile", "send", "shield-alert", "badge-check", "badge-question-mark", "lock-open",
-    "hand", "cat", "hamburger", "plane", "trophy", "lightbulb", "flag", "search", "orbit", "users", "sticker", "messages-square", "pencil", "trash", "music",
+    "hand", "cat", "hamburger", "plane", "trophy", "lightbulb", "flag", "search", "orbit", "users", "sticker", "messages-square", "pencil", "trash", "music", "video-off", "mail", "sparkles", "ticket",
 ];
 
 /// The horo wordmark, drawn in the rail.
@@ -120,4 +120,42 @@ pub fn open_window(cx: &mut App) -> anyhow::Result<()> {
     })?;
     cx.activate(true);
     Ok(())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use gpui::AssetSource;
+
+    /// Every `icons/….svg` the source names must load: the icon kit
+    /// leaves some of Lucide out, and a missing icon draws as nothing (a
+    /// button you can't see).
+    #[test]
+    fn every_icon_used_is_there() {
+        fn scan(dir: &std::path::Path, found: &mut std::collections::BTreeSet<String>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    scan(&path, found);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let mut rest = text.as_str();
+                    while let Some(at) = rest.find("\"icons/") {
+                        rest = &rest[at + 1..];
+                        if let Some(end) = rest.find('"') {
+                            let name = &rest[..end];
+                            if name.ends_with(".svg") && !name.contains('{') {
+                                found.insert(name.to_owned());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut used = std::collections::BTreeSet::new();
+        scan(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut used);
+        assert!(used.len() > 20, "found only {used:?}");
+        let missing: Vec<&String> = used.iter().filter(|p| super::Assets.load(p).ok().flatten().is_none()).collect();
+        assert!(missing.is_empty(), "icons that won't load: {missing:?}");
+    }
 }
