@@ -61,7 +61,10 @@ fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
     let mut out: Vec<Person> = Vec::new();
     let mut add = |identity: &str, name: &str, muted: bool, me: bool, camera: bool| {
         let user = user_of(identity).to_owned();
-        if out.iter().any(|p| p.user_id == user) {
+        // A person's devices are one tile, except a device showing its
+        // camera: that picture needs a tile of its own (your phone's, say,
+        // beside this computer's).
+        if !camera && out.iter().any(|p| p.user_id == user && !p.camera) {
             return;
         }
         let mut person = person(&user, profiles, call.is_speaking(&user), muted);
@@ -323,7 +326,7 @@ fn camera_picture(_screens: &horo_rtc::call::Screens, _identity: &str) -> Option
 /// A tile with someone's camera in it, their name over the corner.
 fn video_tile(picture: AnyElement, person: &Person, palette: &Palette) -> gpui::Stateful<gpui::Div> {
     div()
-        .id(gpui::SharedString::from(format!("video-{}", person.user_id)))
+        .id(gpui::SharedString::from(format!("video-{}", person.identity.as_deref().unwrap_or(&person.user_id))))
         .relative()
         .w(px(VIDEO_W))
         .h(px(VIDEO_H))
