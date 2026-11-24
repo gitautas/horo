@@ -435,7 +435,8 @@ pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut A
             .when(connecting, |strip| strip.child(div().pb_2().text_sm().text_color(palette.text_tertiary).child("joining the call…")))
             .child(stage(&call, store, palette, false, cx))
             .child(
-                div().absolute().top(zpx(14.)).right(zpx(18.)).child(
+                // Over the big tile's corner: its click is the button's alone.
+                div().absolute().top(zpx(14.)).right(zpx(18.)).occlude().child(
                     Button::new("call-expand")
                         .ghost()
                         .small()
@@ -467,6 +468,8 @@ pub fn fullscreen(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Opt
             .child(
                 h_flex()
                     .gap_2()
+                    // Clear of the window's traffic lights.
+                    .pl(zpx(64.))
                     .child(icon("icons/phone-call.svg").size(zpx(16.)).text_color(palette.online))
                     .child(div().flex_1().truncate().font_family(palette.heading_font.clone()).text_lg().font_weight(FontWeight::SEMIBOLD).child(room_name))
                     .child(
