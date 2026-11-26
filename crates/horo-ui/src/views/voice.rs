@@ -148,7 +148,15 @@ pub fn panel(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<A
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .child(h_flex().gap_2().child(div().flex_none().size(zpx(8.)).rounded_full().bg(colour)).child(div().truncate().text_sm().text_color(colour).child(status)))
+                    .child(
+                    // A failure is read in full (it says what to fix); the
+                    // other states fit on a line.
+                    h_flex()
+                        .gap_2()
+                        .items_start()
+                        .child(div().flex_none().mt(zpx(5.)).size(zpx(8.)).rounded_full().bg(colour))
+                        .child(div().min_w_0().text_sm().text_color(colour).map(|d| if failed { d } else { d.truncate() }).child(status)),
+                )
                     .child(
                         div()
                             .id("call-room")

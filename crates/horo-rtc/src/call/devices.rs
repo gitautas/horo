@@ -44,6 +44,17 @@ pub struct RunningAudio {
     speaker: Arc<Mutex<Speaker>>,
     devices: AudioDevices,
     echo: Option<EchoCanceller>,
+    /// The chosen microphone or speaker wouldn't open (unplugged, say),
+    /// so the system default is in use instead.
+    fallen_back: Vec<FellBack>,
+}
+
+/// A device that wouldn't open at the start, and why.
+#[derive(Debug, Clone)]
+pub struct FellBack {
+    /// "microphone" or "speaker".
+    pub which: &'static str,
+    pub reason: String,
 }
 
 impl RunningAudio {
@@ -55,6 +66,11 @@ impl RunningAudio {
     /// How the echo canceller is doing.
     pub fn echo_stats(&self) -> Option<EchoStats> {
         self.echo.as_ref().map(EchoCanceller::stats)
+    }
+
+    /// Devices that wouldn't open at the start, the default used instead.
+    pub fn fallen_back(&self) -> &[FellBack] {
+        &self.fallen_back
     }
 
     /// Which devices are in use.
@@ -128,7 +144,25 @@ pub fn start(mut microphone: Microphone, mut speaker: Speaker, devices: AudioDev
     microphone.set_echo_canceller(echo.clone());
     speaker.set_echo_canceller(echo.clone());
     let (microphone, speaker) = (Arc::new(Mutex::new(microphone)), Arc::new(Mutex::new(speaker)));
-    let capture = capture(&microphone, devices.input.as_deref())?;
-    let playback = playback(&speaker, devices.output.as_deref())?;
-    Ok(RunningAudio { capture: Some(capture), playback: Some(playback), microphone, speaker, devices, echo })
+    let mut devices = devices;
+    let mut fallen_back = Vec::new();
+    // A chosen device that's gone (headphones off) shouldn't stop the
+    // call: the system default stands in, and the caller is told.
+    let capture = match capture(&microphone, devices.input.as_deref()) {
+        Err(e) if devices.input.is_some() => {
+            fallen_back.push(FellBack { which: "microphone", reason: e.to_string() });
+            devices.input = None;
+            capture(&microphone, None)?
+        }
+        opened => opened?,
+    };
+    let playback = match playback(&speaker, devices.output.as_deref()) {
+        Err(e) if devices.output.is_some() => {
+            fallen_back.push(FellBack { which: "speaker", reason: e.to_string() });
+            devices.output = None;
+            playback(&speaker, None)?
+        }
+        opened => opened?,
+    };
+    Ok(RunningAudio { capture: Some(capture), playback: Some(playback), microphone, speaker, devices, echo, fallen_back })
 }

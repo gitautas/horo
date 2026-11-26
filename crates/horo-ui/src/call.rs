@@ -185,6 +185,14 @@ impl Store {
                         if let Some(view) = &mut store.call {
                             view.identity = Some(call.identity.clone());
                         }
+                        for gone in audio.fallen_back() {
+                            tracing::info!("the chosen {} wouldn't open ({}); using the system default", gone.which, gone.reason);
+                            store.show_banner(
+                                crate::store::Tone::Info,
+                                format!("your chosen {} isn't available, so the call is using the system default.", gone.which),
+                                cx,
+                            );
+                        }
                         store.call_live = Some(Live {
                             room_id: room,
                             call,
@@ -336,17 +344,21 @@ impl Store {
         cx.notify();
     }
 
-    /// Move the call to the microphone and speaker chosen in prefs, if
-    /// they changed. One that won't open leaves the call on the old one,
-    /// and says so.
-    pub(crate) fn follow_audio_devices(&mut self, cx: &mut Context<Self>) {
+    /// Move the call to a microphone or speaker just chosen (`before` is
+    /// what prefs said until now). One that won't open leaves the call on
+    /// the old one, and says so.
+    pub(crate) fn follow_audio_devices(&mut self, before: (Option<String>, Option<String>), cx: &mut Context<Self>) {
         let Some(live) = &mut self.call_live else { return };
         let (input, output) = (self.prefs.audio_input.clone(), self.prefs.audio_output.clone());
         let mut failed = Vec::new();
-        if let Err(e) = live.audio.set_input(input) {
+        if input != before.0
+            && let Err(e) = live.audio.set_input(input)
+        {
             failed.push(format!("couldn't switch microphones: {e}"));
         }
-        if let Err(e) = live.audio.set_output(output) {
+        if output != before.1
+            && let Err(e) = live.audio.set_output(output)
+        {
             failed.push(format!("couldn't switch speakers: {e}"));
         }
         for why in failed {
