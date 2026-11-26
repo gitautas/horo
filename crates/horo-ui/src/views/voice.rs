@@ -27,7 +27,7 @@ use horo_rtc::call::screen_key;
 
 use crate::theme::zpx;
 use crate::{
-    call::{CallStatus, CallView, user_of},
+    call::{CallStatus, CallView, FocusMode, user_of},
     store::{Known, Store},
     theme::Palette,
     views::{avatar::avatar, verification::scrim},
@@ -90,7 +90,7 @@ fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
         add(me, "", call.muted, true, false, false);
     }
     for p in &call.participants {
-        add(&p.identity, &p.name, false, false, p.camera, p.screen);
+        add(&p.identity, &p.name, p.muted, false, p.camera, p.screen);
     }
     out
 }
@@ -327,8 +327,8 @@ fn draw(tile: &Tile, size: Size, focused: bool, store: &Entity<Store>, palette: 
         })
         .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(if focused { "back to everyone" } else { "show bigger" }).build(window, cx))
         .on_click(move |_, _, cx| {
-            let key = (!focused).then(|| key.clone());
-            click.update(cx, |s, cx| s.set_call_focus(key, cx));
+            let next = if focused { FocusMode::Grid } else { FocusMode::Pinned(key.clone()) };
+            click.update(cx, |s, cx| s.set_call_focus(next, cx));
         });
     let small = matches!(size, Size::Fixed(_, h) if h < 120.);
 
@@ -414,8 +414,19 @@ fn draw(tile: &Tile, size: Size, focused: bool, store: &Entity<Store>, palette: 
 /// fills the window: everyone alike then shares it in one grid.
 fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, area: Option<(f32, f32)>, cx: &mut App) -> AnyElement {
     let full = area.is_some();
-    let tiles = tiles(call, store, cx);
-    let focused = call.focus.as_ref().and_then(|key| tiles.iter().position(|t| &t.key == key));
+    let mut tiles = tiles(call, store, cx);
+    // Inline, only video gets a tile, as in Discord: a face in a box says
+    // nothing the sidebar's roster doesn't. Filling the window, everyone
+    // shows, so there's something to look at.
+    if !full {
+        tiles.retain(|t| !matches!(t.shows, Shows::Face));
+    }
+    let first_screen = || tiles.iter().position(|t| matches!(t.shows, Shows::Screen { .. }));
+    let focused = match &call.focus {
+        FocusMode::Auto => first_screen(),
+        FocusMode::Pinned(key) => tiles.iter().position(|t| &t.key == key).or_else(first_screen),
+        FocusMode::Grid => None,
+    };
     let Some(focused) = focused else {
         let fitted = area.map(|(w, h)| fit(tiles.len(), w, h));
         let drawn: Vec<AnyElement> = tiles
@@ -451,6 +462,12 @@ fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, area: Option
 /// call fills the window).
 pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<AnyElement> {
     let call = store.read(cx).call.clone().filter(|c| c.room_id == room_id && c.is_live() && !c.fullscreen)?;
+    // A voice call with nobody on camera or sharing has no stage at all:
+    // who's in it is listed under the room, and the controls live in the
+    // voice panel at the foot of the room list.
+    if !has_video(&call) {
+        return None;
+    }
     let connecting = call.status == CallStatus::Connecting;
     let expand = store.clone();
     Some(
@@ -610,10 +627,16 @@ fn camera_picture(_screens: &horo_rtc::call::Screens, _identity: &str, _fit: gpu
     None
 }
 
+/// Whether the call has anything to look at: a camera or a shared screen,
+/// ours or anyone's.
+fn has_video(call: &CallView) -> bool {
+    call.camera || call.sharing || call.participants.iter().any(|p| p.camera || p.screen)
+}
+
 /// Whether anyone in our call has a camera on (the window then redraws
 /// every frame for them).
 pub fn any_camera(store: &Entity<Store>, cx: &App) -> bool {
-    store.read(cx).call.as_ref().is_some_and(|c| c.camera || c.participants.iter().any(|p| p.camera || p.screen))
+    store.read(cx).call.as_ref().is_some_and(has_video)
 }
 
 /// Someone calling you: answer or decline, over everything.

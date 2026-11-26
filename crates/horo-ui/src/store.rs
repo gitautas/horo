@@ -189,7 +189,14 @@ pub enum Tone {
 pub struct Banner {
     pub tone: Tone,
     pub message: SharedString,
+    /// Which banner this is, so a timer only dismisses the one it was set for.
+    id: u64,
 }
+
+/// How long a banner stays up before it goes by itself: long enough to read,
+/// an error a little longer.
+const BANNER_INFO_FOR: Duration = Duration::from_secs(6);
+const BANNER_ERROR_FOR: Duration = Duration::from_secs(10);
 
 /// A picture to show full-size.
 #[derive(Debug, Clone)]
@@ -981,8 +988,22 @@ impl Store {
     }
 
     pub fn show_banner(&mut self, tone: Tone, message: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.banner = Some(Banner { tone, message: message.into() });
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.banner = Some(Banner { tone, message: message.into(), id });
         cx.notify();
+        let wait = if tone == Tone::Error { BANNER_ERROR_FOR } else { BANNER_INFO_FOR };
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            let _ = this.update(cx, |store, cx| {
+                // Only this banner: a newer one gets its own full time.
+                if store.banner.as_ref().is_some_and(|b| b.id == id) {
+                    store.banner = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub fn dismiss_banner(&mut self, cx: &mut Context<Self>) {

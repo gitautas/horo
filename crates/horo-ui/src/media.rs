@@ -30,9 +30,15 @@ struct Key {
     size: Option<(u32, u32)>,
 }
 
+/// The share of see-through pixels that makes an image a cut-out (sticker-like
+/// transparent PNG/WebP/GIF drawn frameless, matching `src/lib/cutout.ts`).
+const CUTOUT_SHARE: f32 = 0.04;
+/// Below this alpha a pixel counts as see-through.
+const SEE_THROUGH: u8 = 128;
+
 enum Entry {
     Loading,
-    Ready(Arc<Image>),
+    Ready { image: Arc<Image>, cutout: bool },
     Failed(Instant),
 }
 
@@ -49,6 +55,12 @@ impl Media {
     /// The picture at `mxc` (a server thumbnail at `size`, when given), if
     /// it's here yet. Starts fetching it otherwise.
     pub fn image(mxc: &str, size: Option<(u32, u32)>, cx: &mut App) -> Option<Arc<Image>> {
+        Self::image_with_cutout(mxc, size, cx).map(|(image, _)| image)
+    }
+
+    /// As [`Media::image`], and whether the picture is a transparent cut-out
+    /// (drawn frameless, like a sticker).
+    pub fn image_with_cutout(mxc: &str, size: Option<(u32, u32)>, cx: &mut App) -> Option<(Arc<Image>, bool)> {
         if !mxc.starts_with("mxc://") {
             return None;
         }
@@ -59,7 +71,7 @@ impl Media {
         if let Some((entry, used)) = media.entries.get_mut(&key) {
             *used = now;
             match entry {
-                Entry::Ready(image) => return Some(image.clone()),
+                Entry::Ready { image, cutout } => return Some((image.clone(), *cutout)),
                 Entry::Loading => return None,
                 Entry::Failed(at) if at.elapsed() < RETRY_AFTER => return None,
                 Entry::Failed(_) => {}
@@ -72,13 +84,17 @@ impl Media {
             let (state, mxc) = (backend.state.clone(), key.mxc.clone());
             async move {
                 let core = state.core().await?;
-                media::fetch(&core.client, &mxc, size, None).await
+                let fetched = media::fetch(&core.client, &mxc, size, None).await?;
+                // Check alpha off the UI thread so transparent cut-outs render
+                // frameless without stalling painting.
+                let cutout = is_cutout_bytes(&fetched.mime, &fetched.bytes);
+                Ok::<_, horo_core::Error>((fetched, cutout))
             }
         });
         cx.spawn(async move |cx| {
             let entry = match task.await {
-                Ok(Ok(fetched)) => match format(&fetched.mime) {
-                    Some(format) => Entry::Ready(Arc::new(Image::from_bytes(format, fetched.bytes))),
+                Ok(Ok((fetched, cutout))) => match format(&fetched.mime) {
+                    Some(format) => Entry::Ready { image: Arc::new(Image::from_bytes(format, fetched.bytes)), cutout },
                     None => {
                         tracing::debug!("{} is {}, not a picture", key.mxc, fetched.mime);
                         Entry::Failed(Instant::now())
@@ -121,6 +137,53 @@ impl Media {
             self.entries.remove(&key);
         }
     }
+}
+
+/// Whether encoded image bytes are a transparent cut-out (at least
+/// [`CUTOUT_SHARE`] of pixels see-through). Only alpha-capable formats are
+/// decoded; failures return `false` so photos keep their frame.
+pub fn is_cutout_bytes(mime: &str, bytes: &[u8]) -> bool {
+    let fmt = match mime {
+        "image/png" | "image/apng" => image::ImageFormat::Png,
+        "image/webp" => image::ImageFormat::WebP,
+        "image/gif" => image::ImageFormat::Gif,
+        _ => return false,
+    };
+    let Ok(decoded) = image::load_from_memory_with_format(bytes, fmt) else {
+        return false;
+    };
+    if !decoded.color().has_alpha() {
+        return false;
+    }
+    let rgba = decoded.into_rgba8();
+    is_cutout_rgba(rgba.as_raw(), rgba.width(), rgba.height())
+}
+
+/// Whether RGBA pixels (`w`×`h`) have enough see-through pixels to count as a
+/// cut-out. Samples a grid of up to 48×48 points so large images stay fast.
+pub fn is_cutout_rgba(rgba: &[u8], width: u32, height: u32) -> bool {
+    let (w, h) = (width as usize, height as usize);
+    if w == 0 || h == 0 || rgba.len() < w * h * 4 {
+        return false;
+    }
+    let step_x = (w / 48).max(1);
+    let step_y = (h / 48).max(1);
+    let mut total = 0usize;
+    let mut clear = 0usize;
+    let mut y = 0;
+    while y < h {
+        let row = y * w * 4;
+        let mut x = 0;
+        while x < w {
+            if rgba[row + x * 4 + 3] < SEE_THROUGH {
+                clear += 1;
+            }
+            total += 1;
+            x += step_x;
+        }
+        y += step_y;
+    }
+    total > 0 && (clear as f32 / total as f32) >= CUTOUT_SHARE
 }
 
 /// The formats gpui draws, by the type horo-core sniffed.
@@ -173,5 +236,30 @@ mod tests {
         assert_eq!(fit(Some(100), Some(50), (400., 300.), 48.), (100., 50.));
         assert_eq!(fit(Some(20), Some(10), (400., 300.), 48.), (96., 48.));
         assert_eq!(fit(None, Some(10), (400., 300.), 48.), (320., 240.));
+    }
+
+    #[test]
+    fn transparent_images_are_detected_as_cutouts() {
+        // Opaque 10x10 image: not a cut-out.
+        let opaque = vec![255u8; 10 * 10 * 4];
+        assert!(!is_cutout_rgba(&opaque, 10, 10));
+
+        // 3% see-through (3 of 100 pixels): still a photo (e.g. rounded screenshot).
+        let mut slight = opaque.clone();
+        for p in 0..3 {
+            slight[p * 4 + 3] = 0;
+        }
+        assert!(!is_cutout_rgba(&slight, 10, 10));
+
+        // 4% see-through (4 of 100 pixels): cut-out.
+        slight[3 * 4 + 3] = 0;
+        assert!(is_cutout_rgba(&slight, 10, 10));
+
+        // Real encoded PNG with transparency vs JPEG (never decoded).
+        let mut buf = Vec::new();
+        let img = image::RgbaImage::from_fn(8, 8, |x, _| if x == 0 { image::Rgba([0, 0, 0, 0]) } else { image::Rgba([255, 0, 0, 255]) });
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
+        assert!(is_cutout_bytes("image/png", &buf));
+        assert!(!is_cutout_bytes("image/jpeg", &buf));
     }
 }

@@ -116,6 +116,8 @@ pub struct Participant {
     /// Who they are: in a MatrixRTC call, `@user:server:DEVICE`.
     pub identity: String,
     pub name: String,
+    /// They have no live microphone track (muted, or listen-only).
+    pub muted: bool,
     /// Their camera is on.
     pub camera: bool,
     /// The server's id for their camera track, if they publish one.
@@ -389,10 +391,12 @@ fn participant(p: &proto::ParticipantInfo) -> Participant {
         of().find(|t| !t.muted).or_else(|| of().next())
     };
     let (camera, screen) = (find(proto::TrackSource::Camera), find(proto::TrackSource::ScreenShare));
+    let muted = !p.tracks.iter().any(|t| t.r#type == proto::TrackType::Audio as i32 && !t.muted);
     Participant {
         sid: p.sid.clone(),
         identity: p.identity.clone(),
         name: p.name.clone(),
+        muted,
         camera: camera.is_some_and(|t| !t.muted),
         camera_sid: camera.map(|t| t.sid.clone()),
         screen: screen.is_some_and(|t| !t.muted),

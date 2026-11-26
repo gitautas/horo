@@ -4515,6 +4515,7 @@ dependencies = [
  "gpui-pre",
  "horo-core",
  "horo-rtc",
+ "image",
  "imagesize 0.14.0",
  "matrix-sdk",
  "notify-rust",
@@ -4530,6 +4531,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]

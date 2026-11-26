@@ -6,7 +6,7 @@
 //! renders only what's on screen and follows the same diffs as splices, so
 //! a new message doesn't re-lay-out the whole history.
 
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::{HashMap, HashSet}, rc::Rc};
 
 use chrono::{DateTime, Local, TimeZone};
 use gpui::{
@@ -41,6 +41,10 @@ use crate::{
 const GROUP_WINDOW_MS: u64 = 5 * 60 * 1000;
 /// Fetch older history when this close to the top.
 const PAGINATE_WITHIN: usize = 8;
+/// Fill pages fetched on open until this many messages show…
+const FILL_UNTIL: usize = 30;
+/// …but no more than this many, so a room of hidden events can't spin.
+const MAX_FILL_PAGES: u32 = 8;
 
 pub struct Timeline {
     room_id: OwnedRoomId,
@@ -60,6 +64,8 @@ pub struct Timeline {
     early: Vec<Vec<Diff<TimelineItemDto>>>,
     paginating: bool,
     at_start: bool,
+    /// Pages fetched to fill the screen since the room opened.
+    fill_pages: u32,
     error: Option<SharedString>,
     /// A read marker is due to go out shortly.
     marking_read: bool,
@@ -73,6 +79,8 @@ pub struct Timeline {
     playing: Option<InlineMedia>,
     /// A message's right-click menu: which, and where.
     menu: Option<(String, gpui::Point<gpui::Pixels>)>,
+    /// Messages whose spoilers the reader has clicked to reveal.
+    revealed_spoilers: HashSet<String>,
 }
 
 /// A video or a sound played inside its message: fetched to a file, then
@@ -175,10 +183,11 @@ impl Timeline {
             early: Vec::new(),
             paginating: false,
             at_start: false,
+            fill_pages: 0,
             error: None,
             marking_read: false,
             confirm_delete: None,
-            notice: None, picker: None, playing: None, menu: None, zoom_epoch: 0 };
+            notice: None, picker: None, playing: None, menu: None, revealed_spoilers: HashSet::new(), zoom_epoch: 0 };
 
         let backend = Backend::global(cx);
         let task = backend.run({
@@ -205,12 +214,18 @@ impl Timeline {
             self.on_update(diffs, cx);
         }
         // A fresh room often opens with a handful of events: fill the screen.
-        if self.items.len() < 30 {
+        if self.shown_messages() < FILL_UNTIL {
+            self.fill_pages = 1;
             self.paginate(cx);
         }
         self.mark_read(cx);
         self.report_people(cx);
         cx.notify();
+    }
+
+    /// Messages actually drawn: not call bookkeeping, dividers or markers.
+    fn shown_messages(&self) -> usize {
+        self.items.iter().filter_map(|i| i.event.as_deref()).filter(|e| worth_showing(&e.content)).count()
     }
 
     /// The room is on screen, so what's in it has been seen: move the read
@@ -279,7 +294,17 @@ impl Timeline {
             let _ = this.update(cx, |timeline, cx| {
                 timeline.paginating = false;
                 match outcome {
-                    Ok(Ok(at_start)) => timeline.at_start = at_start,
+                    Ok(Ok(at_start)) => {
+                        timeline.at_start = at_start;
+                        // Keep filling while what's shown can't scroll (a room
+                        // of call bookkeeping and joins shows almost nothing),
+                        // so the reader never needs to scroll an unscrollable
+                        // list to ask for more. Capped, as the WebView build's.
+                        if !at_start && timeline.fill_pages < MAX_FILL_PAGES && timeline.shown_messages() < FILL_UNTIL {
+                            timeline.fill_pages += 1;
+                            timeline.paginate(cx);
+                        }
+                    }
                     Ok(Err(e)) => tracing::warn!("paginating {}: {e}", timeline.room_id),
                     Err(e) => tracing::warn!("paginating {}: {e}", timeline.room_id),
                 }
@@ -358,11 +383,14 @@ fn range_after(end: usize, len: usize) -> bool {
 }
 
 impl Timeline {
-    /// The bar that shows over a message on hover: reply, edit, delete.
+    /// The bar that shows over a message on hover: quick reactions, then
+    /// icon buttons for react, reply, thread, edit, and delete (matching
+    /// MessageRow.tsx).
     fn actions(&self, event: &EventItemDto, name: &str, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
         let id = event.event_id.clone()?;
         let confirming = self.confirm_delete.as_deref() == Some(id.as_str());
-        let button = |key: &str, label: &str, colour| {
+        let picking = self.picker.as_ref().is_some_and(|(eid, ..)| eid == &id);
+        let text_button = |key: &str, label: &str, colour| {
             div()
                 .id(SharedString::from(format!("{key}/{id}")))
                 .px_2()
@@ -374,29 +402,43 @@ impl Timeline {
                 .hover(|b| b.bg(palette.inset))
                 .child(label.to_owned())
         };
+        let icon_button = |key: &str, icon_path: &'static str, tip: &'static str, colour: Hsla| {
+            div()
+                .id(SharedString::from(format!("{key}/{id}")))
+                .size(zpx(26.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(corner(9.))
+                .cursor_pointer()
+                .hover(|b| b.bg(Hsla { a: 0.08, ..gpui::white() }))
+                .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip).build(window, cx))
+                .child(icon(icon_path).size(zpx(15.)).text_color(colour))
+        };
         let mut bar = h_flex()
             .absolute()
-            .top(zpx(-8.))
+            .top(zpx(-10.))
             .right_4()
-            .p(zpx(2.))
+            .p(zpx(3.))
             .gap(zpx(2.))
-            .rounded(palette.radius_md)
+            .rounded(corner(12.))
             .bg(palette.raised)
             .border_1()
             .border_color(palette.border)
             .shadow_sm();
-        bar = if confirming { bar.visible() } else { bar.invisible().group_hover("message", |s| s.visible()) };
+        bar = if confirming || picking { bar.visible() } else { bar.invisible().group_hover("message", |s| s.visible()) };
         let reactable = !matches!(event.content, ContentDto::Redacted);
         let any = reactable || event.can_reply || (event.is_editable && editable_body(&event.content).is_some()) || event.is_own;
         if !any {
             return None;
         }
-        // Your recent reactions, one click each, then the picker for more.
+        // Your recent reactions, one click each, then a divider and the action icons.
         if reactable && !confirming {
             let (recent, known) = {
                 let store = self.store.read(cx);
                 (store.prefs.recent_reactions.clone(), packs::image_lookup(&store.packs))
             };
+            let has_recent = !recent.is_empty();
             for (i, key) in recent.into_iter().enumerate() {
                 // A custom emote is remembered by its address (or a
                 // shortcode another client used): drawn as its picture.
@@ -423,19 +465,12 @@ impl Timeline {
                         .on_click(cx.listener(move |this, _, _, cx| this.toggle_reaction(event_id.clone(), key.clone(), cx))),
                 );
             }
+            if has_recent {
+                bar = bar.child(div().w(zpx(1.)).h(zpx(16.)).mx(zpx(2.)).bg(palette.border_subtle));
+            }
             let event_id = id.clone();
             bar = bar.child(
-                div()
-                    .id(SharedString::from(format!("more-reactions/{id}")))
-                    .size(zpx(26.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(corner(9.))
-                    .cursor_pointer()
-                    .hover(|b| b.bg(Hsla { a: 0.08, ..gpui::white() }))
-                    .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("more reactions").build(window, cx))
-                    .child(icon("icons/smile.svg").size(zpx(15.)).text_color(palette.text_secondary))
+                icon_button("more-reactions", "icons/smile.svg", "more reactions", palette.text_secondary)
                     .on_click(cx.listener(move |this, click: &gpui::ClickEvent, window, cx| this.open_picker(event_id.clone(), click.position(), window, cx))),
             );
         }
@@ -443,14 +478,14 @@ impl Timeline {
         if event.can_reply && !confirming {
             let (event_id, who) = (id.clone(), name.to_owned());
             let preview = reply_preview(&event.content);
-            bar = bar.child(button("reply", "reply", palette.text_secondary).on_click(cx.listener(move |_, _, _, cx| {
+            bar = bar.child(icon_button("reply", "icons/reply.svg", "reply", palette.text_secondary).on_click(cx.listener(move |_, _, _, cx| {
                 cx.emit(TimelineAction::Reply { event_id: event_id.clone(), who: who.clone(), preview: preview.clone() })
             })));
         }
         // Inside a thread every reply is already in it.
         if self.thread_root.is_none() && reactable && !confirming {
             let root = event.thread_root.clone().unwrap_or_else(|| id.clone());
-            bar = bar.child(button("thread", "thread", palette.text_secondary).on_click(cx.listener(move |this, _, _, cx| {
+            bar = bar.child(icon_button("thread", "icons/messages-square.svg", "reply in thread", palette.text_secondary).on_click(cx.listener(move |this, _, _, cx| {
                 this.store.update(cx, |s, cx| s.open_thread(Some(root.clone()), cx))
             })));
         }
@@ -458,7 +493,7 @@ impl Timeline {
             && let Some(body) = editable_body(&event.content)
         {
             let event_id = id.clone();
-            bar = bar.child(button("edit", "edit", palette.text_secondary).on_click(cx.listener(move |_, _, _, cx| {
+            bar = bar.child(icon_button("edit", "icons/pencil.svg", "edit", palette.text_secondary).on_click(cx.listener(move |_, _, _, cx| {
                 cx.emit(TimelineAction::Edit { event_id: event_id.clone(), body: body.clone() })
             })));
         }
@@ -467,14 +502,14 @@ impl Timeline {
                 let event_id = id.clone();
                 bar = bar
                     .child(div().px_2().text_xs().text_color(palette.text_secondary).child("delete it?"))
-                    .child(button("delete-yes", "delete", palette.danger).on_click(cx.listener(move |this, _, _, cx| this.redact(event_id.clone(), cx))))
-                    .child(button("delete-no", "keep", palette.text_secondary).on_click(cx.listener(|this, _, _, cx| {
+                    .child(text_button("delete-yes", "delete", palette.danger).on_click(cx.listener(move |this, _, _, cx| this.redact(event_id.clone(), cx))))
+                    .child(text_button("delete-no", "keep", palette.text_secondary).on_click(cx.listener(|this, _, _, cx| {
                         this.confirm_delete = None;
                         cx.notify();
                     })));
             } else {
                 let event_id = id.clone();
-                bar = bar.child(button("delete", "delete", palette.danger).on_click(cx.listener(move |this, _, _, cx| {
+                bar = bar.child(icon_button("delete", "icons/trash.svg", "delete", palette.danger).on_click(cx.listener(move |this, _, _, cx| {
                     this.confirm_delete = Some(event_id.clone());
                     cx.notify();
                 })));
@@ -854,12 +889,14 @@ impl Timeline {
             TimelineRowKind::DateDivider => divider(item.timestamp.map(day_label).unwrap_or_default(), palette.text_tertiary, palette.border_subtle),
             TimelineRowKind::ReadMarker => divider("new".into(), palette.accent_secondary, palette.accent_secondary),
             TimelineRowKind::TimelineStart => div()
-                .py_6()
+                .w_full()
+                .pt(space(14.))
+                .pb(space(18.))
                 .flex()
                 .justify_center()
-                .text_sm()
+                .text_size(text(12.5))
                 .text_color(palette.text_tertiary)
-                .child("the start of the room")
+                .child("this is the very beginning~")
                 .into_any_element(),
             TimelineRowKind::Event => match &item.event {
                 // Call bookkeeping: the call UI already says who's in it.
@@ -876,14 +913,12 @@ impl Timeline {
                 None => div().into_any_element(),
             },
         };
-        // The top row says what's going on above it.
-        if ix == 0 && !self.at_start {
+        // While older history loads, say so above the top row (as the
+        // WebView build's spinner does); otherwise nothing.
+        if ix == 0 && self.paginating && !self.at_start {
             return v_flex()
-                .child(div().py_2().flex().justify_center().text_xs().text_color(palette.text_tertiary).child(if self.paginating {
-                    "loading earlier messages…"
-                } else {
-                    "scroll for earlier messages"
-                }))
+                .w_full()
+                .child(div().w_full().py_2().flex().justify_center().text_xs().text_color(palette.text_tertiary).child("loading earlier messages…"))
                 .child(row)
                 .into_any_element();
         }
@@ -1148,7 +1183,21 @@ impl Timeline {
     /// plays at, with its poster (when it has one), a play button and its
     /// length; once playing, its frames and the controls under them.
     fn video(&mut self, event: &EventItemDto, body: &str, media: &MediaInfoDto, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        let (w, h) = crate::media::fit(media.width, media.height, (400., 320.), 120.);
+        const MAX: (f32, f32) = (400., 320.);
+        // Without a size in the event, a 16:9 frame (what most clips are)
+        // rather than a tall 4:3 box, then the poster's own shape once in.
+        let (w, h) = match media.width.zip(media.height) {
+            Some(_) => crate::media::fit(media.width, media.height, MAX, 120.),
+            None => (MAX.0, (MAX.0 * 9. / 16.).round()),
+        };
+        let poster = media.thumbnail_mxc.as_deref().and_then(|mxc| Media::image(mxc, Some(((w * 2.) as u32, (h * 2.) as u32)), cx));
+        let (w, h) = match (&poster, media.width.zip(media.height)) {
+            (Some(poster), None) => imagesize::blob_size(poster.bytes())
+                .ok()
+                .map(|s| crate::media::fit(Some(s.width as u64), Some(s.height as u64), MAX, 120.))
+                .unwrap_or((w, h)),
+            _ => (w, h),
+        };
         let frame = div().relative().w(zpx(w)).h(zpx(h)).bg(gpui::black()).flex().items_center().justify_center().overflow_hidden();
         if self.is_playing(event) {
             #[cfg(target_os = "macos")]
@@ -1163,51 +1212,64 @@ impl Timeline {
             let wide = w.max(300.);
             return v_flex()
                 .w(zpx(wide))
-                .rounded(corner(16.))
+                .rounded(corner(10.))
                 .overflow_hidden()
-                .border_1()
-                .border_color(palette.border_subtle)
                 .bg(palette.card)
                 .child(frame.w(zpx(wide)).children(picture))
                 .child(div().px(space(8.)).py(space(5.)).child(controls))
                 .into_any_element();
         }
-        let poster = media.thumbnail_mxc.as_deref().and_then(|mxc| Media::image(mxc, Some(((w * 2.) as u32, (h * 2.) as u32)), cx));
         let length = media.duration_ms.map(crate::views::content::duration);
+        let size = media.size.map(|n| match n {
+            n if n >= 1 << 20 => format!("{:.1} MB", n as f64 / (1u64 << 20) as f64),
+            n => format!("{} KB", (n >> 10).max(1)),
+        });
+        let has_poster = poster.is_some();
         let (event, body, media) = (event.clone(), body.to_owned(), media.clone());
         frame
             .id(SharedString::from(format!("video/{}", event_key(&event))))
-            .rounded(corner(16.))
-            .border_1()
-            .border_color(palette.border_subtle)
+            .rounded(corner(10.))
+            .when(!has_poster, |d| d.bg(palette.card).border_1().border_color(palette.border_subtle))
             .cursor_pointer()
-            .map(|d| match poster {
-                Some(poster) => d.child(img(poster).absolute().inset_0().size_full().object_fit(gpui::ObjectFit::Cover)),
-                // No poster: what it's called, where the picture would be.
-                None => d.child(div().absolute().top(zpx(10.)).left(zpx(12.)).right(zpx(12.)).truncate().text_size(text(12.)).text_color(palette.text_tertiary).child(body.clone())),
-            })
+            .children(poster.map(|poster| img(poster).absolute().inset_0().size_full().object_fit(gpui::ObjectFit::Cover)))
             .child(
                 div()
-                    .size(zpx(52.))
+                    .size(zpx(48.))
                     .rounded_full()
-                    .bg(Hsla { a: 0.72, ..palette.app })
+                    .bg(Hsla { a: 0.72, ..gpui::black() })
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(icon("icons/play.svg").size(zpx(22.)).text_color(palette.text)),
+                    .hover(|d| d.bg(Hsla { a: 0.85, ..gpui::black() }))
+                    .child(icon("icons/play.svg").size(zpx(20.)).text_color(gpui::white())),
             )
+            // No poster: what it is and how big, along the foot, as a file
+            // would say it, instead of a name floating in a black box.
+            .when(!has_poster, |d| {
+                d.child(
+                    h_flex()
+                        .absolute()
+                        .left(zpx(12.))
+                        .right(zpx(12.))
+                        .bottom(zpx(10.))
+                        .gap(space(8.))
+                        .child(icon("icons/video.svg").flex_none().size(zpx(14.)).text_color(palette.text_tertiary))
+                        .child(div().flex_1().min_w_0().truncate().text_size(text(12.)).text_color(palette.text_secondary).child(body.clone()))
+                        .children(size.map(|s| div().flex_none().font_family(palette.mono_font.clone()).text_size(text(10.5)).text_color(palette.text_tertiary).child(s))),
+                )
+            })
             .children(length.map(|length| {
                 div()
                     .absolute()
+                    .top(zpx(8.))
                     .right(zpx(8.))
-                    .bottom(zpx(8.))
                     .px(space(6.))
                     .py(zpx(1.))
                     .rounded(corner(6.))
-                    .bg(Hsla { a: 0.72, ..palette.app })
+                    .bg(Hsla { a: 0.72, ..gpui::black() })
                     .font_family(palette.mono_font.clone())
                     .text_size(text(10.5))
-                    .text_color(palette.text)
+                    .text_color(gpui::white())
                     .child(length)
             }))
             .on_click(cx.listener(move |this, _, _, cx| this.start_media(&event, &body, &media, true, cx)))
@@ -1270,15 +1332,35 @@ impl Timeline {
     fn body(&mut self, event: &EventItemDto, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let id = event_key(event);
         let store = self.store.clone();
+        let this = cx.weak_entity();
+        let reveal_key = id.clone();
+        let rich_ctx = content::RichContext {
+            store: store.clone(),
+            spoilers_revealed: self.revealed_spoilers.contains(&id),
+            on_reveal_spoiler: Rc::new(move |cx: &mut App| {
+                let key = reveal_key.clone();
+                let _ = this.update(cx, |t, cx| {
+                    t.revealed_spoilers.insert(key);
+                    cx.notify();
+                });
+            }),
+        };
         match &event.content {
             ContentDto::Text { formatted: Some(html), .. } | ContentDto::Notice { formatted: Some(html), .. } if !event.is_emoji_only => {
                 let colour = if matches!(event.content, ContentDto::Notice { .. }) { palette.text_secondary } else { palette.text };
                 let blocks = self.blocks(html);
-                content::rich(&id, &blocks, colour, palette, cx)
+                content::rich(&id, &blocks, colour, &rich_ctx, palette, cx)
             }
             ContentDto::Emote { formatted: Some(html), .. } => {
                 let blocks = self.blocks(&format!("* {html}"));
-                div().italic().child(content::rich(&id, &blocks, palette.text, palette, cx)).into_any_element()
+                div().italic().child(content::rich(&id, &blocks, palette.text, &rich_ctx, palette, cx)).into_any_element()
+            }
+            ContentDto::Text { body, .. } | ContentDto::Notice { body, .. } if !event.is_emoji_only => {
+                let colour = if matches!(event.content, ContentDto::Notice { .. }) { palette.text_secondary } else { palette.text };
+                div().w_full().text_color(colour).child(content::linked_plain(&id, body, colour, &rich_ctx, palette)).into_any_element()
+            }
+            ContentDto::Emote { body, .. } => {
+                div().w_full().italic().text_color(palette.text).child(content::linked_plain(&id, &format!("* {body}"), palette.text, &rich_ctx, palette)).into_any_element()
             }
             ContentDto::Image { body, media } => content::picture(&id, body, media, false, &store, palette, cx),
             ContentDto::Sticker { body, media } => content::picture(&id, body, media, true, &store, palette, cx),
@@ -1353,17 +1435,20 @@ impl Timeline {
         });
 
         let reactions = (!event.reactions.is_empty()).then(|| {
+            let known = packs::image_lookup(&self.store.read(cx).packs);
             let chips: Vec<AnyElement> = event
                 .reactions
                 .iter()
                 .map(|r| {
-                    let chip = reaction(r, palette, cx);
+                    let chip = reaction(r, &known, palette, cx);
+                    let tip: SharedString = r.senders.iter().map(|u| localpart(u)).collect::<Vec<_>>().join(", ").into();
                     match &event.event_id {
                         Some(id) => {
                             let (id, key) = (id.clone(), r.key.clone());
                             div()
                                 .id(SharedString::from(format!("react/{id}/{key}")))
                                 .cursor_pointer()
+                                .when(!tip.is_empty(), |d| d.tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx)))
                                 .child(chip)
                                 .on_click(cx.listener(move |this, _, _, cx| this.toggle_reaction(id.clone(), key.clone(), cx)))
                                 .into_any_element()
@@ -1520,15 +1605,14 @@ impl Timeline {
     }
 }
 
-fn reaction(r: &ReactionDto, palette: &Palette, cx: &mut App) -> AnyElement {
-    // A custom emoji reacts with its picture's mxc URI as the key.
-    let key: AnyElement = if r.key.starts_with("mxc://") {
-        match Media::image(&r.key, Some((40, 40)), cx) {
+fn reaction(r: &ReactionDto, known: &HashMap<String, horo_core::matrix::packs::PackImageDto>, palette: &Palette, cx: &mut App) -> AnyElement {
+    // A custom emoji reacts with its mxc URI or a shortcode known from a pack.
+    let key: AnyElement = match packs::reaction_image(&r.key, known) {
+        Some((url, _)) => match Media::image(&url, Some((40, 40)), cx) {
             Some(image) => img(image).size(zpx(16.)).object_fit(gpui::ObjectFit::Contain).into_any_element(),
             None => div().size(zpx(16.)).into_any_element(),
-        }
-    } else {
-        div().text_size(zpx(13.)).child(r.key.clone()).into_any_element()
+        },
+        None => div().text_size(zpx(13.)).child(r.key.clone()).into_any_element(),
     };
     h_flex()
         .gap(space(6.))

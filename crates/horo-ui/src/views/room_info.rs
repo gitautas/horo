@@ -138,8 +138,15 @@ impl RoomInfo {
         let Ok(room) = OwnedRoomId::try_from(self.room_id.as_str()) else { return };
         let backend = Backend::global(cx);
         let task = backend.run({
-            let state = backend.state.clone();
-            async move { rooms::set_muted(&*state.core().await?, &room, muted).await }
+            let (host, state) = (backend.host.clone(), backend.state.clone());
+            async move {
+                let core = state.core().await?;
+                rooms::set_muted(&core, &room, muted).await?;
+                // Muting writes push rules, which the room-list stream doesn't
+                // report on its own.
+                rooms::emit_room_refresh(&host, &core, &room).await;
+                Ok::<_, horo_core::Error>(())
+            }
         });
         cx.spawn(async move |this, cx| {
             let error = match task.await {

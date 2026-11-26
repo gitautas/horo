@@ -10,8 +10,11 @@
 
 use std::{
     f32::consts::{PI, TAU},
-    sync::Arc,
-    time::Duration,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use horo_rtc::devices::{FRAME, Playback, SAMPLE_RATE};
@@ -175,6 +178,80 @@ pub enum Kind {
     Call,
 }
 
+/// What a caller hears while the other end rings: 440 and 480 Hz held steady
+/// for two seconds, then four of silence, matching `RINGBACK` in
+/// `src/lib/sounds.ts`.
+fn ringback_notes() -> Vec<Note> {
+    [440.0, 480.0]
+        .into_iter()
+        .map(|freq| Note { at: 0.0, freq, dur: 2.0, to: None, wave: Sine, level: 0.35, sustain: true })
+        .collect()
+}
+
+/// Silence between ringback bursts, in seconds.
+const RINGBACK_GAP_SECS: f32 = 4.0;
+/// Stop ringback after this long even if nobody answers (`RING_TIMEOUT_MS`).
+const RINGBACK_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// A ringback tone playing while waiting for someone to pick up. Dropping it
+/// silences the tone immediately.
+pub struct Ringback {
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for Ringback {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Play ringback on `output` (or the default speaker) until the handle is
+/// dropped or [`RINGBACK_TIMEOUT`] passes. Played even when call notification
+/// sounds are set to `"none"`: it's how a caller knows the call went out.
+pub fn start_ringback(volume: f32, output: Option<String>) -> Ringback {
+    let stop = Arc::new(AtomicBool::new(false));
+    if volume <= 0.0 {
+        return Ringback { stop };
+    }
+    let mut cycle = render(&ringback_notes(), volume);
+    let silence = (RINGBACK_GAP_SECS * SAMPLE_RATE as f32) as usize;
+    cycle.resize(cycle.len() + silence, 0.0);
+    let samples = Arc::new(cycle);
+    let flag = stop.clone();
+    let spawned = std::thread::Builder::new().name("horo-ringback".into()).spawn(move || {
+        let mut at = 0usize;
+        let len = samples.len().max(1);
+        let source = samples.clone();
+        let cb_stop = flag.clone();
+        let playback = Playback::start(output.as_deref(), move |frame: &mut [f32; FRAME]| {
+            if cb_stop.load(Ordering::Relaxed) {
+                frame.fill(0.0);
+                return;
+            }
+            for slot in frame.iter_mut() {
+                *slot = source[at];
+                at += 1;
+                if at >= len {
+                    at = 0;
+                }
+            }
+        });
+        match playback {
+            Ok(_playback) => {
+                let started = Instant::now();
+                while !flag.load(Ordering::Relaxed) && started.elapsed() < RINGBACK_TIMEOUT {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+            Err(e) => tracing::warn!("couldn't play ringback: {e}"),
+        }
+    });
+    if let Err(e) = spawned {
+        tracing::warn!("couldn't start ringback thread: {e}");
+    }
+    Ringback { stop }
+}
+
 /// Play a sound by id on the default speaker. Unknown ids and `none` are
 /// silence: a settings file from another build shouldn't fail every message.
 pub fn play(kind: Kind, id: &str, volume: f32) {
@@ -237,5 +314,12 @@ mod tests {
     fn volume_zero_and_unknown_ids_are_silent() {
         assert!(render(&(MESSAGE_SOUNDS[0].notes)(), 0.0).iter().all(|s| *s == 0.0));
         assert!(find(MESSAGE_SOUNDS, "not-a-sound").is_none());
+    }
+
+    #[test]
+    fn ringback_renders_audible_and_unclipped() {
+        let samples = render(&ringback_notes(), 1.0);
+        let peak = samples.iter().fold(0.0f32, |p, s| p.max(s.abs()));
+        assert!(peak > 0.05 && peak < 1.0, "unexpected ringback peak {peak}");
     }
 }

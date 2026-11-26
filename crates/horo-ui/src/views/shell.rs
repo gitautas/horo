@@ -11,11 +11,11 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     v_flex,
 };
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{collections::HashSet, future::Future, pin::Pin, sync::Arc};
 
 use horo_core::{
     dto::{NotifyMode, RoomSummary, SyncState},
-    matrix::{MatrixCore, rooms as core_rooms},
+    matrix::{MatrixCore, directory::{self, PublicRoom}, rooms as core_rooms},
 };
 
 use matrix_sdk::ruma::OwnedRoomId;
@@ -49,6 +49,8 @@ pub struct Shell {
     space_menu: Option<(String, String, gpui::Point<gpui::Pixels>)>,
     /// A room's right-click menu: which, and where.
     room_menu: Option<(String, gpui::Point<gpui::Pixels>)>,
+    /// Whether the room whose menu is open may be deleted by this account.
+    room_menu_can_delete: Option<(String, bool)>,
     invite_to_space: Option<Entity<InviteToSpace>>,
     leave_space: Option<Entity<LeaveSpace>>,
     browse: Option<Entity<Explore>>,
@@ -63,12 +65,18 @@ pub struct Shell {
     search: Entity<InputState>,
     filter: Filter,
     filters_open: bool,
+    /// Rooms in the open space's hierarchy (for listing unjoined channels),
+    /// keyed by `(space_id, children_snapshot)`.
+    space_hierarchy: Option<(String, Vec<String>, Vec<PublicRoom>)>,
+    /// Unjoined rooms currently being joined.
+    joining: HashSet<String>,
 }
 
 impl Shell {
     pub fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Shell {
         cx.observe_in(&store, window, |this, _, window, cx| {
             this.follow_room(window, cx);
+            this.follow_space(cx);
             this.follow_settings(window, cx);
             this.follow_profile(window, cx);
             cx.notify()
@@ -78,10 +86,79 @@ impl Shell {
         focus.focus(window, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("find a room or friend~"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, invite_to_space: None, leave_space: None, browse: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false };
+        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, room_menu_can_delete: None, invite_to_space: None, leave_space: None, browse: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false, space_hierarchy: None, joining: HashSet::new() };
         shell.follow_room(window, cx);
+        shell.follow_space(cx);
         shell.follow_settings(window, cx);
         shell
+    }
+
+    /// Fetch the open space's hierarchy whenever the space or its children
+    /// change, so joinable rooms we aren't in yet show up in the sidebar.
+    fn follow_space(&mut self, cx: &mut Context<Self>) {
+        let open = self.store.read(cx).current_space().cloned();
+        let Some(space) = open else {
+            self.space_hierarchy = None;
+            return;
+        };
+        if self.space_hierarchy.as_ref().is_some_and(|(id, children, _)| id == &space.id && children == &space.children) {
+            return;
+        }
+        let Ok(space_room) = OwnedRoomId::try_from(space.id.as_str()) else { return };
+        let (sid, children) = (space.id.clone(), space.children.clone());
+        // Record the key immediately so we don't re-fetch while in flight,
+        // keeping any already-fetched rooms for this space until the refresh lands.
+        let prev = self.space_hierarchy.as_ref().filter(|(id, _, _)| id == &sid).map(|(_, _, r)| r.clone()).unwrap_or_default();
+        self.space_hierarchy = Some((sid.clone(), children.clone(), prev));
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let state = backend.state.clone();
+            async move { directory::space_rooms(&*state.core().await?, &space_room).await }
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(found)) = task.await {
+                let _ = this.update(cx, |this, cx| {
+                    if this.space_hierarchy.as_ref().is_some_and(|(id, c, _)| id == &sid && c == &children) {
+                        this.space_hierarchy = Some((sid, children, found));
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn join_unjoined(&mut self, room: PublicRoom, cx: &mut Context<Self>) {
+        if !self.joining.insert(room.id.clone()) {
+            return;
+        }
+        let (id, via, voice) = (room.id.clone(), room.via.clone(), room.is_voice);
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let (state, id, via) = (backend.state.clone(), id.clone(), via);
+            async move { core_rooms::join(&*state.core().await?, &id, &via).await }
+        });
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.joining.remove(&id);
+                match outcome {
+                    Ok(Ok(joined_id)) => {
+                        this.store.update(cx, |s, cx| {
+                            s.open_room(joined_id.clone(), cx);
+                            if voice {
+                                s.join_call(joined_id, cx);
+                            }
+                        });
+                    }
+                    Ok(Err(e)) => this.store.update(cx, |s, cx| s.show_banner(Tone::Error, e.to_string(), cx)),
+                    Err(e) => this.store.update(cx, |s, cx| s.show_banner(Tone::Error, e.to_string(), cx)),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     /// Open the selected room's timeline and composer, closing the last.
@@ -262,7 +339,8 @@ impl Shell {
     }
 
     /// Something done to each of `ids`, one at a time, off the UI thread;
-    /// the first failure is said in the banner.
+    /// each room is refreshed in the sidebar afterward, and the first failure
+    /// is said in the banner.
     fn on_rooms(
         &mut self,
         ids: Vec<String>,
@@ -272,7 +350,7 @@ impl Shell {
         let ids: Vec<OwnedRoomId> = ids.iter().filter_map(|id| OwnedRoomId::try_from(id.as_str()).ok()).collect();
         let backend = Backend::global(cx);
         let task = backend.run({
-            let state = backend.state.clone();
+            let (host, state) = (backend.host.clone(), backend.state.clone());
             async move {
                 let core = state.core().await?;
                 // One room that won't is reported, not a reason to stop.
@@ -282,6 +360,7 @@ impl Shell {
                         tracing::warn!("{id}: {e}");
                         failed.get_or_insert(e.to_string());
                     }
+                    core_rooms::emit_room_refresh(&host, &core, &id).await;
                 }
                 Ok::<_, horo_core::Error>(failed)
             }
@@ -486,6 +565,16 @@ impl Shell {
                     this.ask_to_leave(cx);
                 },
             )));
+            if self.room_menu_can_delete.as_ref().is_some_and(|(for_id, can)| for_id == &id && *can) {
+                let rid = id.clone();
+                list = list.child(menu::item("rm-delete", "delete room", true, None, palette).text_color(palette.danger).on_click(cx.listener(
+                    move |this, _, window, cx| {
+                        close(this, cx);
+                        this.open_room_settings(rid.clone(), window, cx);
+                        this.ask_to_delete(cx);
+                    },
+                )));
+            }
         }
         list = list.child(menu::separator(palette));
         let rid = id.clone();
@@ -497,11 +586,47 @@ impl Shell {
         Some(menu::place(at, list))
     }
 
+    /// Open a room's context menu and check whether this account may delete it.
+    fn open_room_menu(&mut self, room: &RoomSummary, at: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        self.space_menu = None;
+        self.room_menu = Some((room.id.clone(), at));
+        self.room_menu_can_delete = None;
+        if !room.is_direct && room.membership == horo_core::dto::RoomMembership::Joined
+            && let Ok(room_id) = OwnedRoomId::try_from(room.id.as_str())
+        {
+            let wanted = room.id.clone();
+            let backend = Backend::global(cx);
+            let task = backend.run({
+                let state = backend.state.clone();
+                async move { core_rooms::permissions(&*state.core().await?, &room_id).await }
+            });
+            cx.spawn(async move |this, cx| {
+                if let Ok(Ok(perms)) = task.await {
+                    let _ = this.update(cx, |this, cx| {
+                        if this.room_menu.as_ref().is_some_and(|(id, _)| id == &wanted) {
+                            this.room_menu_can_delete = Some((wanted, perms.can_delete));
+                            cx.notify();
+                        }
+                    });
+                }
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
     /// The room settings just opened, at "leave?" — leaving (and declining
     /// an invite) is confirmed there.
     fn ask_to_leave(&mut self, cx: &mut Context<Self>) {
         if let Some(settings) = &self.room_settings {
             settings.update(cx, |s, cx| s.ask_to_leave(cx));
+        }
+    }
+
+    /// The room settings just opened, at "delete?".
+    fn ask_to_delete(&mut self, cx: &mut Context<Self>) {
+        if let Some(settings) = &self.room_settings {
+            settings.update(cx, |s, cx| s.ask_to_delete(cx));
         }
     }
 
@@ -563,7 +688,15 @@ impl Shell {
             let name = info.display_name.clone().unwrap_or_else(|| info.user_id.clone());
             let face = avatar(&info.user_id, &name, info.avatar_url.as_deref(), zpx(38.), cx);
             let shown = if away { presence::Shown::Away } else { presence::Shown::Online };
-            with_presence(face, Some(shown), palette.card, palette)
+            let (user_id, avatar_hint) = (info.user_id.clone(), info.avatar_url.clone());
+            div()
+                .id("rail-me")
+                .cursor_pointer()
+                .child(with_presence(face, Some(shown), palette.card, palette))
+                .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| {
+                    let (user_id, avatar_hint) = (user_id.clone(), avatar_hint.clone());
+                    this.store.update(cx, |s, cx| s.open_profile(user_id, click.position(), avatar_hint, cx));
+                }))
         });
 
         v_flex()
@@ -738,12 +871,10 @@ impl Shell {
                     .children(badge),
             )
             .on_mouse_down(gpui::MouseButton::Right, {
-                let id = room.id.clone();
+                let room = room.clone();
                 cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                    this.space_menu = None;
-                    this.room_menu = Some((id.clone(), event.position));
+                    this.open_room_menu(&room, event.position, cx);
                     cx.stop_propagation();
-                    cx.notify();
                 })
             })
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -757,6 +888,46 @@ impl Shell {
                     }
                 })
             }))
+    }
+
+    /// A room in the space we haven't joined yet, as UnjoinedRow in RoomList.tsx.
+    fn unjoined_row(&self, room: &PublicRoom, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let name = room.name.clone().or_else(|| room.alias.clone()).unwrap_or_else(|| "a room".into());
+        let busy = self.joining.contains(&room.id);
+        let picture = avatar(&room.id, &name, room.avatar_url.as_deref(), zpx(36.), cx);
+        let face = div()
+            .relative()
+            .flex_none()
+            .opacity(0.55)
+            .child(picture)
+            .child(channel_badge(room.is_voice, 16., palette.card, palette));
+        let subtitle = if busy {
+            "joining…"
+        } else if room.is_voice {
+            "click to join and hop in"
+        } else {
+            "click to join"
+        };
+        let target = room.clone();
+        h_flex()
+            .id(SharedString::from(format!("unjoined-{}", room.id)))
+            .gap(space(10.))
+            .px(space(10.))
+            .py(space(9.))
+            .mb(zpx(2.))
+            .rounded(corner(16.))
+            .cursor_pointer()
+            .hover(|row| row.bg(Hsla { a: 0.05, ..gpui::white() }))
+            .child(face)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .child(div().truncate().font_weight(FontWeight::BOLD).text_size(text(14.5)).text_color(palette.text_tertiary).child(name))
+                    .child(div().mt(zpx(1.)).truncate().text_size(text(12.)).text_color(palette.text_tertiary).child(subtitle)),
+            )
+            .child(voice::icon("icons/circle-plus.svg").size(zpx(16.)).text_color(palette.text_tertiary).flex_none())
+            .on_click(cx.listener(move |this, _, _, cx| this.join_unjoined(target.clone(), cx)))
     }
 
     /// The room list, as RoomList.tsx: the space's name, how much is
@@ -774,10 +945,37 @@ impl Shell {
         let hide_muted = open_space.as_ref().is_some_and(|s| store.prefs.hide_muted_in_spaces.contains(&s.id));
         let visible = rooms::filter(&rooms, &View { space: open_space.as_ref(), filter: self.filter, search: &search, hide_muted });
         let unread_total: u64 = visible.iter().map(|r| r.notification_count).sum();
-        let groups = rooms::group(visible, &order);
+        let joined_groups = rooms::group(visible, &order);
+        let hierarchy = open_space
+            .as_ref()
+            .and_then(|s| self.space_hierarchy.as_ref().filter(|(id, _, _)| id == &s.id).map(|(_, _, h)| h.as_slice()))
+            .unwrap_or(&[]);
+        let (unjoined_text, unjoined_voice) = match &open_space {
+            Some(space) => rooms::unjoined_in_space(space, hierarchy, &rooms, self.filter, &search),
+            None => (Vec::new(), Vec::new()),
+        };
+
+        // Fold unjoined channels into the matching sections (rooms before voice),
+        // matching `withUnjoined` in src/store/index.ts.
+        let mut groups: Vec<(rooms::Section, Vec<&RoomSummary>, Vec<&PublicRoom>)> =
+            joined_groups.into_iter().map(|(s, r)| (s, r, Vec::new())).collect();
+        for (section, extra) in [(rooms::Section::Rooms, unjoined_text), (rooms::Section::Voice, unjoined_voice)] {
+            if extra.is_empty() {
+                continue;
+            }
+            if let Some(existing) = groups.iter_mut().find(|(s, _, _)| *s == section) {
+                existing.2 = extra;
+            } else if section == rooms::Section::Rooms
+                && let Some(at) = groups.iter().position(|(s, _, _)| *s == rooms::Section::Voice)
+            {
+                groups.insert(at, (section, Vec::new(), extra));
+            } else {
+                groups.push((section, Vec::new(), extra));
+            }
+        }
 
         let mut list = v_flex().id("room-list").flex_1().min_h_0().overflow_y_scroll().px(space(10.)).pb(space(16.));
-        for (section, rooms) in &groups {
+        for (section, rooms, unjoined) in &groups {
             list = list.child(
                 h_flex()
                     .gap(space(8.))
@@ -790,7 +988,7 @@ impl Shell {
                     .text_color(palette.text_tertiary)
                     .child(section.title())
                     .child(div().flex_1().h(zpx(1.)).bg(palette.border_subtle))
-                    .child(rooms.len().to_string()),
+                    .child((rooms.len() + unjoined.len()).to_string()),
             );
             for room in rooms {
                 let is_selected = selected.as_deref() == Some(room.id.as_str());
@@ -799,8 +997,12 @@ impl Shell {
                     list = list.children(voice::roster(room, &self.store, palette, cx));
                 }
             }
+            for room in unjoined {
+                list = list.child(self.unjoined_row(room, palette, cx));
+            }
         }
         if groups.is_empty() {
+            let show_create = search.trim().is_empty() && self.filter == Filter::All && !rooms.is_empty();
             let empty = if !search.trim().is_empty() {
                 "nothing matches that~".to_owned()
             } else if self.filter != Filter::All {
@@ -812,7 +1014,20 @@ impl Shell {
             } else {
                 "no rooms yet~".to_owned()
             };
-            list = list.child(div().px(space(16.)).py(space(40.)).text_center().text_size(text(13.)).text_color(palette.text_tertiary).child(empty));
+            list = list.child(
+                v_flex()
+                    .items_center()
+                    .gap(space(14.))
+                    .px(space(16.))
+                    .py(space(40.))
+                    .text_center()
+                    .text_size(text(13.))
+                    .text_color(palette.text_tertiary)
+                    .child(empty)
+                    .when(show_create, |d| {
+                        d.child(Button::new("empty-create-room").small().primary().label("make or join a room").on_click(cx.listener(|this, _, window, cx| this.open_create(window, cx))))
+                    }),
+            );
         }
 
         let status = match sync {
@@ -1120,6 +1335,15 @@ impl Shell {
                 )
         });
         let in_thread = self.store.read(cx).thread.is_some();
+        let waiting = {
+            let rooms = &self.store.read(cx).rooms;
+            if rooms.is_empty() {
+                "still syncing your rooms…".to_owned()
+            } else {
+                let count = rooms.iter().filter(|r| !r.is_space && !r.is_utility).count();
+                format!("{count} rooms waiting for you")
+            }
+        };
         let body = match (&room, &self.timeline) {
             (Some(room), Some((_, timeline, composer))) => v_flex()
                 .relative()
@@ -1130,7 +1354,26 @@ impl Shell {
                 .child(div().flex_1().min_h_0().child(timeline.clone()))
                 .child(composer.clone())
                 .child(drop_zone(&room.name, in_thread, composer.clone(), palette)),
-            _ => v_flex().m_auto().text_color(palette.text_tertiary).child("pick a room"),
+            _ => v_flex()
+                .m_auto()
+                .items_center()
+                .gap(space(14.))
+                .text_color(palette.text_tertiary)
+                .child(
+                    div()
+                        .size(zpx(84.))
+                        .rounded(corner(28.))
+                        .bg(palette.card)
+                        .border_2()
+                        .border_dashed()
+                        .border_color(palette.border_strong)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(voice::icon("icons/messages-square.svg").size(zpx(34.)).text_color(palette.text_tertiary)),
+                )
+                .child(div().font_family(palette.heading_font.clone()).font_weight(FontWeight::EXTRA_BOLD).text_size(heading(19.)).text_color(palette.text_secondary).child("pick a room~"))
+                .child(div().text_size(text(13.)).child(waiting)),
         };
         v_flex()
             .flex_1()
@@ -1291,15 +1534,21 @@ fn banner(store: &Entity<Store>, palette: &Palette, cx: &mut Context<Shell>) -> 
                             .size(zpx(16.))
                             .text_color(if error { palette.danger } else { palette.accent_quaternary }),
                     )
-                    .child(div().text_size(text(13.)).line_height(gpui::relative(1.45)).text_color(palette.text_secondary).child(banner.message))
+                    // Shrinks and wraps, so a long message can't push the ✕
+                    // into the padding.
+                    .child(div().flex_1().min_w_0().text_size(text(13.)).line_height(gpui::relative(1.45)).text_color(palette.text_secondary).child(banner.message))
                     .child(
                         div()
                             .id("banner-dismiss")
                             .flex_none()
-                            .px_1()
+                            .size(zpx(22.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
                             .cursor_pointer()
                             .text_color(palette.text_tertiary)
-                            .hover(|d| d.text_color(palette.text))
+                            .hover(|d| d.text_color(palette.text).bg(palette.inset))
                             .child("✕")
                             .on_click(move |_, _, cx| store.update(cx, |s, cx| s.dismiss_banner(cx))),
                     ),

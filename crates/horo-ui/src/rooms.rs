@@ -2,7 +2,10 @@
 //! `filterRooms`, `isInSpace` and `groupRooms` (src/store/index.ts), ported
 //! so both apps list the same rooms the same way. Pure, so it's tested here.
 
-use horo_core::dto::{RoomMembership, RoomSummary, SpaceSummary};
+use horo_core::{
+    dto::{RoomMembership, RoomSummary, SpaceSummary},
+    matrix::directory::PublicRoom,
+};
 
 /// The list's quick filter.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -150,6 +153,43 @@ pub fn group<'r>(rooms: Vec<&'r RoomSummary>, order: &[String]) -> Vec<(Section,
         .collect()
 }
 
+/// Public or restricted rooms in `space` from its hierarchy that we haven't
+/// joined yet, split into text and voice rooms, in the space's own order.
+/// Only shown when `filter == Filter::All`: filters like "unread" or "muted"
+/// don't apply to rooms we aren't in.
+pub fn unjoined_in_space<'a>(
+    space: &SpaceSummary,
+    hierarchy: &'a [PublicRoom],
+    rooms: &[RoomSummary],
+    filter: Filter,
+    search: &str,
+) -> (Vec<&'a PublicRoom>, Vec<&'a PublicRoom>) {
+    if filter != Filter::All {
+        return (Vec::new(), Vec::new());
+    }
+    let needle = search.trim().to_lowercase();
+    let mut visible: Vec<&PublicRoom> = hierarchy
+        .iter()
+        .filter(|r| {
+            !r.is_space
+                && (r.join_rule == "public" || r.join_rule == "restricted")
+                && space.children.contains(&r.id)
+                && r.members > 0
+                && !rooms.iter().any(|x| x.id == r.id && matches!(x.membership, RoomMembership::Joined | RoomMembership::Invited))
+                && (needle.is_empty() || r.name.as_deref().unwrap_or_default().to_lowercase().contains(&needle))
+        })
+        .collect();
+    let position = |r: &PublicRoom| space.children.iter().position(|id| *id == r.id).unwrap_or(usize::MAX);
+    visible.sort_by(|a, b| {
+        position(a)
+            .cmp(&position(b))
+            .then_with(|| a.name.as_deref().unwrap_or_default().to_lowercase().cmp(&b.name.as_deref().unwrap_or_default().to_lowercase()))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    let (voice, text): (Vec<_>, Vec<_>) = visible.into_iter().partition(|r| r.is_voice);
+    (text, voice)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,5 +321,38 @@ mod tests {
         assert!(in_space(&rooms, &spaces, "!nope").is_empty());
         assert_eq!(list_names(&["a", "b"], 3), "a, b");
         assert_eq!(list_names(&["a", "b", "c", "d", "e"], 3), "a, b, c and 2 more");
+    }
+
+    #[test]
+    fn unjoined_space_rooms_keep_joinable_non_members_in_space_order() {
+        let pub_room = |id: &str, name: &str, voice: bool, rule: &str, members: u64| PublicRoom {
+            id: id.into(),
+            name: Some(name.into()),
+            topic: None,
+            alias: None,
+            avatar_url: None,
+            members,
+            is_space: false,
+            is_voice: voice,
+            join_rule: rule.into(),
+            via: Vec::new(),
+        };
+        let s = space("!s", &["!joined", "!b", "!a", "!v", "!priv", "!empty"]);
+        let hierarchy = vec![
+            pub_room("!joined", "already in", false, "public", 3),
+            pub_room("!a", "alpha", false, "restricted", 2),
+            pub_room("!b", "beta", false, "public", 5),
+            pub_room("!v", "lounge", true, "public", 1),
+            pub_room("!priv", "secret", false, "invite", 4),
+            pub_room("!empty", "deleted", false, "public", 0),
+            pub_room("!stale", "removed from space", false, "public", 2),
+        ];
+        let joined = vec![room("!joined", "already in")];
+        let (text, voice) = unjoined_in_space(&s, &hierarchy, &joined, Filter::All, "");
+        assert_eq!(text.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["!b", "!a"]);
+        assert_eq!(voice.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["!v"]);
+        assert!(unjoined_in_space(&s, &hierarchy, &joined, Filter::Unread, "").0.is_empty());
+        let (filtered, _) = unjoined_in_space(&s, &hierarchy, &joined, Filter::All, "alp");
+        assert_eq!(filtered.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["!a"]);
     }
 }

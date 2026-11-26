@@ -3,7 +3,7 @@
 //! timeline doesn't jump; video, audio and files as cards that open or save
 //! them).
 
-use std::path::PathBuf;
+use std::{path::PathBuf, rc::Rc};
 
 use gpui::AppContext as _;
 
@@ -27,18 +27,33 @@ use crate::{
 const PICTURE_MAX: (f32, f32) = (400., 320.);
 const STICKER_MAX: (f32, f32) = (176., 176.);
 
+/// Interaction hooks for formatted text: clicking a `@mention` opens their
+/// profile card, and clicking a spoiler reveals it.
+#[derive(Clone)]
+pub struct RichContext {
+    pub store: Entity<Store>,
+    pub spoilers_revealed: bool,
+    pub on_reveal_spoiler: Rc<dyn Fn(&mut App)>,
+}
+
 /// Formatted text, block by block.
-pub fn rich(id: &str, blocks: &[Block], colour: Hsla, palette: &Palette, cx: &mut App) -> AnyElement {
+pub fn rich(id: &str, blocks: &[Block], colour: Hsla, rich_ctx: &RichContext, palette: &Palette, cx: &mut App) -> AnyElement {
     // A message that's only emotes draws them big, as one emoji alone is.
     let jumbo = !blocks.is_empty() && blocks.iter().all(|b| matches!(b, Block::Paragraph(i) if i.only_images()));
     let size = if jumbo { EMOTE_JUMBO } else { EMOTE };
-    rich_sized(id, blocks, colour, size, palette, cx)
+    rich_sized(id, blocks, colour, size, rich_ctx, palette, cx)
 }
 
-fn rich_sized(id: &str, blocks: &[Block], colour: Hsla, emote: f32, palette: &Palette, cx: &mut App) -> AnyElement {
+/// Plain text with bare URLs turned into clickable links.
+pub fn linked_plain(id: &str, body: &str, colour: Hsla, rich_ctx: &RichContext, palette: &Palette) -> AnyElement {
+    let inline = crate::rich::linkify(body);
+    words(id, &inline, colour, rich_ctx, palette)
+}
+
+fn rich_sized(id: &str, blocks: &[Block], colour: Hsla, emote: f32, rich_ctx: &RichContext, palette: &Palette, cx: &mut App) -> AnyElement {
     let mut column = v_flex().w_full().gap_1();
     for (i, b) in blocks.iter().enumerate() {
-        column = column.child(block(&format!("{id}/{i}"), b, colour, emote, palette, cx));
+        column = column.child(block(&format!("{id}/{i}"), b, colour, emote, rich_ctx, palette, cx));
     }
     column.into_any_element()
 }
@@ -47,9 +62,9 @@ fn rich_sized(id: &str, blocks: &[Block], colour: Hsla, emote: f32, palette: &Pa
 const EMOTE: f32 = 21.;
 const EMOTE_JUMBO: f32 = 48.;
 
-fn block(id: &str, block: &Block, colour: Hsla, emote: f32, palette: &Palette, cx: &mut App) -> AnyElement {
+fn block(id: &str, block: &Block, colour: Hsla, emote: f32, rich_ctx: &RichContext, palette: &Palette, cx: &mut App) -> AnyElement {
     match block {
-        Block::Paragraph(inline) => text(id, inline, colour, emote, palette, cx),
+        Block::Paragraph(inline) => text(id, inline, colour, emote, rich_ctx, palette, cx),
         Block::Heading(level, inline) => {
             let size = match level {
                 1 => 22.,
@@ -57,13 +72,13 @@ fn block(id: &str, block: &Block, colour: Hsla, emote: f32, palette: &Palette, c
                 3 => 17.,
                 _ => 15.,
             };
-            div().pt_1().text_size(zpx(size)).child(text(id, inline, colour, emote, palette, cx)).into_any_element()
+            div().pt_1().text_size(zpx(size)).child(text(id, inline, colour, emote, rich_ctx, palette, cx)).into_any_element()
         }
         Block::Quote(inner) => div()
             .pl_3()
             .border_l_2()
             .border_color(palette.border_strong)
-            .child(rich_sized(id, inner, palette.text_secondary, emote, palette, cx))
+            .child(rich_sized(id, inner, palette.text_secondary, emote, rich_ctx, palette, cx))
             .into_any_element(),
         Block::Code(code) => div()
             .w_full()
@@ -84,7 +99,7 @@ fn block(id: &str, block: &Block, colour: Hsla, emote: f32, palette: &Palette, c
                         .items_start()
                         .gap_2()
                         .child(div().flex_none().min_w(zpx(14.)).text_color(palette.text_tertiary).child(marker))
-                        .child(div().flex_1().min_w_0().child(rich_sized(&format!("{id}/{n}"), item, colour, emote, palette, cx))),
+                        .child(div().flex_1().min_w_0().child(rich_sized(&format!("{id}/{n}"), item, colour, emote, rich_ctx, palette, cx))),
                 );
             }
             list.into_any_element()
@@ -96,9 +111,9 @@ fn block(id: &str, block: &Block, colour: Hsla, emote: f32, palette: &Palette, c
 /// One paragraph. With pictures in it, a wrapping row of words and
 /// pictures (gpui's text can't hold an image), each word keeping its style
 /// and link.
-fn text(id: &str, inline: &Inline, colour: Hsla, emote: f32, palette: &Palette, cx: &mut App) -> AnyElement {
+fn text(id: &str, inline: &Inline, colour: Hsla, emote: f32, rich_ctx: &RichContext, palette: &Palette, cx: &mut App) -> AnyElement {
     if inline.images.is_empty() {
-        return words(id, inline, colour, palette);
+        return words(id, inline, colour, rich_ctx, palette);
     }
     let mut row = h_flex().w_full().flex_wrap().items_center();
     let mut from = 0;
@@ -108,7 +123,7 @@ fn text(id: &str, inline: &Inline, colour: Hsla, emote: f32, palette: &Palette, 
         for token in tokens(&inline.text[range.clone()]) {
             let start = range.start + token.start;
             let slice = inline.slice(start..range.start + token.end);
-            row = row.child(div().flex_none().child(words(&format!("{id}/w{piece}"), &slice, colour, palette)));
+            row = row.child(div().flex_none().child(words(&format!("{id}/w{piece}"), &slice, colour, rich_ctx, palette)));
             *piece += 1;
         }
         row
@@ -146,25 +161,57 @@ fn tokens(text: &str) -> Vec<std::ops::Range<usize>> {
     out
 }
 
-/// Styled runs, selectable, with links that open when clicked.
-fn words(id: &str, inline: &Inline, colour: Hsla, palette: &Palette) -> AnyElement {
-    let runs = runs(inline, colour, palette);
+enum ClickTarget {
+    Url(String),
+    Mention(String),
+    Spoiler,
+}
+
+/// Styled runs, selectable, with links, mentions and spoilers clickable.
+fn words(id: &str, inline: &Inline, colour: Hsla, rich_ctx: &RichContext, palette: &Palette) -> AnyElement {
+    let runs = runs(inline, colour, rich_ctx.spoilers_revealed, palette);
     let styled = StyledText::new(inline.text.clone()).with_runs(runs);
     let layout = styled.layout().clone();
     let select = |inner: AnyElement| {
         super::selectable::selectable(ElementId::Name(SharedString::from(format!("select/{id}"))), inline.text.clone(), layout.clone(), inner, selection(palette))
     };
-    if inline.links.is_empty() {
+
+    let mut ranges = Vec::new();
+    let mut targets = Vec::new();
+    // Unrevealed spoilers take precedence over links inside them so clicking a
+    // hidden spoiler reveals it rather than opening an unseen URL.
+    if !rich_ctx.spoilers_revealed {
+        for (range, marks) in &inline.spans {
+            if marks.spoiler {
+                ranges.push(range.clone());
+                targets.push(ClickTarget::Spoiler);
+            }
+        }
+    }
+    for (range, href) in &inline.links {
+        if let Some(user_id) = crate::rich::mentioned_user_id(href) {
+            ranges.push(range.clone());
+            targets.push(ClickTarget::Mention(user_id));
+        } else if href.starts_with("https://") || href.starts_with("http://") || href.starts_with("mailto:") {
+            ranges.push(range.clone());
+            targets.push(ClickTarget::Url(href.clone()));
+        }
+    }
+    if ranges.is_empty() {
         return div().child(select(styled.into_any_element())).into_any_element();
     }
-    let ranges = inline.links.iter().map(|(r, _)| r.clone()).collect();
-    let targets: Vec<String> = inline.links.iter().map(|(_, href)| href.clone()).collect();
-    let linked = InteractiveText::new(ElementId::Name(SharedString::from(id.to_owned())), styled).on_click(ranges, move |ix, _, cx| {
-        if let Some(href) = targets.get(ix)
-            && crate::rich::mentioned_user(href).is_none()
-            && (href.starts_with("https://") || href.starts_with("http://") || href.starts_with("mailto:"))
-        {
-            cx.open_url(href);
+    let store = rich_ctx.store.clone();
+    let on_reveal = rich_ctx.on_reveal_spoiler.clone();
+    let linked = InteractiveText::new(ElementId::Name(SharedString::from(id.to_owned())), styled).on_click(ranges, move |ix, window, cx| {
+        match targets.get(ix) {
+            Some(ClickTarget::Url(href)) => cx.open_url(href),
+            Some(ClickTarget::Mention(user_id)) => {
+                let at = window.mouse_position();
+                let user_id = user_id.clone();
+                store.update(cx, |s, cx| s.open_profile(user_id, at, None, cx));
+            }
+            Some(ClickTarget::Spoiler) => on_reveal(cx),
+            None => {}
         }
     });
     div().child(select(linked.into_any_element())).into_any_element()
@@ -184,7 +231,7 @@ pub fn plain(id: impl Into<SharedString>, text: impl Into<SharedString>, palette
 }
 
 /// Runs covering all of `inline.text`, one per change of style.
-fn runs(inline: &Inline, colour: Hsla, palette: &Palette) -> Vec<TextRun> {
+fn runs(inline: &Inline, colour: Hsla, spoilers_revealed: bool, palette: &Palette) -> Vec<TextRun> {
     let plain = |len: usize, marks: Marks| {
         let mut f = font(if marks.code { palette.mono_font.clone() } else { palette.body_font.clone() });
         if marks.bold || marks.mention {
@@ -203,11 +250,10 @@ fn runs(inline: &Inline, colour: Hsla, palette: &Palette) -> Vec<TextRun> {
         TextRun {
             len,
             font: f,
-            // A spoiler is a bar of its own colour until it can be
-            // revealed on hover.
+            // An unrevealed spoiler is a bar of its own colour; clicking reveals it.
             color: ink,
             background_color: if marks.spoiler {
-                Some(ink)
+                Some(if spoilers_revealed { Hsla { a: 0.14, ..palette.text_tertiary } } else { ink })
             } else if marks.code {
                 Some(palette.inset)
             } else if marks.mention {
@@ -235,20 +281,38 @@ fn runs(inline: &Inline, colour: Hsla, palette: &Palette) -> Vec<TextRun> {
 }
 
 /// A picture attachment (or sticker): the thumbnail at its own shape, the
-/// full picture in the lightbox when clicked.
+/// full picture in the lightbox when clicked. Transparent cut-outs render
+/// frameless, the way stickers do.
 pub fn picture(id: &str, body: &str, media: &MediaInfoDto, sticker: bool, store: &Entity<Store>, palette: &Palette, cx: &mut App) -> AnyElement {
-    let (w, h) = fit(media.width, media.height, if sticker { STICKER_MAX } else { PICTURE_MAX }, 48.);
+    let max = if sticker { STICKER_MAX } else { PICTURE_MAX };
+    let (w, h) = fit(media.width, media.height, max, 48.);
     let source = media.thumbnail_mxc.clone().or_else(|| media.mxc.clone());
     // Twice the drawn size, for Retina screens.
     let size = Some(((w * 2.) as u32, (h * 2.) as u32));
-    let image = source.as_deref().and_then(|mxc| Media::image(mxc, size, cx));
+    let (image, cutout) = source
+        .as_deref()
+        .and_then(|mxc| Media::image_with_cutout(mxc, size, cx))
+        .map(|(img, c)| (Some(img), c))
+        .unwrap_or((None, false));
+    // An event without its size (plenty of clients leave it out) is drawn
+    // at a placeholder shape while loading, then at the picture's own shape,
+    // read from its header, so the frame hugs it instead of letterboxing it.
+    let (w, h) = match (&image, media.width.zip(media.height)) {
+        (Some(image), None) => imagesize::blob_size(image.bytes())
+            .ok()
+            .map(|s| fit(Some(s.width as u64), Some(s.height as u64), max, 48.))
+            .unwrap_or((w, h)),
+        _ => (w, h),
+    };
+    let frameless = sticker || cutout;
     let frame = div()
         .id(ElementId::Name(SharedString::from(format!("{id}/picture"))))
         .w(zpx(w))
         .h(zpx(h))
-        .rounded(zpx(12.))
-        .overflow_hidden()
-        .when(!sticker, |d| d.bg(palette.inset))
+        .when(!frameless, |d| d.rounded(zpx(10.)).overflow_hidden())
+        // The placeholder only while it loads: once in, the picture fills
+        // the frame exactly, as Discord draws it.
+        .when(image.is_none() && !frameless, |d| d.bg(palette.inset))
         .cursor_pointer();
     let frame = match image {
         Some(image) => frame.child(img(image).size_full().object_fit(gpui::ObjectFit::Contain)),
@@ -368,7 +432,7 @@ fn play(mxc: String, name: String, mime: Option<String>, cx: &mut App) {
 }
 
 /// Ask where to put it, then download it there and show it.
-fn save(mxc: String, name: String, cx: &mut App) {
+pub(crate) fn save_media(mxc: String, name: String, store: Option<Entity<Store>>, cx: &mut App) {
     let downloads = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Downloads")).unwrap_or_else(std::env::temp_dir);
     let chosen = cx.prompt_for_new_path(&downloads, Some(&safe_name(&name, None)));
     let state = Backend::global(cx).state.clone();
@@ -380,15 +444,26 @@ fn save(mxc: String, name: String, cx: &mut App) {
                 async move { core_media::save_to(&state.core().await?.client, &mxc, &path.to_string_lossy()).await }
             })
         });
-        match task.await {
+        let err = match task.await {
             Ok(Ok(())) => {
                 cx.update(|cx| cx.reveal_path(&path));
+                None
             }
-            Ok(Err(e)) => tracing::warn!("couldn't save {name}: {e}"),
-            Err(e) => tracing::warn!("couldn't save {name}: {e}"),
+            Ok(Err(e)) => Some(e.to_string()),
+            Err(e) => Some(e.to_string()),
+        };
+        if let Some(e) = err {
+            tracing::warn!("couldn't save {name}: {e}");
+            if let Some(store) = store {
+                cx.update(|cx| store.update(cx, |s, cx| s.show_banner(crate::store::Tone::Error, format!("couldn't save {name}: {e}"), cx)));
+            }
         }
     })
     .detach();
+}
+
+fn save(mxc: String, name: String, cx: &mut App) {
+    save_media(mxc, name, None, cx);
 }
 
 /// A file name that can't climb out of its directory, with an extension

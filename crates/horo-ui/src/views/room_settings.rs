@@ -32,6 +32,12 @@ use crate::{
     },
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Confirm {
+    Leave,
+    Delete,
+}
+
 pub struct RoomSettings {
     store: Entity<Store>,
     pub room_id: String,
@@ -41,9 +47,9 @@ pub struct RoomSettings {
     name: Entity<InputState>,
     topic: Entity<TextareaState>,
     saving: bool,
-    /// "Leave…" was clicked once; the button that does it is showing.
-    asked: bool,
-    leaving: bool,
+    /// "Leave…" or "Delete…" was clicked once; its confirmation is showing.
+    asked: Option<Confirm>,
+    acting: bool,
     error: Option<SharedString>,
 }
 
@@ -75,8 +81,8 @@ impl RoomSettings {
             name,
             topic,
             saving: false,
-            asked: false,
-            leaving: false,
+            asked: None,
+            acting: false,
             error: None,
         };
         settings.load_permissions(cx);
@@ -147,16 +153,22 @@ impl RoomSettings {
 
     /// Open at the "leave?" question (from a room's right-click menu).
     pub fn ask_to_leave(&mut self, cx: &mut Context<Self>) {
-        self.asked = true;
+        self.asked = Some(Confirm::Leave);
+        cx.notify();
+    }
+
+    /// Open at the "delete?" question (from a room's right-click menu).
+    pub fn ask_to_delete(&mut self, cx: &mut Context<Self>) {
+        self.asked = Some(Confirm::Delete);
         cx.notify();
     }
 
     fn leave(&mut self, cx: &mut Context<Self>) {
-        if self.leaving {
+        if self.acting {
             return;
         }
         let Ok(room) = OwnedRoomId::try_from(self.room_id.as_str()) else { return };
-        self.leaving = true;
+        self.acting = true;
         let backend = Backend::global(cx);
         let task = backend.run({
             let state = backend.state.clone();
@@ -176,9 +188,48 @@ impl RoomSettings {
                     this.store.update(cx, |s, cx| s.close_room(&room_id, cx));
                 }
                 Some(e) => {
-                    this.leaving = false;
-                    this.asked = false;
+                    this.acting = false;
+                    this.asked = None;
                     this.error = Some(format!("couldn't leave: {e}").into());
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn delete(&mut self, cx: &mut Context<Self>) {
+        if self.acting {
+            return;
+        }
+        let Ok(room) = OwnedRoomId::try_from(self.room_id.as_str()) else { return };
+        self.acting = true;
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let state = backend.state.clone();
+            async move { rooms::delete(&*state.core().await?, &room).await }
+        });
+        cx.spawn(async move |this, cx| {
+            let error = match task.await {
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(e.to_string()),
+                Err(e) => Some(e.to_string()),
+            };
+            let _ = this.update(cx, |this, cx| match error {
+                None => {
+                    cx.emit(Closed);
+                    let room_id = this.room_id.clone();
+                    this.store.update(cx, |s, cx| {
+                        s.close_room(&room_id, cx);
+                        // It just came out of its spaces, which only re-read on a slow poll.
+                        s.refresh_spaces_now(cx);
+                    });
+                }
+                Some(e) => {
+                    this.acting = false;
+                    this.asked = None;
+                    this.error = Some(format!("couldn't delete: {e}").into());
                     cx.notify();
                 }
             });
@@ -227,44 +278,90 @@ impl RoomSettings {
         } else {
             "leave room"
         };
-        let body = if self.asked {
-            let question = if invited {
-                format!("decline the invite to {}?", room.name)
-            } else {
-                format!("leave {}? it drops off your list, and you'd need an invite to get back into a private room.", room.name)
-            };
-            v_flex()
-                .child(div().mb(zpx(10.)).text_size(text(12.5)).line_height(gpui::relative(1.55)).text_color(palette.text_secondary).child(question))
+        let can_delete = !invited && !room.is_direct && self.permissions.as_ref().is_some_and(|p| p.can_delete);
+        let body = match self.asked {
+            Some(Confirm::Leave) => {
+                let question = if invited {
+                    format!("decline the invite to {}?", room.name)
+                } else {
+                    format!("leave {}? it drops off your list, and you'd need an invite to get back into a private room.", room.name)
+                };
+                v_flex()
+                    .child(div().mb(zpx(10.)).text_size(text(12.5)).line_height(gpui::relative(1.55)).text_color(palette.text_secondary).child(question))
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap(space(8.))
+                            .child(Button::new("leave-stay").ghost().small().label("stay").on_click(cx.listener(|this, _, _, cx| {
+                                this.asked = None;
+                                cx.notify();
+                            })))
+                            .child(
+                                Button::new("leave-go")
+                                    .danger()
+                                    .small()
+                                    .label(if self.acting { "leaving…" } else { verb })
+                                    .disabled(self.acting)
+                                    .on_click(cx.listener(|this, _, _, cx| this.leave(cx))),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            Some(Confirm::Delete) => {
+                let question = format!(
+                    "delete {}? everyone is removed, it comes out of its spaces, and nobody can get back in. this can't be undone. the messages stay on the servers that already have them — matrix has no way to erase those.",
+                    room.name
+                );
+                v_flex()
+                    .child(div().mb(zpx(10.)).text_size(text(12.5)).line_height(gpui::relative(1.55)).text_color(palette.text_secondary).child(question))
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap(space(8.))
+                            .child(Button::new("delete-keep").ghost().small().label("keep it").on_click(cx.listener(|this, _, _, cx| {
+                                this.asked = None;
+                                cx.notify();
+                            })))
+                            .child(
+                                Button::new("delete-go")
+                                    .danger()
+                                    .small()
+                                    .label(if self.acting { "deleting…" } else { "delete room" })
+                                    .disabled(self.acting)
+                                    .on_click(cx.listener(|this, _, _, cx| this.delete(cx))),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            None => h_flex()
+                .justify_between()
                 .child(
-                    h_flex()
-                        .justify_end()
-                        .gap(space(8.))
-                        .child(Button::new("leave-stay").ghost().small().label("stay").on_click(cx.listener(|this, _, _, cx| {
-                            this.asked = false;
+                    div()
+                        .id("leave-ask")
+                        .cursor_pointer()
+                        .text_size(text(12.5))
+                        .text_color(palette.danger)
+                        .child(format!("{verb}…"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.asked = Some(Confirm::Leave);
                             cx.notify();
-                        })))
-                        .child(
-                            Button::new("leave-go")
-                                .danger()
-                                .small()
-                                .label(if self.leaving { "leaving…" } else { verb })
-                                .disabled(self.leaving)
-                                .on_click(cx.listener(|this, _, _, cx| this.leave(cx))),
-                        ),
+                        })),
                 )
-                .into_any_element()
-        } else {
-            div()
-                .id("leave-ask")
-                .cursor_pointer()
-                .text_size(text(12.5))
-                .text_color(palette.danger)
-                .child(format!("{verb}…"))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.asked = true;
-                    cx.notify();
-                }))
-                .into_any_element()
+                .when(can_delete, |row| {
+                    row.child(
+                        div()
+                            .id("delete-ask")
+                            .cursor_pointer()
+                            .text_size(text(12.5))
+                            .text_color(palette.danger)
+                            .child("delete room…")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.asked = Some(Confirm::Delete);
+                                cx.notify();
+                            })),
+                    )
+                })
+                .into_any_element(),
         };
         div().mt(zpx(20.)).pt(space(14.)).border_t_1().border_color(palette.border_subtle).child(body).into_any_element()
     }

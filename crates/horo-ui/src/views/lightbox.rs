@@ -9,9 +9,9 @@
 //! ran off the bottom of the window.
 
 use gpui::{AnyElement, App, Entity, Hsla, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled, StyledImage, Window, div, img, px};
-use gpui_component::v_flex;
+use gpui_component::{h_flex, v_flex};
 
-use crate::{media::Media, store::Store, theme::Palette};
+use crate::{media::Media, store::Store, theme::Palette, views::content};
 
 /// Clear space around the picture.
 const MARGIN: f32 = 32.;
@@ -50,11 +50,61 @@ pub fn lightbox(store: &Entity<Store>, palette: &Palette, window: &Window, cx: &
                 .or_else(|| imagesize::blob_size(image.bytes()).ok().map(|s| (s.width as f32, s.height as f32)))
                 .unwrap_or(room);
             let (w, h) = fit_within(natural, room);
-            img(image).w(px(w)).h(px(h)).object_fit(gpui::ObjectFit::Contain).into_any_element()
+            div()
+                .id("lightbox-picture")
+                .cursor_default()
+                .on_click(|_, _, cx| cx.stop_propagation())
+                .child(img(image).w(px(w)).h(px(h)).object_fit(gpui::ObjectFit::Contain))
+                .into_any_element()
         }
         None => div().text_color(palette.text_tertiary).child("loading…").into_any_element(),
     };
-    let close = store.clone();
+    let (close_backdrop, close_btn) = (store.clone(), store.clone());
+    let save_target = shown.mxc.clone().or_else(|| shown.thumbnail.clone());
+    let save_button = save_target.map(|mxc| {
+        let (name, store) = (shown.name.clone(), store.clone());
+        div()
+            .id("lightbox-save")
+            .h(px(34.))
+            .px(px(14.))
+            .rounded_full()
+            .bg(palette.raised)
+            .border_1()
+            .border_color(palette.border)
+            .hover(|d| d.bg(palette.card))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .text_xs()
+            .text_color(palette.text_secondary)
+            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("save this picture").build(window, cx))
+            .child("save")
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                content::save_media(mxc.clone(), name.clone(), Some(store.clone()), cx);
+            })
+    });
+    let close_button = div()
+        .id("lightbox-close")
+        .size(px(34.))
+        .rounded_full()
+        .bg(palette.raised)
+        .border_1()
+        .border_color(palette.border)
+        .hover(|d| d.bg(palette.card))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .text_sm()
+        .text_color(palette.text_secondary)
+        .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("close (esc)").build(window, cx))
+        .child("✕")
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            close_btn.update(cx, |s, cx| s.close_lightbox(cx));
+        });
     Some(
         v_flex()
             .id("lightbox")
@@ -66,9 +116,29 @@ pub fn lightbox(store: &Entity<Store>, palette: &Palette, window: &Window, cx: &
             .gap(px(12.))
             .bg(Hsla { a: 0.92, ..palette.app })
             .cursor_pointer()
-            .on_click(move |_, _, cx| close.update(cx, |s, cx| s.close_lightbox(cx)))
+            .on_click(move |_, _, cx| close_backdrop.update(cx, |s, cx| s.close_lightbox(cx)))
+            .child(
+                h_flex()
+                    .absolute()
+                    .top(px(18.))
+                    .right(px(18.))
+                    .gap(px(8.))
+                    .children(save_button)
+                    .child(close_button),
+            )
             .child(picture)
-            .child(div().flex_none().max_w(px(600.)).truncate().text_sm().text_color(palette.text_secondary).child(shown.name))
+            .child(
+                div()
+                    .id("lightbox-caption")
+                    .cursor_default()
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .flex_none()
+                    .max_w(px(600.))
+                    .truncate()
+                    .text_sm()
+                    .text_color(palette.text_secondary)
+                    .child(shown.name),
+            )
             .into_any_element(),
     )
 }

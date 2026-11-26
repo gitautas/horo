@@ -30,6 +30,19 @@ pub enum CallStatus {
     Failed(String),
 }
 
+/// Which tile is shown big in the call stage.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum FocusMode {
+    /// Follow the first shared screen automatically, or show the grid when
+    /// nobody is sharing.
+    #[default]
+    Auto,
+    /// Show this tile big until it leaves or the user clicks it again.
+    Pinned(String),
+    /// Show everyone alike in a grid, even while a screen is shared.
+    Grid,
+}
+
 /// The call, as the UI draws it.
 #[derive(Debug, Clone)]
 pub struct CallView {
@@ -38,8 +51,8 @@ pub struct CallView {
     pub muted: bool,
     /// We hear nobody (and, while it lasts, send nothing).
     pub deafened: bool,
-    /// The tile shown big (a key from the voice view), if any.
-    pub focus: Option<String>,
+    /// Which tile is shown big (auto-focusing a screen share by default).
+    pub focus: FocusMode,
     /// The call fills the window.
     pub fullscreen: bool,
     /// Our camera is on.
@@ -79,6 +92,9 @@ pub struct Live {
     /// Where our camera's and screen's pictures go.
     feed: Arc<Mutex<horo_rtc::call::VideoFeed>>,
     screen_feed: Arc<Mutex<horo_rtc::call::VideoFeed>>,
+    /// We rang the room; play ringback until someone joins or we hang up.
+    ringing: bool,
+    ringback: Option<crate::sounds::Ringback>,
     /// The screen, while it's shared.
     #[cfg(target_os = "macos")]
     pub screen: Option<crate::screen::ScreenShare>,
@@ -111,7 +127,7 @@ impl Store {
             status: CallStatus::Connecting,
             muted: false,
             deafened: false,
-            focus: None,
+            focus: FocusMode::Auto,
             fullscreen: false,
             camera: false,
             sharing: false,
@@ -130,6 +146,7 @@ impl Store {
             async move {
                 let core = state.core().await.map_err(|e| e.to_string())?;
                 let credentials = horo_rtc::join(&core, &room, false).await.map_err(|e| e.to_string())?;
+                let ringing = credentials.ringing;
                 // A rejoin after the token expires gets a fresh one the way
                 // the first came; our membership is still there, so this
                 // rings nobody.
@@ -157,7 +174,7 @@ impl Store {
                         return Err(format!("couldn't start your microphone or speaker: {e}"));
                     }
                 };
-                Ok((call, audio, events, screens, camera, screen))
+                Ok((call, audio, events, screens, camera, screen, ringing))
             }
         });
 
@@ -166,7 +183,7 @@ impl Store {
             let Ok(Some(mut events)) = this.update(cx, |store, cx| {
                 let still_wanted = store.call.as_ref().is_some_and(|c| c.room_id == room_id);
                 match outcome {
-                    Ok((call, audio, events, screens, feed, screen_feed)) if still_wanted => {
+                    Ok((call, audio, events, screens, feed, screen_feed, ringing)) if still_wanted => {
                         let backend = Backend::global(cx);
                         let refresher = backend.spawn({
                             let (state, room) = (backend.state.clone(), room.clone());
@@ -201,6 +218,8 @@ impl Store {
                             screens,
                             feed: Arc::new(Mutex::new(feed)),
                             screen_feed: Arc::new(Mutex::new(screen_feed)),
+                            ringing,
+                            ringback: None,
                             #[cfg(target_os = "macos")]
                             camera: None,
                             #[cfg(target_os = "macos")]
@@ -210,7 +229,7 @@ impl Store {
                         Some(events)
                     }
                     // Left (or moved on) while it was connecting.
-                    Ok((call, audio, _, screens, feed, screen_feed)) => {
+                    Ok((call, audio, _, screens, feed, screen_feed, _)) => {
                         store.hang_up(
                             Live {
                                 room_id: room,
@@ -220,6 +239,8 @@ impl Store {
                                 screens,
                                 feed: Arc::new(Mutex::new(feed)),
                                 screen_feed: Arc::new(Mutex::new(screen_feed)),
+                                ringing: false,
+                                ringback: None,
                                 #[cfg(target_os = "macos")]
                                 camera: None,
                                 #[cfg(target_os = "macos")]
@@ -253,9 +274,34 @@ impl Store {
     fn on_call_event(&mut self, room_id: &str, event: CallEvent, cx: &mut Context<Self>) {
         let Some(view) = self.call.as_mut().filter(|c| c.room_id == room_id) else { return };
         match event {
-            CallEvent::Connected | CallEvent::Reconnected { .. } => view.status = CallStatus::Connected,
+            CallEvent::Connected => {
+                view.status = CallStatus::Connected;
+                // We rang them; play ringback until they pick up.
+                if view.participants.is_empty()
+                    && let Some(live) = &mut self.call_live
+                    && live.ringing
+                    && live.ringback.is_none()
+                {
+                    live.ringback = Some(crate::sounds::start_ringback(self.prefs.notification_volume, self.prefs.audio_output.clone()));
+                }
+            }
+            CallEvent::Reconnected { .. } => view.status = CallStatus::Connected,
             CallEvent::Reconnecting { .. } => view.status = CallStatus::Reconnecting,
-            CallEvent::Participants(participants) => view.participants = participants,
+            CallEvent::Participants(participants) => {
+                if !participants.is_empty()
+                    && let Some(live) = &mut self.call_live
+                {
+                    // Someone picked up (or was already there): stop ringing.
+                    live.ringing = false;
+                    live.ringback = None;
+                }
+                // Once every screen share stops, return to Auto so the next one
+                // takes focus automatically.
+                if view.focus == FocusMode::Grid && !participants.iter().any(|p| p.screen) {
+                    view.focus = FocusMode::Auto;
+                }
+                view.participants = participants;
+            }
             CallEvent::Speaking(speaking) => {
                 if view.speaking == speaking {
                     return;
@@ -380,10 +426,10 @@ impl Store {
         }
     }
 
-    /// Show `key`'s tile big, or (None) everyone alike.
-    pub fn set_call_focus(&mut self, key: Option<String>, cx: &mut Context<Self>) {
+    /// Show a tile big, or go back to everyone alike.
+    pub fn set_call_focus(&mut self, focus: FocusMode, cx: &mut Context<Self>) {
         if let Some(view) = &mut self.call {
-            view.focus = key;
+            view.focus = focus;
             cx.notify();
         }
     }
