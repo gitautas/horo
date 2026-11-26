@@ -66,12 +66,12 @@ pub struct Settings {
     /// The chosen microphone, listened to while the voice section is open.
     meter: Option<Preview<horo_rtc::voice::Meter>>,
     /// The chosen camera, likewise; and the cameras there are.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     camera: Option<Preview<crate::camera::Camera>>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     cameras: Option<Vec<DeviceInfo>>,
     /// We've asked for the camera (the system asks the user once).
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     camera_asked: bool,
 }
 
@@ -228,11 +228,11 @@ impl Settings {
             devices: None,
             meter: None,
             sensitivity,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             camera: None,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             cameras: None,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             camera_asked: false,
         };
         settings.list_devices(cx);
@@ -584,7 +584,7 @@ impl Settings {
                 cx,
             ));
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             if self.cameras.is_none() {
                 self.cameras = Some(Vec::new());
@@ -616,7 +616,7 @@ impl Settings {
 
     fn stop_previews(&mut self) {
         self.meter = None;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             self.camera = None;
         }
@@ -778,15 +778,15 @@ impl Settings {
     }
 
     /// The camera picker, with what the chosen camera sees.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn camera_card(&mut self, prefs: &Prefs, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
         let cameras = self.cameras.clone().unwrap_or_default();
         let picture: AnyElement = match crate::camera::allowed() {
             Some(false) => message(palette, "horo isn't allowed to use the camera — allow it in system settings › privacy & security › camera."),
             None => message(palette, "asking for the camera…"),
             Some(true) => match self.camera.as_mut().map(|c| &mut c.state) {
-                Some(PreviewState::Live(camera)) => match camera.mirrored_frame() {
-                    Some(frame) => gpui::surface(frame).w(zpx(PREVIEW_W)).h(zpx(PREVIEW_H)).object_fit(gpui::ObjectFit::Cover).into_any_element(),
+                Some(PreviewState::Live(camera)) => match preview_picture(camera, cx) {
+                    Some(picture) => picture,
                     None => message(palette, "waiting for the camera…"),
                 },
                 Some(PreviewState::Failed(why)) => message(palette, &format!("couldn't open the camera: {why}")),
@@ -839,7 +839,7 @@ impl Settings {
         )
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     fn camera_card(&mut self, _prefs: &Prefs, _palette: &Palette, _cx: &mut Context<Self>) -> Option<AnyElement> {
         None
     }
@@ -1041,6 +1041,21 @@ impl Settings {
 /// The camera preview's size: 16:9.
 const PREVIEW_W: f32 = 320.;
 const PREVIEW_H: f32 = 180.;
+
+/// What the camera sees, as a mirror shows it, filling the preview.
+#[cfg(target_os = "macos")]
+fn preview_picture(camera: &mut crate::camera::Camera, _cx: &mut gpui::App) -> Option<AnyElement> {
+    let frame = camera.mirrored_frame()?;
+    Some(gpui::surface(frame).w(zpx(PREVIEW_W)).h(zpx(PREVIEW_H)).object_fit(gpui::ObjectFit::Cover).into_any_element())
+}
+
+/// What the camera sees, as a mirror shows it, filling the preview.
+#[cfg(target_os = "linux")]
+fn preview_picture(camera: &mut crate::camera::Camera, cx: &mut gpui::App) -> Option<AnyElement> {
+    use gpui::StyledImage as _;
+    let image = camera.mirrored_image("settings-camera", cx)?;
+    Some(gpui::img(image).w(zpx(PREVIEW_W)).h(zpx(PREVIEW_H)).object_fit(gpui::ObjectFit::Cover).into_any_element())
+}
 
 /// A quiet line in the preview's place.
 fn message(palette: &Palette, text: &str) -> AnyElement {

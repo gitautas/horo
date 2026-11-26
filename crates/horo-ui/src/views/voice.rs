@@ -307,8 +307,8 @@ fn draw(tile: &Tile, size: Size, focused: bool, store: &Entity<Store>, palette: 
     // shown big, is shown whole.
     let fit = if matches!(size, Size::Fill) || matches!(tile.shows, Shows::Screen { .. }) { gpui::ObjectFit::Contain } else { gpui::ObjectFit::Cover };
     let picture = match &tile.shows {
-        Shows::Screen { identity } => screens.as_ref().and_then(|s| camera_picture(s, &screen_key(identity), fit)),
-        Shows::Camera { identity } => screens.as_ref().and_then(|s| camera_picture(s, identity, fit)),
+        Shows::Screen { identity } => screens.as_ref().and_then(|s| camera_picture(s, &screen_key(identity), fit, cx)),
+        Shows::Camera { identity } => screens.as_ref().and_then(|s| camera_picture(s, identity, fit, cx)),
         Shows::OwnCamera => own_camera(store, fit, cx),
         Shows::Sharing | Shows::Face => None,
     };
@@ -537,7 +537,7 @@ pub fn fullscreen(store: &Entity<Store>, palette: &Palette, window: &gpui::Windo
 /// Our camera, screen, microphone, hearing and the way out.
 fn controls(store: &Entity<Store>, call: &CallView) -> gpui::Div {
     let row = h_flex().gap_1();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let row = {
         let (share, sharing) = (store.clone(), call.sharing);
         let (camera, camera_on) = (store.clone(), call.camera);
@@ -589,7 +589,7 @@ fn controls(store: &Entity<Store>, call: &CallView) -> gpui::Div {
 /// tile: on macOS a surface over the newest picture (converted once per
 /// picture, not once per redraw).
 #[cfg(target_os = "macos")]
-fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str, fit: gpui::ObjectFit) -> Option<AnyElement> {
+fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str, fit: gpui::ObjectFit, _cx: &mut App) -> Option<AnyElement> {
     use std::{cell::RefCell, collections::HashMap};
     type Converted = (u64, objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>);
     thread_local! {
@@ -616,13 +616,35 @@ fn own_camera(store: &Entity<Store>, fit: gpui::ObjectFit, cx: &mut App) -> Opti
     Some(gpui::surface(buffer).size_full().object_fit(fit).into_any_element())
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Someone's camera (or screen, under its key) on Linux: a gpui image of
+/// the newest picture, made once per picture.
+#[cfg(target_os = "linux")]
+fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str, fit: gpui::ObjectFit, cx: &mut App) -> Option<AnyElement> {
+    use gpui::StyledImage as _;
+    let Some(picture) = screens.get(identity) else {
+        crate::picture::forget(identity, cx);
+        return None;
+    };
+    let image = crate::picture::image(identity, picture.seq, &picture.frame, false, cx)?;
+    Some(gpui::img(image).size_full().object_fit(fit).into_any_element())
+}
+
+/// What our camera sees now, on Linux.
+#[cfg(target_os = "linux")]
+fn own_camera(store: &Entity<Store>, fit: gpui::ObjectFit, cx: &mut App) -> Option<AnyElement> {
+    use gpui::StyledImage as _;
+    let (seq, frame) = store.read(cx).call_live.as_ref()?.camera.as_ref()?.latest()?;
+    let image = crate::picture::image(crate::call::OWN_CAMERA, seq, &frame, true, cx)?;
+    Some(gpui::img(image).size_full().object_fit(fit).into_any_element())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn own_camera(_store: &Entity<Store>, _fit: gpui::ObjectFit, _cx: &mut App) -> Option<AnyElement> {
     None
 }
 
-#[cfg(not(target_os = "macos"))]
-fn camera_picture(_screens: &horo_rtc::call::Screens, _identity: &str, _fit: gpui::ObjectFit) -> Option<AnyElement> {
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn camera_picture(_screens: &horo_rtc::call::Screens, _identity: &str, _fit: gpui::ObjectFit, _cx: &mut App) -> Option<AnyElement> {
     None
 }
 

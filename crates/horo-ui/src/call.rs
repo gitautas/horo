@@ -23,6 +23,10 @@ use crate::{backend::Backend, store::Store};
 /// A membership advertisement lasts four hours; refresh well inside that.
 const MEMBERSHIP_REFRESH: Duration = Duration::from_secs(60 * 60);
 
+/// What our own camera's picture is kept under, among the call's images.
+#[cfg(target_os = "linux")]
+pub const OWN_CAMERA: &str = "own-camera";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallStatus {
     Connecting,
@@ -122,10 +126,10 @@ pub struct Live {
     ringing: bool,
     ringback: Option<crate::sounds::Ringback>,
     /// The screen, while it's shared.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub screen: Option<crate::screen::ScreenShare>,
     /// Our camera, while it's on (and its picture, for our own tile).
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub camera: Option<crate::camera::Camera>,
 }
 
@@ -248,9 +252,9 @@ impl Store {
                             screen_feed: Arc::new(Mutex::new(screen_feed)),
                             ringing,
                             ringback: None,
-                            #[cfg(target_os = "macos")]
+                            #[cfg(any(target_os = "macos", target_os = "linux"))]
                             camera: None,
-                            #[cfg(target_os = "macos")]
+                            #[cfg(any(target_os = "macos", target_os = "linux"))]
                             screen: None,
                         });
                         cx.notify();
@@ -269,9 +273,9 @@ impl Store {
                                 screen_feed: Arc::new(Mutex::new(screen_feed)),
                                 ringing: false,
                                 ringback: None,
-                                #[cfg(target_os = "macos")]
+                                #[cfg(any(target_os = "macos", target_os = "linux"))]
                                 camera: None,
-                                #[cfg(target_os = "macos")]
+                                #[cfg(any(target_os = "macos", target_os = "linux"))]
                                 screen: None,
                             },
                             cx,
@@ -368,6 +372,9 @@ impl Store {
     /// Stop the engine and the devices, and withdraw our membership so
     /// other clients stop showing us in the call.
     fn hang_up(&mut self, live: Live, cx: &mut Context<Self>) {
+        // The call's pictures go with it.
+        #[cfg(target_os = "linux")]
+        crate::picture::forget_all(cx);
         let task = Self::hang_up_task(live, cx);
         cx.background_spawn(task).detach();
     }
@@ -607,6 +614,117 @@ impl Store {
                         if let Some(view) = &mut store.call {
                             view.sharing = false;
                         }
+                        store.show_banner(crate::store::Tone::Error, e, cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Turn our camera on or off in the call, on Linux: a PipeWire camera,
+    /// opened off the UI thread; each picture goes to the encoder from the
+    /// capture's own thread.
+    #[cfg(target_os = "linux")]
+    pub fn set_call_camera(&mut self, on: bool, cx: &mut Context<Self>) {
+        tracing::info!("camera {} (call live: {})", if on { "on" } else { "off" }, self.call_live.is_some());
+        let Some(live) = &mut self.call_live else { return };
+        if let Some(view) = &mut self.call {
+            view.camera = on;
+        }
+        live.call.set_camera(on);
+        if !on {
+            live.camera = None;
+            crate::picture::forget(OWN_CAMERA, cx);
+            cx.notify();
+            return;
+        }
+        let device = self.prefs.video_input.clone();
+        let feed = live.feed.clone();
+        let task = cx.background_spawn(async move {
+            let first = std::sync::atomic::AtomicBool::new(true);
+            let on_frame: crate::camera::OnFrame = Box::new(move |frame| {
+                if first.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::info!("camera: first picture ({}x{})", frame.width, frame.height);
+                }
+                if let Ok(mut feed) = feed.lock() {
+                    feed.push(frame);
+                }
+            });
+            crate::camera::Camera::start_with(device.as_deref(), Some(on_frame))
+        });
+        cx.spawn(async move |this, cx| {
+            let opened = task.await;
+            let _ = this.update(cx, |store, cx| {
+                let wanted = store.call.as_ref().is_some_and(|c| c.camera);
+                match opened {
+                    Ok(camera) if wanted => {
+                        if let Some(live) = &mut store.call_live {
+                            live.camera = Some(camera);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!("camera didn't open: {e}");
+                        if let Some(live) = &store.call_live {
+                            live.call.set_camera(false);
+                        }
+                        if let Some(view) = &mut store.call {
+                            view.camera = false;
+                        }
+                        store.show_banner(crate::store::Tone::Error, format!("couldn't open the camera: {e}"), cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Share a screen or window in the call, or stop, on Linux: the desktop
+    /// portal asks which (its picker waits on the user), off the UI thread.
+    #[cfg(target_os = "linux")]
+    pub fn set_call_screen(&mut self, on: bool, cx: &mut Context<Self>) {
+        tracing::info!("screen share {}", if on { "on" } else { "off" });
+        let Some(live) = &mut self.call_live else { return };
+        if let Some(view) = &mut self.call {
+            view.sharing = on;
+        }
+        live.call.set_screen(on);
+        if !on {
+            live.screen = None;
+            cx.notify();
+            return;
+        }
+        let feed = live.screen_feed.clone();
+        let task = cx.background_spawn(async move {
+            let on_frame: crate::screen::OnFrame = Box::new(move |frame| {
+                if let Ok(mut feed) = feed.lock() {
+                    feed.push(&frame);
+                }
+            });
+            crate::screen::ScreenShare::start(on_frame).await
+        });
+        cx.spawn(async move |this, cx| {
+            let started = task.await;
+            let _ = this.update(cx, |store, cx| {
+                let wanted = store.call.as_ref().is_some_and(|c| c.sharing);
+                match started {
+                    Ok(Some(share)) if wanted => {
+                        if let Some(live) = &mut store.call_live {
+                            live.screen = Some(share);
+                        }
+                    }
+                    // Stopped meanwhile: dropping it ends the share.
+                    Ok(Some(_)) => {}
+                    // Cancelled in the picker: nothing's shared.
+                    Ok(None) => store.set_call_screen(false, cx),
+                    Err(e) => {
+                        tracing::warn!("{e}");
+                        store.set_call_screen(false, cx);
                         store.show_banner(crate::store::Tone::Error, e, cx);
                     }
                 }

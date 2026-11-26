@@ -53,3 +53,13 @@ dispatch2 = "0.3"
 objc2-user-notifications = { version = "0.3", features = ["block2"] }
 # Screen sharing.
 objc2-screen-capture-kit = { version = "0.3", features = ["block2", "dispatch2", "objc2-core-media", "objc2-core-graphics"] }
+
+# Cameras and screen sharing on Linux go through PipeWire: cameras are its
+# video sources, and a shared screen is a stream the desktop portal's
+# ScreenCast hands over. ashpd on async-io, as gpui's Linux backend has it
+# (its tokio and async-io features can't both be on).
+[target.'cfg(target_os = "linux")'.dependencies]
+pipewire = "0.9"
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "screencast"] }
+# Closing a portal session when sharing stops, from wherever that happens.
+futures-lite = "2"

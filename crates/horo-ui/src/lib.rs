@@ -9,6 +9,9 @@ pub mod alerts;
 pub mod backend;
 #[cfg(target_os = "macos")]
 pub mod camera;
+#[cfg(target_os = "linux")]
+#[path = "camera_linux.rs"]
+pub mod camera;
 pub mod call;
 pub mod emoji;
 pub mod media;
@@ -19,7 +22,14 @@ pub mod registration;
 pub mod presence;
 pub mod rich;
 pub mod rooms;
+#[cfg(target_os = "linux")]
+pub mod picture;
+#[cfg(target_os = "linux")]
+pub mod pw_video;
 #[cfg(target_os = "macos")]
+pub mod screen;
+#[cfg(target_os = "linux")]
+#[path = "screen_linux.rs"]
 pub mod screen;
 pub mod sounds;
 pub mod store;
