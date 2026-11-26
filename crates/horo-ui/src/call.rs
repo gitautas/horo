@@ -336,6 +336,25 @@ impl Store {
         cx.notify();
     }
 
+    /// Move the call to the microphone and speaker chosen in prefs, if
+    /// they changed. One that won't open leaves the call on the old one,
+    /// and says so.
+    pub(crate) fn follow_audio_devices(&mut self, cx: &mut Context<Self>) {
+        let Some(live) = &mut self.call_live else { return };
+        let (input, output) = (self.prefs.audio_input.clone(), self.prefs.audio_output.clone());
+        let mut failed = Vec::new();
+        if let Err(e) = live.audio.set_input(input) {
+            failed.push(format!("couldn't switch microphones: {e}"));
+        }
+        if let Err(e) = live.audio.set_output(output) {
+            failed.push(format!("couldn't switch speakers: {e}"));
+        }
+        for why in failed {
+            tracing::warn!("{why}");
+            self.show_banner(crate::store::Tone::Error, why, cx);
+        }
+    }
+
     /// Move the noise gate's threshold: in the call now, and (`save`) for
     /// calls to come.
     pub fn set_input_sensitivity(&mut self, db: f32, save: bool, cx: &mut Context<Self>) {

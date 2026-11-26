@@ -1,6 +1,9 @@
 //! A call's [`Microphone`] and [`Speaker`] on real hardware.
 
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use crate::devices::{Capture, FRAME, Playback};
 use crate::audio::echo::{EchoCanceller, EchoStats, Processing};
@@ -31,10 +34,15 @@ impl Default for AudioDevices {
     }
 }
 
-/// Running audio for a call. Dropping it stops the devices.
+/// Running audio for a call. Dropping it stops the devices. Either
+/// device can be swapped while it runs ([`RunningAudio::set_input`],
+/// [`RunningAudio::set_output`]): the call carries on through the new one.
 pub struct RunningAudio {
-    _capture: Capture,
-    _playback: Playback,
+    capture: Option<Capture>,
+    playback: Option<Playback>,
+    microphone: Arc<Mutex<Microphone>>,
+    speaker: Arc<Mutex<Speaker>>,
+    devices: AudioDevices,
     echo: Option<EchoCanceller>,
 }
 
@@ -48,13 +56,79 @@ impl RunningAudio {
     pub fn echo_stats(&self) -> Option<EchoStats> {
         self.echo.as_ref().map(EchoCanceller::stats)
     }
+
+    /// Which devices are in use.
+    pub fn devices(&self) -> &AudioDevices {
+        &self.devices
+    }
+
+    /// Hear the call through another microphone (`None`, the default).
+    /// If it won't open, the old one is opened again and the error
+    /// returned.
+    pub fn set_input(&mut self, device: Option<String>) -> Result<()> {
+        if device == self.devices.input {
+            return Ok(());
+        }
+        // The old one stops first: two feeding the call at once would send
+        // every frame twice.
+        self.capture = None;
+        match capture(&self.microphone, device.as_deref()) {
+            Ok(new) => {
+                self.capture = Some(new);
+                self.devices.input = device;
+                Ok(())
+            }
+            Err(e) => {
+                self.capture = capture(&self.microphone, self.devices.input.as_deref()).ok();
+                Err(e)
+            }
+        }
+    }
+
+    /// Play the call through another output (`None`, the default). If it
+    /// won't open, the old one is opened again and the error returned.
+    pub fn set_output(&mut self, device: Option<String>) -> Result<()> {
+        if device == self.devices.output {
+            return Ok(());
+        }
+        self.playback = None;
+        match playback(&self.speaker, device.as_deref()) {
+            Ok(new) => {
+                self.playback = Some(new);
+                self.devices.output = device;
+                Ok(())
+            }
+            Err(e) => {
+                self.playback = playback(&self.speaker, self.devices.output.as_deref()).ok();
+                Err(e)
+            }
+        }
+    }
+}
+
+fn capture(microphone: &Arc<Mutex<Microphone>>, device: Option<&str>) -> Result<Capture> {
+    let microphone = microphone.clone();
+    Ok(Capture::start(device, move |frame: &[f32; FRAME]| {
+        if let Ok(mut microphone) = microphone.lock() {
+            microphone.push(frame);
+        }
+    })?)
+}
+
+fn playback(speaker: &Arc<Mutex<Speaker>>, device: Option<&str>) -> Result<Playback> {
+    let speaker = speaker.clone();
+    Ok(Playback::start(device, move |frame: &mut [f32; FRAME]| match speaker.lock() {
+        Ok(mut speaker) => speaker.pull(frame),
+        Err(_) => frame.fill(0.0),
+    })?)
 }
 
 pub fn start(mut microphone: Microphone, mut speaker: Speaker, devices: AudioDevices) -> Result<RunningAudio> {
     let echo = devices.cancel_echo.then(|| EchoCanceller::new(Processing::default(), ECHO_DELAY_HINT));
     microphone.set_echo_canceller(echo.clone());
     speaker.set_echo_canceller(echo.clone());
-    let capture = Capture::start(devices.input.as_deref(), move |frame: &[f32; FRAME]| microphone.push(frame))?;
-    let playback = Playback::start(devices.output.as_deref(), move |frame: &mut [f32; FRAME]| speaker.pull(frame))?;
-    Ok(RunningAudio { _capture: capture, _playback: playback, echo })
+    let (microphone, speaker) = (Arc::new(Mutex::new(microphone)), Arc::new(Mutex::new(speaker)));
+    let capture = capture(&microphone, devices.input.as_deref())?;
+    let playback = playback(&speaker, devices.output.as_deref())?;
+    Ok(RunningAudio { capture: Some(capture), playback: Some(playback), microphone, speaker, devices, echo })
 }

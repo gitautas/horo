@@ -974,6 +974,8 @@ impl Store {
     pub fn update_prefs(&mut self, change: impl FnOnce(&mut Prefs), cx: &mut Context<Self>) {
         change(&mut self.prefs);
         self.prefs.save(&Backend::global(cx).data_dir);
+        // A call in progress moves to newly chosen devices.
+        self.follow_audio_devices(cx);
         cx.notify();
     }
 

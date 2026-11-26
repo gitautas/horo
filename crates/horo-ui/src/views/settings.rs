@@ -681,7 +681,7 @@ impl Settings {
                     .when(inputs.is_empty(), |c| {
                         c.child(div().text_sm().text_color(palette.idle).child("no microphones found — check that horo has permission in system settings."))
                     })
-                    .when(in_call, |c| c.child(div().text_xs().text_color(palette.text_tertiary).child("a different device applies from your next call; sensitivity applies now.")))
+                    .when(in_call, |c| c.child(div().text_xs().text_color(palette.text_tertiary).child("changes apply to the call you're in straight away.")))
                     .child(
                         h_flex()
                             .child(Button::new("devices-refresh").ghost().label("look again").on_click(cx.listener(|this, _, _, cx| {
