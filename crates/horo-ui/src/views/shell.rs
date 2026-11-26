@@ -1225,7 +1225,7 @@ impl Render for Shell {
             })
             .relative()
             .children(self.settings.clone())
-            .children(voice::fullscreen(&self.store, &palette, cx))
+            .children(voice::fullscreen(&self.store, &palette, window, cx))
             .children(lightbox::lightbox(&self.store, &palette, window, cx))
             .children(voice::ringing(&self.store, &palette, cx))
             .children(self.explore.clone())

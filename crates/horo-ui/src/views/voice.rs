@@ -276,6 +276,23 @@ fn natural(shows: &Shows) -> (f32, f32) {
     }
 }
 
+/// The biggest 16:9 tiles `count` of which fit in `width` x `height` with
+/// gaps between them, over whichever number of columns does best.
+fn fit(count: usize, width: f32, height: f32) -> (f32, f32) {
+    const GAP: f32 = 8.;
+    let mut best = (0., 0.);
+    for columns in 1..=count.max(1) {
+        let rows = count.max(1).div_ceil(columns);
+        let w = (width - GAP * (columns - 1) as f32) / columns as f32;
+        let h = (height - GAP * (rows - 1) as f32) / rows as f32;
+        let w = w.min(h * 16. / 9.).floor();
+        if w > best.0 {
+            best = (w, (w * 9. / 16.).floor());
+        }
+    }
+    best
+}
+
 /// The size of the tiles beside a focused one.
 const FILM: (f32, f32) = (176., 99.);
 
@@ -393,16 +410,19 @@ fn draw(tile: &Tile, size: Size, focused: bool, store: &Entity<Store>, palette: 
 /// The call's tiles: everyone alike, or one big with the rest beside it.
 /// `full` when the call fills the window (bigger tiles, the big one
 /// taking what room there is).
-fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, full: bool, cx: &mut App) -> AnyElement {
+/// `area` is the room the tiles have, in design pixels, when the call
+/// fills the window: everyone alike then shares it in one grid.
+fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, area: Option<(f32, f32)>, cx: &mut App) -> AnyElement {
+    let full = area.is_some();
     let tiles = tiles(call, store, cx);
     let focused = call.focus.as_ref().and_then(|key| tiles.iter().position(|t| &t.key == key));
     let Some(focused) = focused else {
-        let scale = if full { 1.5 } else { 1. };
+        let fitted = area.map(|(w, h)| fit(tiles.len(), w, h));
         let drawn: Vec<AnyElement> = tiles
             .iter()
             .map(|t| {
-                let (w, h) = natural(&t.shows);
-                draw(t, Size::Fixed(w * scale, h * scale), false, store, palette, cx)
+                let size = fitted.unwrap_or_else(|| natural(&t.shows));
+                draw(t, Size::Fixed(size.0, size.1), false, store, palette, cx)
             })
             .collect();
         return h_flex()
@@ -441,7 +461,7 @@ pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut A
             .border_b_1()
             .border_color(palette.border_subtle)
             .when(connecting, |strip| strip.child(div().pb_2().text_sm().text_color(palette.text_tertiary).child("joining the call…")))
-            .child(stage(&call, store, palette, false, cx))
+            .child(stage(&call, store, palette, None, cx))
             .child(
                 // Over the big tile's corner: its click is the button's alone.
                 div().absolute().top(zpx(14.)).right(zpx(18.)).occlude().child(
@@ -459,9 +479,13 @@ pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut A
 
 /// The call filling the window: its tiles as big as they'll go, and its
 /// controls under them. Escape (or the button) puts it back.
-pub fn fullscreen(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<AnyElement> {
+pub fn fullscreen(store: &Entity<Store>, palette: &Palette, window: &gpui::Window, cx: &mut App) -> Option<AnyElement> {
     let state = store.read(cx);
     let call = state.call.clone().filter(|c| c.fullscreen && c.is_live())?;
+    // The window in design pixels, less the padding, the title row, the
+    // controls and the gaps between them.
+    let (zoom, viewport) = (crate::theme::zoom(), window.viewport_size());
+    let area = (f32::from(viewport.width) / zoom - 32., f32::from(viewport.height) / zoom - 32. - 40. - 44. - 24.);
     let room_name = state.rooms.iter().find(|r| r.id == call.room_id).map(|r| r.name.clone()).unwrap_or_else(|| call.room_id.clone());
     let back = store.clone();
     Some(
@@ -488,7 +512,7 @@ pub fn fullscreen(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Opt
                             .on_click(move |_, _, cx| back.update(cx, |s, cx| s.set_call_fullscreen(false, cx))),
                     ),
             )
-            .child(stage(&call, store, palette, true, cx))
+            .child(stage(&call, store, palette, Some(area), cx))
             .child(h_flex().justify_center().child(controls(store, &call)))
             .into_any_element(),
     )
@@ -638,4 +662,23 @@ pub fn ringing(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option
             )
             .into_any_element(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fit;
+
+    #[test]
+    fn tiles_fill_the_window() {
+        // One tile on a wide screen is as tall as the room allows.
+        assert_eq!(fit(1, 1600., 900.), (1600., 900.));
+        // Three on a 16:10 screen: two rows of two beat three across.
+        let (w, h) = fit(3, 1600., 1000.);
+        assert_eq!((w, h), (796., 447.));
+        // Three on a very wide, short area: one row.
+        assert_eq!(fit(3, 2400., 500.).0, 794.);
+        // Four on a near-square area: two by two.
+        let (w, _) = fit(4, 1000., 800.);
+        assert_eq!(w, 496.);
+    }
 }

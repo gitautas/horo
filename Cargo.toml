@@ -53,10 +53,14 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # Profiles only take effect at the workspace root.
 
 # Dependencies optimised even in dev builds. Unoptimised gpui (its layout
-# engine above all) can't hold a frame rate while scrolling; our own crates
-# stay debug, so they still build fast and debug well. No debug info for
-# dependencies either: it's most of the target directory's size, and the
-# disk is tight.
+# engine above all) can't hold a frame rate while scrolling. Our own crates
+# get a light pass too: at no optimisation the app felt laggy (the timeline,
+# video conversion, the call engine), and level 1 costs little build time
+# while keeping most of the debugging. No debug info for dependencies: it's
+# most of the target directory's size, and the disk is tight.
+[profile.dev]
+opt-level = 1
+
 [profile.dev.package."*"]
 opt-level = 2
 debug = false
