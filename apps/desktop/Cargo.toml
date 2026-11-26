@@ -20,3 +20,9 @@ gpui = { package = "gpui-pre", version = "=0.3.12" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["runtime_shaders", "font-kit"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+
+# The display servers gpui connects to on Linux. gpui-pre-platform pulls in
+# its Linux backend without default features, so without these it has no
+# Wayland or X11 client and the app starts headless: running, no window.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["wayland", "x11"] }

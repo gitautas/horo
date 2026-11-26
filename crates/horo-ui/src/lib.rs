@@ -196,6 +196,9 @@ pub fn open_window(cx: &mut App) -> anyhow::Result<()> {
             traffic_light_position: Some(gpui::point(px(14.), px(14.))),
         }),
         window_min_size: Some(size(px(720.), px(480.))),
+        // The Wayland app id / X11 WM_CLASS: what compositors match window
+        // rules and the .desktop entry (its icon, its taskbar group) against.
+        app_id: Some("lt.uwu.horo".into()),
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {
