@@ -1496,6 +1496,34 @@ impl Shell {
                 store.update(cx, |s, cx| if in_this_call { s.leave_call(cx) } else { s.join_call(room_id, cx) })
             });
 
+        let muted = room.is_muted;
+        let mute_room_id = room.id.clone();
+        let mute_button = div()
+            .id("header-mute")
+            .p(space(9.))
+            .rounded(corner(12.))
+            .cursor_pointer()
+            .bg(palette.raised)
+            .tooltip(move |window, cx| {
+                gpui_component::tooltip::Tooltip::new(if muted { "unmute notifications" } else { "mute notifications" }).build(window, cx)
+            })
+            .child(voice::icon(if muted { "icons/bell-off.svg" } else { "icons/bell.svg" }).size(zpx(17.)).text_color(if muted {
+                palette.idle
+            } else {
+                palette.text_secondary
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.on_rooms(vec![mute_room_id.clone()], cx, move |core, id| {
+                    Box::pin(async move {
+                        if muted {
+                            core_rooms::set_muted(&core, &id, false).await
+                        } else {
+                            core_rooms::set_notify_mode(&core, &id, NotifyMode::Mute).await
+                        }
+                    })
+                });
+            }));
+
         let pins_button = div()
             .id("header-pins")
             .p(space(9.))
@@ -1573,6 +1601,7 @@ impl Shell {
                     .ml_auto()
                     .gap(space(8.))
                     .child(div().mr(zpx(4.)).font_family(palette.mono_font.clone()).text_size(text(11.)).text_color(palette.text_tertiary).child(room.member_count.to_string()))
+                    .child(mute_button)
                     .child(pins_button)
                     .child(search_button)
                     .child(call_button)

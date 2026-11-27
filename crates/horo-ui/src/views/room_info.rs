@@ -424,27 +424,67 @@ impl Render for RoomInfo {
         let unverified = members.iter().flatten().filter(|m| m.verification != Verification::Verified).count();
 
         let muted = room.is_muted;
-        let mute_button = div()
-            .id("info-mute")
-            .size(zpx(28.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_full()
-            .cursor_pointer()
-            .bg(palette.card)
-            .hover(|d| d.bg(palette.raised))
-            .border_1()
-            .border_color(if muted { palette.idle } else { palette.border_subtle })
-            .tooltip(move |window, cx| {
-                gpui_component::tooltip::Tooltip::new(if muted { "unmute notifications" } else { "mute notifications" }).build(window, cx)
-            })
-            .child(icon(if muted { "icons/bell-off.svg" } else { "icons/bell.svg" }).size(zpx(13.)).text_color(if muted {
-                palette.idle
-            } else {
-                palette.text_secondary
-            }))
-            .on_click(cx.listener(move |this, _, _, cx| this.toggle_muted(!muted, cx)));
+        let action_strip = h_flex()
+            .gap(space(8.))
+            .mb(space(16.))
+            .child(
+                v_flex()
+                    .id("info-mute")
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .gap(zpx(5.))
+                    .py(space(10.))
+                    .px(space(8.))
+                    .rounded(corner(14.))
+                    .cursor_pointer()
+                    .bg(palette.card)
+                    .hover(|d| d.bg(palette.raised))
+                    .border_1()
+                    .border_color(if muted { palette.idle } else { palette.border_subtle })
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(if muted { "unmute notifications" } else { "mute notifications" }).build(window, cx)
+                    })
+                    .child(icon(if muted { "icons/bell-off.svg" } else { "icons/bell.svg" }).size(zpx(15.)).text_color(if muted {
+                        palette.idle
+                    } else {
+                        palette.text_secondary
+                    }))
+                    .child(
+                        div()
+                            .text_size(text(11.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(if muted { palette.idle } else { palette.text_secondary })
+                            .child(if muted { "muted" } else { "notifications" }),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_muted(!muted, cx))),
+            )
+            .child(
+                v_flex()
+                    .id("info-settings")
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .gap(zpx(5.))
+                    .py(space(10.))
+                    .px(space(8.))
+                    .rounded(corner(14.))
+                    .cursor_pointer()
+                    .bg(palette.card)
+                    .hover(|d| d.bg(palette.raised))
+                    .border_1()
+                    .border_color(palette.border_subtle)
+                    .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("channel settings").build(window, cx))
+                    .child(gpui_component::Icon::new(gpui_component::IconName::Settings).size(zpx(15.)).text_color(palette.text_secondary))
+                    .child(
+                        div()
+                            .text_size(text(11.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(palette.text_secondary)
+                            .child(if room.is_direct { "chat settings" } else { "settings" }),
+                    )
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(OpenRoomSettings))),
+            );
 
         let rows: Vec<AnyElement> = members.iter().flatten().take(self.shown).map(|m| self.member_row(m, &palette, cx)).collect();
         let hidden = total.saturating_sub(self.shown);
@@ -485,6 +525,7 @@ impl Render for RoomInfo {
                     .px(space(16.))
                     .pb(space(24.))
                     .child(heading_part)
+                    .child(action_strip)
                     .when(partner.is_none(), |d| {
                         d.children(room.topic.clone().map(|t| {
                             div().px(space(4.)).pb(space(16.)).text_size(text(12.5)).line_height(gpui::relative(1.55)).text_color(palette.text_secondary).child(t)
@@ -530,32 +571,6 @@ impl Render for RoomInfo {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.store.update(cx, |s, cx| s.update_prefs(|p| p.show_info_panel = false, cx));
                     })),
-            )
-            // Tucked in the corner: things you set once and forget.
-            .child(
-                h_flex()
-                    .absolute()
-                    .top(zpx(14.))
-                    .right(zpx(14.))
-                    .gap(space(6.))
-                    .child(mute_button)
-                    .child(
-                        div()
-                            .id("info-settings")
-                            .size(zpx(28.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .cursor_pointer()
-                            .bg(palette.card)
-                            .hover(|d| d.bg(palette.raised))
-                            .border_1()
-                            .border_color(palette.border_subtle)
-                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("room settings").build(window, cx))
-                            .child(icon("icons/pencil.svg").size(zpx(13.)).text_color(palette.text_secondary))
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(OpenRoomSettings))),
-                    ),
             )
             .into_any_element()
     }
