@@ -98,6 +98,10 @@ pub struct SpaceSettings {
     new_role_color: u32,
     saving_roles: bool,
     /// Access tab state.
+    alias_input: Entity<InputState>,
+    link_base_input: Entity<InputState>,
+    saving_alias: bool,
+    saving_link_base: bool,
     copied_link: bool,
     /// Feedback.
     error: Option<SharedString>,
@@ -123,6 +127,8 @@ impl SpaceSettings {
             cx.new(|cx| InputState::new(window, cx).placeholder("✨ art")),
         ];
         let new_role_name = cx.new(|cx| InputState::new(window, cx).placeholder("new role name (e.g. Gamers)"));
+        let alias_input = cx.new(|cx| InputState::new(window, cx).placeholder("my-space"));
+        let link_base_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://matrix.to/#/ (or your domain)"));
 
         cx.subscribe(&name, |this, _, e: &InputEvent, cx| {
             if matches!(e, InputEvent::Change) {
@@ -155,6 +161,8 @@ impl SpaceSettings {
             .detach();
         }
         cx.subscribe(&new_role_name, |_, _, _: &InputEvent, cx| cx.notify()).detach();
+        cx.subscribe(&alias_input, |_, _, _: &InputEvent, cx| cx.notify()).detach();
+        cx.subscribe(&link_base_input, |_, _, _: &InputEvent, cx| cx.notify()).detach();
         cx.observe(&store, |_, _, cx| cx.notify()).detach();
 
         store.update(cx, |s, cx| {
@@ -186,6 +194,10 @@ impl SpaceSettings {
             new_role_name,
             new_role_color: ROLE_COLORS[0],
             saving_roles: false,
+            alias_input,
+            link_base_input,
+            saving_alias: false,
+            saving_link_base: false,
             copied_link: false,
             error: None,
         };
@@ -222,6 +234,15 @@ impl SpaceSettings {
                         input.update(cx, |s, cx| s.set_value(val, window, cx));
                     }
                     this.banner = details.profile.banner.clone();
+                    let alias_local = details
+                        .canonical_alias
+                        .as_deref()
+                        .and_then(|a| a.strip_prefix('#'))
+                        .and_then(|a| a.split(':').next())
+                        .unwrap_or("")
+                        .to_owned();
+                    this.alias_input.update(cx, |s, cx| s.set_value(alias_local, window, cx));
+                    this.link_base_input.update(cx, |s, cx| s.set_value(details.profile.link_base.clone().unwrap_or_default(), window, cx));
                     this.space_name = details.name.clone();
                     this.profile_dirty = false;
                     this.details = Some(details);
@@ -271,6 +292,7 @@ impl SpaceSettings {
             banner: self.banner.clone(),
             tag: (!tag_raw.is_empty()).then_some(tag_raw),
             traits: self.draft_traits(cx),
+            link_base: details.profile.link_base.clone(),
         };
         let profile_change = (details.can_edit_profile && profile != details.profile).then_some(profile.clone());
 
@@ -411,6 +433,84 @@ impl SpaceSettings {
                 } else {
                     this.store.update(cx, |s, cx| s.refresh_spaces_now(cx));
                     this.load_all(window, cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn save_alias(&mut self, cx: &mut Context<Self>) {
+        if self.saving_alias {
+            return;
+        }
+        let Ok(space) = OwnedRoomId::try_from(self.space_id.as_str()) else { return };
+        let localpart = self.alias_input.read(cx).value().trim().to_owned();
+        self.saving_alias = true;
+        self.error = None;
+        cx.notify();
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let state = backend.state.clone();
+            async move { spaces::set_canonical_alias(&*state.core().await?, &space, &localpart).await }
+        });
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.saving_alias = false;
+                match outcome {
+                    Ok(Ok(alias)) => {
+                        if let Some(d) = this.details.as_mut() {
+                            d.canonical_alias = (!alias.is_empty()).then_some(alias);
+                        }
+                        this.copied_link = false;
+                    }
+                    Ok(Err(e)) => this.error = Some(format!("couldn't update alias: {e}").into()),
+                    Err(e) => this.error = Some(format!("couldn't update alias: {e}").into()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn save_link_base(&mut self, cx: &mut Context<Self>) {
+        if self.saving_link_base {
+            return;
+        }
+        let Some(details) = self.details.clone() else { return };
+        let Ok(space) = OwnedRoomId::try_from(self.space_id.as_str()) else { return };
+        let raw = self.link_base_input.read(cx).value().trim().to_owned();
+        let mut profile = details.profile.clone();
+        profile.link_base = (!raw.is_empty()).then_some(raw);
+
+        self.saving_link_base = true;
+        self.error = None;
+        cx.notify();
+        let space_id = self.space_id.clone();
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let state = backend.state.clone();
+            let p = profile.clone();
+            async move { spaces::save_profile(&*state.core().await?, &space, &p).await }
+        });
+        cx.spawn(async move |this, cx| {
+            let error = match task.await {
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(e.to_string()),
+                Err(e) => Some(e.to_string()),
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.saving_link_base = false;
+                match error {
+                    None => {
+                        if let Some(d) = this.details.as_mut() {
+                            d.profile = profile.clone();
+                        }
+                        this.copied_link = false;
+                        this.store.update(cx, |s, cx| s.set_space_profile_cached(space_id, profile, cx));
+                    }
+                    Some(e) => this.error = Some(format!("couldn't save link domain: {e}").into()),
                 }
                 cx.notify();
             });
@@ -1149,9 +1249,13 @@ impl SpaceSettings {
     fn access_pane(&self, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let details = self.details.clone();
         let can_edit = details.as_ref().is_some_and(|d| d.can_edit_access);
+        let can_edit_alias = details.as_ref().is_some_and(|d| d.can_edit_alias);
+        let can_edit_profile = details.as_ref().is_some_and(|d| d.can_edit_profile);
         let current = details.as_ref().map(|d| d.join_rule.as_str()).unwrap_or("invite");
+        let domain = details.as_ref().map(|d| d.homeserver_domain.clone()).unwrap_or_default();
         let address = details.as_ref().and_then(|d| d.canonical_alias.clone()).unwrap_or_else(|| self.space_id.clone());
-        let link = format!("https://matrix.to/#/{address}");
+        let live_base = self.link_base_input.read(cx).value().trim().to_owned();
+        let link = spaces::space_invite_url((!live_base.is_empty()).then_some(live_base.as_str()), &address);
         let copy_link = link.clone();
 
         let rules = [
@@ -1166,7 +1270,7 @@ impl SpaceSettings {
                 v_flex()
                     .gap(zpx(4.))
                     .child(div().font_family(palette.heading_font.clone()).font_weight(FontWeight::EXTRA_BOLD).text_size(heading(17.)).child("access & invites"))
-                    .child(div().text_size(text(12.)).text_color(palette.text_tertiary).child("control who can join this matrix space.")),
+                    .child(div().text_size(text(12.)).text_color(palette.text_tertiary).child("control who can join this matrix space and customize its shareable address.")),
             )
             .child(
                 v_flex().gap(space(8.)).child(section_label("join rule (m.room.join_rules)", palette)).children(rules.into_iter().enumerate().map(|(ix, (id, title, desc))| {
@@ -1184,6 +1288,55 @@ impl SpaceSettings {
                         .child(div().text_size(text(11.5)).text_color(palette.text_secondary).child(desc))
                         .when(can_edit, |d| d.on_click(cx.listener(move |this, _, _, cx| this.set_join_rule(id, cx))))
                 })),
+            )
+            .child(
+                v_flex()
+                    .gap(zpx(6.))
+                    .child(section_label("space address (m.room.canonical_alias)", palette))
+                    .child(
+                        h_flex()
+                            .gap(space(8.))
+                            .items_center()
+                            .child(
+                                div().flex_1().child(
+                                    well(palette)
+                                        .child(div().flex_none().font_family(palette.mono_font.clone()).text_color(palette.text_tertiary).child("#"))
+                                        .child(div().flex_1().child(Input::new(&self.alias_input).appearance(false).disabled(!can_edit_alias)))
+                                        .when(!domain.is_empty(), |w| {
+                                            w.child(div().flex_none().font_family(palette.mono_font.clone()).text_size(text(11.5)).text_color(palette.text_tertiary).child(format!(":{domain}")))
+                                        }),
+                                ),
+                            )
+                            .when(can_edit_alias, |row| {
+                                row.child(
+                                    accent_button("save-space-alias", if self.saving_alias { "saving…" } else { "save alias" }, !self.saving_alias, true, palette)
+                                        .on_click(cx.listener(|this, _, _, cx| this.save_alias(cx))),
+                                )
+                            }),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .gap(zpx(6.))
+                    .child(section_label("custom invite link domain", palette))
+                    .child(
+                        h_flex()
+                            .gap(space(8.))
+                            .items_center()
+                            .child(div().flex_1().child(well(palette).child(div().flex_1().child(Input::new(&self.link_base_input).appearance(false).disabled(!can_edit_profile)))))
+                            .when(can_edit_profile, |row| {
+                                row.child(
+                                    accent_button("save-link-base", if self.saving_link_base { "saving…" } else { "save" }, !self.saving_link_base, true, palette)
+                                        .on_click(cx.listener(|this, _, _, cx| this.save_link_base(cx))),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_size(text(11.))
+                            .text_color(palette.text_tertiary)
+                            .child(format!("leave blank for matrix.to, or enter e.g. https://{}/#/", if domain.is_empty() { "your.homeserver" } else { &domain })),
+                    ),
             )
             .child(
                 v_flex()

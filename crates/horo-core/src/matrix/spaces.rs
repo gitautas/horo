@@ -6,11 +6,14 @@ use matrix_sdk::{
     RoomMemberships,
     deserialized_responses::RawAnySyncOrStrippedState,
     ruma::{
-        Int, RoomId, UserId,
+        Int, OwnedRoomAliasId, RoomId, UserId,
         events::{
             StateEventType,
-            room::join_rules::{JoinRule, RoomJoinRulesEventContent},
-            room::power_levels::{PowerLevelAction, UserPowerLevel},
+            room::{
+                canonical_alias::RoomCanonicalAliasEventContent,
+                join_rules::{JoinRule, RoomJoinRulesEventContent},
+                power_levels::{PowerLevelAction, UserPowerLevel},
+            },
         },
     },
 };
@@ -43,6 +46,21 @@ pub struct SpaceProfileDto {
     /// Up to 5 short personality/interest traits.
     #[serde(default)]
     pub traits: Vec<SpaceTrait>,
+    /// Optional custom invite link base URL (e.g. `https://m.uwu.lt/#/`),
+    /// replacing the default `https://matrix.to/#/`.
+    #[serde(default)]
+    pub link_base: Option<String>,
+}
+
+/// Build the shareable invite URL for a Space using a custom base URL if set,
+/// otherwise falling back to `https://matrix.to/#/`.
+pub fn space_invite_url(link_base: Option<&str>, address: &str) -> String {
+    let base = link_base.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("https://matrix.to/#/");
+    if base.ends_with('/') || base.ends_with('#') || base.ends_with('=') {
+        format!("{base}{address}")
+    } else {
+        format!("{base}/{address}")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +70,7 @@ pub struct SpaceDetailsDto {
     pub topic: String,
     pub avatar_url: Option<String>,
     pub canonical_alias: Option<String>,
+    pub homeserver_domain: String,
     pub member_count: u64,
     pub join_rule: String,
     pub profile: SpaceProfileDto,
@@ -60,6 +79,7 @@ pub struct SpaceDetailsDto {
     pub can_edit_avatar: bool,
     pub can_edit_profile: bool,
     pub can_edit_access: bool,
+    pub can_edit_alias: bool,
     pub can_manage_roles: bool,
     pub can_kick: bool,
     pub can_ban: bool,
@@ -115,6 +135,7 @@ pub async fn details(core: &MatrixCore, space_id: &RoomId) -> Result<SpaceDetail
         can_edit_avatar,
         can_edit_profile,
         can_edit_access,
+        can_edit_alias,
         can_manage_roles,
         can_kick,
         can_ban,
@@ -126,12 +147,13 @@ pub async fn details(core: &MatrixCore, space_id: &RoomId) -> Result<SpaceDetail
             pl.user_can_send_state(&own, StateEventType::RoomAvatar),
             pl.user_can_send_state(&own, StateEventType::from(PROFILE_EVENT_TYPE)),
             pl.user_can_send_state(&own, StateEventType::RoomJoinRules),
+            pl.user_can_send_state(&own, StateEventType::RoomCanonicalAlias),
             pl.user_can_send_state(&own, StateEventType::from(roles::EVENT_TYPE)),
             pl.user_can_do(&own, PowerLevelAction::Kick),
             pl.user_can_do(&own, PowerLevelAction::Ban),
             pl.user_can_send_state(&own, StateEventType::RoomPowerLevels),
         ),
-        Err(_) => (false, false, false, false, false, false, false, false, false),
+        Err(_) => (false, false, false, false, false, false, false, false, false, false),
     };
 
     Ok(SpaceDetailsDto {
@@ -140,6 +162,7 @@ pub async fn details(core: &MatrixCore, space_id: &RoomId) -> Result<SpaceDetail
         topic,
         avatar_url,
         canonical_alias,
+        homeserver_domain: own.server_name().to_string(),
         member_count,
         join_rule,
         profile,
@@ -148,6 +171,7 @@ pub async fn details(core: &MatrixCore, space_id: &RoomId) -> Result<SpaceDetail
         can_edit_avatar,
         can_edit_profile,
         can_edit_access,
+        can_edit_alias,
         can_manage_roles,
         can_kick,
         can_ban,
@@ -168,6 +192,44 @@ pub async fn remove_avatar(core: &MatrixCore, space_id: &RoomId) -> Result<()> {
     let room = core.room(&space_id.to_owned())?;
     room.remove_avatar().await?;
     Ok(())
+}
+
+/// Set (or create) the Space's canonical alias `#<localpart>:<homeserver>`.
+pub async fn set_canonical_alias(core: &MatrixCore, space_id: &RoomId, localpart: &str) -> Result<String> {
+    let room = core.room(&space_id.to_owned())?;
+    let own = core.own_user_id()?;
+    let clean = localpart.trim().trim_start_matches('#');
+    if clean.is_empty() {
+        let mut content = RoomCanonicalAliasEventContent::new();
+        content.alt_aliases = room.alt_aliases();
+        room.send_state_event(content).await?;
+        return Ok(String::new());
+    }
+    let full = if clean.contains(':') {
+        format!("#{clean}")
+    } else {
+        format!("#{clean}:{}", own.server_name())
+    };
+    let alias = OwnedRoomAliasId::try_from(full.as_str())
+        .map_err(|e| Error::Other(format!("invalid room alias '{full}': {e}")))?;
+
+    // Register the alias on the homeserver unless it already resolves to this space.
+    if let Err(err) = core.client.create_room_alias(&alias, space_id).await {
+        let already_ours = core
+            .client
+            .resolve_room_alias(&alias)
+            .await
+            .is_ok_and(|res| res.room_id == space_id);
+        if !already_ours {
+            return Err(Error::Other(err.to_string()));
+        }
+    }
+
+    let mut content = RoomCanonicalAliasEventContent::new();
+    content.alias = Some(alias.clone());
+    content.alt_aliases = room.alt_aliases();
+    room.send_state_event(content).await?;
+    Ok(alias.to_string())
 }
 
 /// Set the Space's `m.room.join_rules` ("invite", "knock", or "public").
@@ -243,9 +305,18 @@ mod tests {
             banner: Some("pink".into()),
             tag: Some("UWU".into()),
             traits: vec![SpaceTrait { emoji: "🎮".into(), label: "gaming".into() }],
+            link_base: Some("https://m.uwu.lt/#/".into()),
         };
         let json = serde_json::to_value(&profile).unwrap();
         let back: SpaceProfileDto = serde_json::from_value(json).unwrap();
         assert_eq!(back, profile);
+    }
+
+    #[test]
+    fn builds_space_invite_url_with_default_or_custom_domain() {
+        assert_eq!(space_invite_url(None, "#uwu:m.uwu.lt"), "https://matrix.to/#/#uwu:m.uwu.lt");
+        assert_eq!(space_invite_url(Some(""), "#uwu:m.uwu.lt"), "https://matrix.to/#/#uwu:m.uwu.lt");
+        assert_eq!(space_invite_url(Some("https://m.uwu.lt/#/"), "#uwu:m.uwu.lt"), "https://m.uwu.lt/#/#uwu:m.uwu.lt");
+        assert_eq!(space_invite_url(Some("https://uwu.lt/join"), "#uwu:m.uwu.lt"), "https://uwu.lt/join/#uwu:m.uwu.lt");
     }
 }
