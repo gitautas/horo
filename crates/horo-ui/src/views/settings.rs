@@ -1,21 +1,24 @@
-//! Settings over the whole window, as SettingsView.tsx lays them out: the
-//! sections down the left, one at a time on the right, Escape to leave.
+//! Settings in a floating modal window over the app: sections with icons down
+//! the left sidebar, one section at a time in the scrollable right pane, and
+//! Escape / backdrop click / close button to dismiss.
 //!
 //! Account (who you are, your profile, signing out), security (devices and
 //! key backup), notifications (banners, sounds, volume) and about. Voice,
 //! emotes and appearance join as the app gains the things they set.
 
 use gpui::{
-    AnyElement, AppContext, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
-    PathPromptOptions, Render, SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div, img, prelude::FluentBuilder,
+    AnyElement, AppContext, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, KeyDownEvent, MouseDownEvent,
+    ParentElement, PathPromptOptions, Render, SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div, img,
+    prelude::FluentBuilder,
 };
 use gpui_component::{
-    Disableable, Sizable,
+    Disableable, Icon, IconName, Sizable,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
     slider::{Slider, SliderEvent, SliderState},
     switch::Switch,
+    tooltip::Tooltip,
     v_flex,
 };
 use horo_rtc::devices::DeviceInfo;
@@ -24,7 +27,7 @@ use horo_core::{
     matrix::profile::{self, ProfileDto, ProfileUpdate},
 };
 
-use crate::theme::zpx;
+use crate::theme::{corner, space, text, zpx};
 use crate::{
     backend::Backend,
     media::Media,
@@ -32,7 +35,7 @@ use crate::{
     sounds::{self, CALL_SOUNDS, Kind, MESSAGE_SOUNDS, NONE},
     store::{Phase, SettingsSection, Store},
     theme::Palette,
-    views::{avatar::avatar, pack_settings::PackSettings, security::Security},
+    views::{avatar::avatar, pack_settings::PackSettings, security::Security, verification::scrim, voice},
 };
 
 pub struct Settings {
@@ -1070,32 +1073,76 @@ impl Render for Settings {
             self.packs = Some(cx.new(|cx| PackSettings::new(store, window, cx)));
         }
 
+        let nav_items = v_flex().px(space(10.)).gap(zpx(2.)).children(SettingsSection::ALL.into_iter().map(|entry| {
+            let selected = entry == section;
+            h_flex()
+                .id(SharedString::from(format!("settings-{}", entry.label())))
+                .items_center()
+                .gap(space(10.))
+                .px(space(10.))
+                .py(space(7.))
+                .rounded(corner(10.))
+                .cursor_pointer()
+                .text_size(text(13.5))
+                .font_weight(if selected { FontWeight::MEDIUM } else { FontWeight::NORMAL })
+                .text_color(if selected { palette.text } else { palette.text_secondary })
+                .when(selected, |d| d.bg(palette.raised))
+                .hover(|d| d.bg(if selected { palette.raised } else { Hsla { a: 0.55, ..palette.raised } }).text_color(palette.text))
+                .child(section_icon(entry).size(zpx(15.)).flex_none().text_color(if selected { palette.accent } else { palette.text_tertiary }))
+                .child(div().truncate().child(entry.label()))
+                .on_click(cx.listener(move |this, _, _, cx| this.store.update(cx, |s, cx| s.show_settings(Some(entry), cx))))
+        }));
+
+        let footer = session.as_ref().map(|info| {
+            let name = info.display_name.clone().unwrap_or_else(|| info.user_id.clone());
+            let face = avatar(&info.user_id, &name, info.avatar_url.as_deref(), zpx(28.), cx);
+            div().p(space(10.)).border_t_1().border_color(palette.border_subtle).child(
+                h_flex()
+                    .id("settings-account-footer")
+                    .items_center()
+                    .gap(space(10.))
+                    .px(space(8.))
+                    .py(space(6.))
+                    .rounded(corner(10.))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(Hsla { a: 0.55, ..palette.raised }))
+                    .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.show_settings(Some(SettingsSection::Account), cx))))
+                    .child(face)
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().truncate().text_size(text(12.5)).font_weight(FontWeight::MEDIUM).text_color(palette.text).child(name))
+                            .child(div().truncate().text_xs().text_color(palette.text_tertiary).child(info.user_id.clone())),
+                    ),
+            )
+        });
+
         let nav = v_flex()
-            .w(zpx(232.))
+            .w(zpx(220.))
             .flex_none()
             .h_full()
-            .pt(zpx(52.))
-            .px_3()
-            .gap(zpx(3.))
             .bg(palette.card)
             .border_r_1()
             .border_color(palette.border_subtle)
-            .children(SettingsSection::ALL.into_iter().map(|entry| {
-                let selected = entry == section;
-                div()
-                    .id(SharedString::from(format!("settings-{}", entry.label())))
-                    .px_3()
-                    .py_2()
-                    .rounded(zpx(12.))
-                    .cursor_pointer()
-                    .font_family(palette.heading_font.clone())
-                    .text_size(zpx(17.))
-                    .text_color(if selected { palette.text } else { palette.text_secondary })
-                    .when(selected, |d| d.bg(palette.raised))
-                    .hover(|d| d.bg(palette.raised))
-                    .child(entry.label())
-                    .on_click(cx.listener(move |this, _, _, cx| this.store.update(cx, |s, cx| s.show_settings(Some(entry), cx))))
-            }));
+            .justify_between()
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .px(space(16.))
+                            .pt(space(18.))
+                            .pb(space(10.))
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(palette.text_tertiary)
+                            .child("settings"),
+                    )
+                    .child(nav_items),
+            )
+            .children(footer);
 
         let body: AnyElement = match (section, &session) {
             (SettingsSection::Account, Some(session)) => self.account(session, &palette, cx),
@@ -1117,38 +1164,81 @@ impl Render for Settings {
             _ => div().into_any_element(),
         };
 
-        h_flex()
-            .id("settings")
-            .track_focus(&self.focus)
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" {
-                    this.close(cx);
-                    cx.stop_propagation();
-                }
-            }))
-            .occlude()
+        let close_button = div()
+            .id("settings-close")
             .absolute()
-            .inset_0()
-            .bg(palette.app)
-            .text_color(palette.text)
-            .child(nav)
-            .child(
-                div()
-                    .id("settings-content")
-                    .flex_1()
-                    .h_full()
-                    .overflow_y_scroll()
-                    .pt(zpx(52.))
-                    .pb_10()
-                    .child(div().max_w(zpx(620.)).mx_auto().px_10().child(body)),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(zpx(40.))
-                    .right(zpx(32.))
-                    .child(Button::new("settings-close").ghost().label("close (esc)").on_click(cx.listener(|this, _, _, cx| this.close(cx)))),
-            )
+            .top(space(16.))
+            .right(space(16.))
+            .size(zpx(28.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .bg(palette.card)
+            .border_1()
+            .border_color(palette.border_subtle)
+            .cursor_pointer()
+            .text_size(text(12.))
+            .text_color(palette.text_tertiary)
+            .hover(|d| d.bg(palette.raised).border_color(palette.border).text_color(palette.text))
+            .tooltip(|window, cx| Tooltip::new("close (esc)").build(window, cx))
+            .child("✕")
+            .on_click(cx.listener(|this, _, _, cx| this.close(cx)));
+
+        scrim(&palette).p(space(28.)).child(
+            h_flex()
+                .id("settings")
+                .track_focus(&self.focus)
+                .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.close(cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| this.close(cx)))
+                .w(zpx(880.))
+                .max_w_full()
+                .h(zpx(660.))
+                .max_h(gpui::relative(0.86))
+                .rounded(corner(20.))
+                .bg(palette.app)
+                .border_1()
+                .border_color(palette.border)
+                .shadow_lg()
+                .overflow_hidden()
+                .text_color(palette.text)
+                .child(nav)
+                .child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .child(
+                            div()
+                                .id("settings-content")
+                                .size_full()
+                                .overflow_y_scroll()
+                                .px(space(28.))
+                                .pt(space(24.))
+                                .pb(space(28.))
+                                .child(div().max_w(zpx(580.)).mx_auto().child(body)),
+                        )
+                        .child(close_button),
+                ),
+        )
+    }
+}
+
+fn section_icon(section: SettingsSection) -> Icon {
+    match section {
+        SettingsSection::Account => Icon::new(IconName::User),
+        SettingsSection::Security => voice::icon("icons/shield-check.svg"),
+        SettingsSection::Voice => voice::icon("icons/headphones.svg"),
+        SettingsSection::Notifications => Icon::new(IconName::Bell),
+        SettingsSection::Packs => voice::icon("icons/smile.svg"),
+        SettingsSection::Appearance => voice::icon("icons/sparkles.svg"),
+        SettingsSection::About => Icon::new(IconName::Info),
     }
 }
 
