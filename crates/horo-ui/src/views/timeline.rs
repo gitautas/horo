@@ -1290,7 +1290,7 @@ impl Timeline {
             .rounded(corner(10.))
             .when(!has_poster, |d| d.bg(palette.card).border_1().border_color(palette.border_subtle))
             .cursor_pointer()
-            .children(poster.map(|poster| img(poster).absolute().inset_0().size_full().rounded(corner(10.)).object_fit(gpui::ObjectFit::Cover)))
+            .children(poster.map(|poster| img(poster).absolute().inset_0().size_full().aspect_ratio(w / h).rounded(corner(10.)).object_fit(gpui::ObjectFit::Cover)))
             .child(
                 div()
                     .size(zpx(48.))

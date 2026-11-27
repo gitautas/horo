@@ -1731,8 +1731,9 @@ fn space_tile(
             // Rounded itself, inside the border (2 px open, 1 otherwise):
             // gpui clips children to a rectangle.
             Some(image) => {
-                let inner = corner(16.) - zpx(if active { 2. } else { 1. });
-                d.child(img(image).size_full().rounded(inner).object_fit(gpui::ObjectFit::Cover))
+                let border = zpx(if active { 2. } else { 1. });
+                // Square, so a portrait photo can't grow: see `avatar`.
+                d.child(img(image).size(zpx(46.) - border * 2.).aspect_square().rounded(corner(16.) - border).object_fit(gpui::ObjectFit::Cover))
             }
             None => d.child(label_text.to_uppercase()),
         });

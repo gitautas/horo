@@ -78,8 +78,11 @@ pub fn avatar(id: &str, name: &str, mxc: Option<&str>, size: Pixels, cx: &mut Ap
             .border_color(palette.app)
             .bg(palette.card)
             // gpui clips children to a rectangle, whatever the corners: the
-            // picture rounds itself, inside the border.
-            .child(img(image).size_full().rounded(corner(size) - gpui::px(2.)).object_fit(gpui::ObjectFit::Cover))
+            // picture rounds itself, inside the border. Square, too: an img
+            // takes the photo's aspect ratio, and taffy makes a box at least
+            // width ÷ ratio tall whatever its height, so a portrait photo
+            // grew out of the frame. Cover still crops by the photo's shape.
+            .child(img(image).size(size - gpui::px(4.)).aspect_square().rounded(corner(size) - gpui::px(2.)).object_fit(gpui::ObjectFit::Cover))
             .into_any_element(),
         None => monogram(id, name, size, palette.text_on_accent, palette.app).into_any_element(),
     }

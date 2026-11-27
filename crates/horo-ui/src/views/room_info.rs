@@ -230,7 +230,8 @@ impl RoomInfo {
             .and_then(|p| p.cover_url.clone())
             .and_then(|mxc| Media::image(&mxc, Some(((WIDTH * 2.) as u32, (COVER * 2.) as u32)), cx));
         let cover = div().h(zpx(COVER)).w_full().bg(palette.raised).map(|d| match cover {
-            Some(image) => d.child(img(image).size_full().object_fit(gpui::ObjectFit::Cover)),
+            // The frame's shape, not the photo's: see `avatar`.
+            Some(image) => d.child(img(image).size_full().aspect_ratio(WIDTH / COVER).object_fit(gpui::ObjectFit::Cover)),
             None => d,
         });
         let (shown, line) = {

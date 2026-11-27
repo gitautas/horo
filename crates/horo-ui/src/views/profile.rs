@@ -146,7 +146,8 @@ impl ProfileCard {
         // rectangle, so the cover rounds itself.
         let top = zpx(CORNER - 1.);
         let cover = div().h(zpx(COVER)).w_full().rounded_t(top).bg(palette.raised).map(|d| match cover {
-            Some(image) => d.child(img(image).size_full().rounded_t(top).object_fit(gpui::ObjectFit::Cover)),
+            // The frame's shape, not the photo's: see `avatar`.
+            Some(image) => d.child(img(image).size_full().aspect_ratio(WIDTH / COVER).rounded_t(top).object_fit(gpui::ObjectFit::Cover)),
             None => d,
         });
 

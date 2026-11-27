@@ -754,7 +754,8 @@ impl Composer {
             let face: AnyElement = match &staged.preview {
                 // Rounded itself, inside the tile's border: gpui clips
                 // children to a rectangle.
-                Some(source) => img(source.clone()).size_full().rounded(corner(14.) - zpx(1.)).object_fit(gpui::ObjectFit::Cover).into_any_element(),
+                // Square, so a portrait photo can't grow: see `avatar`.
+                Some(source) => img(source.clone()).size(zpx(STAGED_SIZE - 2.)).aspect_square().rounded(corner(14.) - zpx(1.)).object_fit(gpui::ObjectFit::Cover).into_any_element(),
                 None => v_flex()
                     .size_full()
                     .p(zpx(6.))
