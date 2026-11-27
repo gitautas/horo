@@ -136,8 +136,13 @@ impl RoomSettings {
         let Ok(room) = OwnedRoomId::try_from(self.room_id.as_str()) else { return };
         let backend = Backend::global(cx);
         let task = backend.run({
-            let state = backend.state.clone();
-            async move { rooms::set_notify_mode(&*state.core().await?, &room, mode).await }
+            let (host, state) = (backend.host.clone(), backend.state.clone());
+            async move {
+                let core = state.core().await?;
+                rooms::set_notify_mode(&core, &room, mode).await?;
+                rooms::emit_room_refresh(&host, &core, &room).await;
+                Ok::<_, horo_core::Error>(())
+            }
         });
         cx.spawn(async move |this, cx| {
             let error = match task.await {
