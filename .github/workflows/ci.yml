@@ -13,25 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  frontend:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: lts/*
-          cache: npm
-
-      - run: npm ci
-
-      # Exactly what `tauri build` runs as beforeBuildCommand (tsc -b && vite build),
-      # so a tag build can't be broken by a frontend error CI never saw.
-      - run: npm run build
-
-      - run: npm test
-
   # The voice engine on the other two desktops: it has to build and pass its
   # unit tests there (cpal on WASAPI and CoreAudio, libopus and aws-lc built
   # with each platform's toolchain, sonora, str0m). The tests that need a
@@ -55,16 +36,16 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: '. -> src-tauri/target'
           key: ci-voice-${{ matrix.os }}
 
-      # libvpx's Windows build: configure and `make dist` under Git's bash,
-      # nasm for its assembly, then MSBuild (crates/horo-rtc/build.rs).
+      # libvpx's Windows build: configure and `make dist` under MSYS2's bash +
+      # make, nasm for its assembly, then MSBuild (crates/horo-rtc/build.rs).
       - name: Install libvpx build tools (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install nasm make -y --no-progress
+          choco install nasm -y --no-progress
           echo "C:\Program Files\NASM" >> $env:GITHUB_PATH
+          C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed make diffutils perl
 
       - run: cargo clippy -p horo-rtc --all-targets
 
@@ -73,11 +54,6 @@ jobs:
       # The CLI as a user would build it.
       - run: cargo build -p horo-rtc --bin horo-call
 
-  # The Linux WebView needs code no other platform compiles (see
-  # `src-tauri/src/webrtc.rs`), and until this job existed the only thing that
-  # ever built it was a release tag — the worst place to find a typo. Clippy
-  # type-checks the whole crate, so it catches that and reads the code too;
-  # warnings are left non-fatal on purpose, since the crate has some already.
   rust:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
@@ -91,10 +67,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
-            libdbus-1-dev pkg-config patchelf xdg-utils \
-            libasound2-dev nasm
+            build-essential pkg-config nasm cmake file \
+            libasound2-dev libdbus-1-dev libssl-dev libzstd-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-xcb-dev libxcb1-dev libvulkan-dev \
+            libfontconfig1-dev libfreetype6-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -102,12 +79,7 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: '. -> src-tauri/target'
           key: ci-linux
-
-      # `tauri::generate_context!` reads ../dist, which no frontend build has
-      # produced here. An empty index.html is all it asks for.
-      - run: mkdir -p dist && touch dist/index.html
 
       - run: cargo clippy --workspace --all-targets
 
@@ -144,16 +116,3 @@ jobs:
         run: |
           docker logs horo-test-livekit 2>&1 | tail -100
           docker logs horo-test-livekit-turn 2>&1 | tail -100
-
-      # src/lib/bindings is generated from the Rust wire types and committed, so
-      # the frontend build never needs cargo. That only holds while nobody
-      # forgets `npm run bindings` after changing one; regenerate here and fail
-      # on any difference, including a file that should no longer exist.
-      - name: Check TypeScript bindings are current
-        run: |
-          node scripts/bindings.mjs
-          if [ -n "$(git status --porcelain -- src/lib/bindings)" ]; then
-            git status --short -- src/lib/bindings
-            echo "::error::src/lib/bindings is out of date — run \`npm run bindings\` and commit the result"
-            exit 1
-          fi

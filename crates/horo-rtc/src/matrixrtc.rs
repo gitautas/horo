@@ -35,7 +35,6 @@ use matrix_sdk::ruma::{
     },
 };
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use horo_core::{
     error::{Error, Result},
@@ -56,8 +55,7 @@ const RING_LIFETIME: Duration = Duration::from_secs(45);
 /// doesn't know yet.
 const RTC_NOTIFICATION: &str = "org.matrix.msc4075.rtc.notification";
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CallCredentials {
     /// WebSocket URL of the SFU, e.g. `wss://livekit.example.org`.
@@ -72,8 +70,7 @@ pub struct CallCredentials {
     pub ringing: bool,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CallParticipants {
     pub room_id: String,

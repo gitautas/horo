@@ -12,7 +12,6 @@ use matrix_sdk::{
 };
 use matrix_sdk_ui::room_list_service::filters;
 use tokio::task::JoinHandle;
-use ts_rs::TS;
 
 use crate::{
     dto::{
@@ -577,35 +576,27 @@ impl ChildOrder {
 // ---------------------------------------------------------------------------
 
 /// What the create-room dialog collects.
-#[derive(Debug, Clone, serde::Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewRoom {
     pub name: String,
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub topic: Option<String>,
     /// Anyone can find and join it, and it gets listed in the directory.
     #[serde(default)]
-    #[ts(as = "Option<_>", optional)]
     pub is_public: bool,
     /// Alias localpart for a public room — `movies`, not `#movies:server`.
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub alias: Option<String>,
     #[serde(default)]
-    #[ts(as = "Option<_>", optional)]
     pub encrypted: bool,
     #[serde(default)]
-    #[ts(as = "Option<_>", optional)]
     pub invite: Vec<String>,
     /// The space to file it under, if one was open when the user hit create.
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub parent_space: Option<String>,
     /// A voice room: a call you join by opening it, with chat alongside.
     #[serde(default)]
-    #[ts(as = "Option<_>", optional)]
     pub voice: bool,
 }
 
@@ -636,8 +627,7 @@ fn power_levels_for_calls() -> serde_json::Value {
     })
 }
 
-#[derive(Debug, Clone, serde::Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewRoomResult {
     pub room_id: String,
@@ -749,8 +739,7 @@ fn space_members_only(
 }
 
 /// How joining a space and its rooms went.
-#[derive(Debug, Clone, serde::Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JoinSpaceResult {
     /// Rooms joined along with the space.
@@ -808,8 +797,7 @@ pub async fn join_space(
 }
 
 /// How opening a space's rooms to its members went.
-#[derive(Debug, Clone, serde::Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenedRooms {
     /// Invite-only rooms that space members can now join.
@@ -934,8 +922,7 @@ pub async fn update(
 /// Read once when the room panel opens rather than carried on every summary:
 /// it needs the power-level state event, and the answer only matters for the
 /// room you're looking at.
-#[derive(Debug, Clone, serde::Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoomPermissions {
     pub can_rename: bool,

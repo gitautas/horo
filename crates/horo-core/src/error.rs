@@ -4,7 +4,6 @@
 //! without parsing prose.
 
 use serde::Serialize;
-use ts_rs::TS;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -52,8 +51,7 @@ pub enum Error {
 }
 
 /// A stable, machine-readable discriminant for the frontend.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     NotSignedIn,
@@ -72,8 +70,7 @@ pub enum ErrorKind {
 }
 
 /// What an `Error` looks like once it reaches the frontend.
-#[derive(Serialize, TS)]
-#[ts(export)]
+#[derive(Serialize)]
 pub struct UwuError {
     kind: ErrorKind,
     message: String,

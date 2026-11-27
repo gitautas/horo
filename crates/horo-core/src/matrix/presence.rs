@@ -32,7 +32,6 @@ use tokio::{
     sync::{Mutex, Notify},
     task::JoinHandle,
 };
-use ts_rs::TS;
 
 use crate::{
     error::Result,
@@ -62,8 +61,7 @@ const UNSUPPORTED_RETRY: Duration = Duration::from_secs(15 * 60);
 const CONCURRENCY: usize = 8;
 
 /// One person's presence, as the UI draws it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export, rename = "Presence")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PresenceDto {
     pub user_id: String,
@@ -84,8 +82,7 @@ pub struct PresenceDto {
 
 /// The spec's three presence states, and a fourth for anything else a server
 /// sends — which the UI draws as nothing rather than guessing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Availability {
     Online,
@@ -106,8 +103,7 @@ impl From<&PresenceState> for Availability {
 }
 
 /// A batch of changes, plus whether presence works here at all.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PresenceUpdate {
     pub users: Vec<PresenceDto>,
@@ -117,8 +113,7 @@ pub struct PresenceUpdate {
 }
 
 /// What the frontend can ask us to publish about the user.
-#[derive(Debug, Clone, Copy, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OwnPresence {
     Online,

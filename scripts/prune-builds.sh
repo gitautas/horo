@@ -9,12 +9,10 @@
 #
 # Always removed (cheap or rarely needed):
 #   - incremental-compilation caches
-#   - cross-compiled targets (iOS, iOS simulator, Android)
-#   - the Tauri mobile projects' build output (gen/apple/build,
-#     gen/apple/Externals, gen/android/app/build)
+#   - cross-compiled targets
 #   - the spikes' vendored, patched gpui-base
 #
-# Removed only when src-tauri/target is still over PRUNE_BUDGET_GB (20):
+# Removed only when target/ is still over PRUNE_BUDGET_GB (20):
 #   - everything else in it (`cargo clean`). The next build starts from
 #     scratch, which takes a few minutes, so this is the last resort.
 #
@@ -22,8 +20,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-target="$root/src-tauri/target"
-gen="$root/src-tauri/gen"
+target="$root/target"
 budget_gb="${PRUNE_BUDGET_GB:-20}"
 every_hours="${PRUNE_EVERY_HOURS:-6}"
 stamp="$target/.last-prune"
@@ -86,9 +83,6 @@ if [ -d "$target" ]; then
   done
   remove "$target/spike-vendor"
 fi
-remove "$gen/apple/build"
-remove "$gen/apple/Externals"
-remove "$gen/android/app/build"
 
 # Tier 2.
 if [ -d "$target" ]; then
@@ -98,13 +92,13 @@ if [ -d "$target" ]; then
     left_kb=$((left_kb - target_freed > 0 ? left_kb - target_freed : 0))
   fi
   if [ "$left_kb" -gt "$budget_kb" ]; then
-    echo "src-tauri/target is $(human "$left_kb"), over the ${budget_gb} GB budget"
+    echo "target is $(human "$left_kb"), over the ${budget_gb} GB budget"
     if $dry_run; then
       echo "would run cargo clean"
       freed=$((freed + left_kb))
     else
       (cd "$root" && cargo clean -q)
-      echo "removed $(human "$left_kb")  src-tauri/target (cargo clean)"
+      echo "removed $(human "$left_kb")  target (cargo clean)"
       freed=$((freed + left_kb))
     fi
   fi

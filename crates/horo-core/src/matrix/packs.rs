@@ -31,7 +31,6 @@ use matrix_sdk::{
     ruma::{RoomId, events::StateEventType},
 };
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use crate::{
     error::{Error, Result},
@@ -149,8 +148,7 @@ pub struct EmoteRoomsContent {
 // what the frontend sees
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "ImagePack")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImagePackDto {
     /// Stable across reloads, and what the frontend uses to address a pack:
@@ -176,16 +174,14 @@ pub struct ImagePackDto {
 }
 
 /// Where a pack lives: account data, or a room's state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PackSource {
     User,
     Room,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "PackImage")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackImageDto {
     /// The `:name:` a person types, without the colons.
@@ -431,8 +427,7 @@ pub async fn all(core: &MatrixCore) -> Result<Vec<ImagePackDto>> {
 }
 
 /// A room a new pack could go in.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "PackRoom")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackRoomDto {
     pub id: String,
@@ -582,15 +577,12 @@ pub async fn set_everywhere(
 ///
 /// The personal pack has no room; a room pack is a room plus a state key. The
 /// frontend addresses packs by their `id`, and this is that id taken apart.
-#[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackTarget {
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub room_id: Option<String>,
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub state_key: Option<String>,
 }
 
@@ -599,8 +591,7 @@ pub struct PackTarget {
 /// Edits are described rather than sent as a whole pack because two clients
 /// touching the same pack shouldn't be able to erase each other's images: every
 /// one of these reads first, changes one thing, and writes back.
-#[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum PackEdit {
     /// Add an image, or replace one already under that shortcode.
@@ -609,21 +600,16 @@ pub enum PackEdit {
         shortcode: String,
         url: String,
         #[serde(default)]
-        #[ts(optional = nullable)]
         body: Option<String>,
         is_emoticon: bool,
         is_sticker: bool,
         #[serde(default)]
-        #[ts(optional = nullable)]
         width: Option<u32>,
         #[serde(default)]
-        #[ts(optional = nullable)]
         height: Option<u32>,
         #[serde(default)]
-        #[ts(optional = nullable)]
         size: Option<u64>,
         #[serde(default)]
-        #[ts(optional = nullable)]
         mimetype: Option<String>,
     },
     /// Move an image to a different shortcode, keeping everything else.

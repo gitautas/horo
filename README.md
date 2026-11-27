@@ -1,44 +1,31 @@
 # horo
 
-A Matrix client for desktop and mobile, with end-to-end encryption and
-LiveKit voice built in. Built with Tauri 2 and Rust on the backend and React on
-the front.
+A native Matrix client for desktop, with end-to-end encryption and native
+LiveKit voice/video calls built in. Written in Rust with GPUI.
 
 <img align="center" src="docs/screenshot.png" height="380">
 
 ## Getting started
 Download the latest build for your platform from [GitHub releases]. Installed
-apps on macOS, Windows and AppImage update themselves; other builds tell you
-when a new version is out.
-
-macOS and iOS are supported, Android runs on device, and Windows and Linux
-build but are untested.
-
-> [!NOTE]
-> Voice calls don't work on Linux, because distribution builds of WebKitGTK
-> ship without WebRTC.
+apps on macOS, Windows, and Linux AppImage update themselves; `.deb` installs
+notify you when a new version is out.
 
 [GitHub releases]: https://github.com/gitautas/horo/releases/latest
 
 ## Developing
 ```bash
-npm install
-npm run app            # desktop dev  (app:build for a release)
-npm run ios            # iOS dev      (ios:build for an .ipa)
-npm run android        # Android dev  (android:build -- --apk for an .apk)
+git submodule update --init --depth 1 third_party/libvpx
+scripts/desktop-dev.sh           # macOS dev .app bundle (isolated data dir)
+cargo run -p horo-desktop        # Linux / Windows dev build
 ```
 
-Android needs an SDK, NDK and JDK; `npm run android` finds them if they are
-installed.
-
 ```bash
-npm test                         # frontend
-cargo test --workspace           # Rust; skips the homeserver tests
+cargo test --workspace           # Rust unit tests; skips homeserver/livekit tests
 scripts/test-homeserver/start.sh # a throwaway Synapse in Docker, then:
 HORO_TEST_HOMESERVER=http://localhost:8008 cargo test -p horo-core --test homeserver
 ```
 
-Tagging `v*` builds every platform and publishes a signed release. The
-repository needs `TAURI_SIGNING_PRIVATE_KEY` and
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in its Actions secrets. Keep that key safe:
-installed apps only accept updates signed with it.
+See [docs/releasing.md](docs/releasing.md) for packaging and release
+instructions. Tagging `v*` builds every desktop platform and publishes a signed
+release using `TAURI_SIGNING_PRIVATE_KEY` (and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) in GitHub Actions secrets.

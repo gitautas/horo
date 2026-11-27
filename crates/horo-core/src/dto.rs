@@ -15,14 +15,12 @@ use matrix_sdk_ui::timeline::{
     TimelineItemContent, TimelineItemKind, VirtualTimelineItem,
 };
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 // ---------------------------------------------------------------------------
 // auth / session
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HomeserverInfo {
     pub server_name: String,
@@ -34,8 +32,7 @@ pub struct HomeserverInfo {
     pub livekit_service_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SsoProvider {
     pub id: String,
@@ -43,8 +40,7 @@ pub struct SsoProvider {
     pub icon: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     pub user_id: String,
@@ -59,8 +55,7 @@ pub struct SessionInfo {
 
 /// One answer to a homeserver's sign-up questions, sent with the `session` the
 /// previous [`RegisterStep::NeedsAuth`] handed out.
-#[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum RegisterAuth {
     /// `m.login.dummy` — a stage that asks nothing, there to make a flow non-empty.
@@ -80,8 +75,7 @@ pub enum RegisterAuth {
 
 /// A verification email the homeserver has sent for sign-up. Both halves go
 /// back in [`RegisterAuth::Email`] once the link in it has been followed.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterEmailToken {
     pub sid: String,
@@ -90,8 +84,7 @@ pub struct RegisterEmailToken {
 }
 
 /// How the frontend can get through one stage of a sign-up flow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RegisterStageKind {
     Dummy,
@@ -106,8 +99,7 @@ pub enum RegisterStageKind {
     Unsupported,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterStage {
     pub kind: RegisterStageKind,
@@ -117,8 +109,7 @@ pub struct RegisterStage {
     pub fallback_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TermsPolicy {
     pub name: String,
@@ -126,8 +117,7 @@ pub struct TermsPolicy {
 }
 
 /// What the server still wants before it creates the account.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterChallenge {
     pub session: Option<String>,
@@ -141,8 +131,7 @@ pub struct RegisterChallenge {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "status")]
 pub enum RegisterStep {
     /// The account exists and is signed in.
@@ -156,8 +145,7 @@ pub enum RegisterStep {
 // rooms
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoomSummary {
     pub id: String,
@@ -200,8 +188,7 @@ pub struct RoomSummary {
 }
 
 /// Where the account stands with a room.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RoomMembership {
     Joined,
@@ -211,8 +198,7 @@ pub enum RoomMembership {
     Banned,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LatestEvent {
     pub sender: String,
@@ -222,8 +208,7 @@ pub struct LatestEvent {
 }
 
 /// How much a room notifies — Matrix's per-room push rule, by its effect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum NotifyMode {
     All,
@@ -252,8 +237,7 @@ impl From<NotifyMode> for matrix_sdk::notification_settings::RoomNotificationMod
     }
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceSummary {
     pub id: String,
@@ -264,8 +248,7 @@ pub struct SpaceSummary {
     pub highlight_count: u64,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "RoomMember")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoomMemberDto {
     pub user_id: String,
@@ -280,8 +263,7 @@ pub struct RoomMemberDto {
 }
 
 /// Whether we've verified someone's identity via cross-signing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Verification {
     Verified,
@@ -297,25 +279,21 @@ pub enum Verification {
 
 /// One row of the timeline. `kind` discriminates; only the matching payload is
 /// populated.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "TimelineItem")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineItemDto {
     /// Stable identity for React keys and for diff application.
     pub id: String,
     pub kind: TimelineRowKind,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub timestamp: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub event: Option<Box<EventItemDto>>,
 }
 
 /// Which kind of row a `TimelineItemDto` is. Not the SDK's `TimelineItemKind`,
 /// which carries the payloads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TimelineRowKind {
     Event,
@@ -324,8 +302,7 @@ pub enum TimelineRowKind {
     TimelineStart,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "EventItem")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventItemDto {
     pub event_id: Option<String>,
@@ -351,8 +328,7 @@ pub struct EventItemDto {
     pub read_receipts: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "SendState")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "status")]
 pub enum SendStateDto {
     #[serde(rename_all = "camelCase")]
@@ -363,24 +339,21 @@ pub enum SendStateDto {
     Sent { event_id: String },
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "Shield")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShieldDto {
     pub colour: ShieldColour,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ShieldColour {
     Red,
     Grey,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "Reaction")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReactionDto {
     pub key: String,
@@ -392,8 +365,7 @@ pub struct ReactionDto {
     pub senders: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "ReplyInfo")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplyDto {
     pub event_id: String,
@@ -402,8 +374,7 @@ pub struct ReplyDto {
     pub body: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "ThreadSummary")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSummaryDto {
     pub num_replies: u32,
@@ -411,8 +382,7 @@ pub struct ThreadSummaryDto {
     pub latest_body: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "MediaInfo")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaInfoDto {
     pub mxc: Option<String>,
@@ -429,8 +399,7 @@ pub struct MediaInfoDto {
 }
 
 /// Message content, flattened into what the UI actually needs to draw.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "Content")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum ContentDto {
     #[serde(rename_all = "camelCase")]
@@ -475,8 +444,7 @@ pub enum ContentDto {
 
 /// A batch of room-list changes, numbered so the frontend can tell whether a
 /// snapshot it holds already includes them.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoomsUpdate {
     pub seq: u64,
@@ -484,8 +452,7 @@ pub struct RoomsUpdate {
 }
 
 /// The room list as it stands, and the last batch folded into it.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoomsSnapshot {
     pub seq: u64,
@@ -494,8 +461,7 @@ pub struct RoomsSnapshot {
 
 /// A `VectorDiff` rendered for JS. Mirrors `eyeball_im::VectorDiff` so the
 /// frontend can apply updates in place instead of re-rendering the world.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "op")]
 pub enum Diff<T> {
     #[serde(rename_all = "camelCase")]
@@ -523,8 +489,7 @@ pub enum Diff<T> {
 // events pushed to the frontend
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineUpdate {
     /// Room ID, or `<roomId>|<threadRoot>` for a thread — `timeline::timeline_key`.
@@ -532,24 +497,21 @@ pub struct TimelineUpdate {
     pub diffs: Vec<Diff<TimelineItemDto>>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TypingUpdate {
     pub room_id: String,
     pub users: Vec<TypingUser>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TypingUser {
     pub user_id: String,
     pub display_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
     pub state: SyncState,
@@ -557,8 +519,7 @@ pub struct SyncStatus {
 }
 
 /// `matrix_sdk_ui::sync_service::State`, without the payloads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SyncState {
     Idle,
@@ -572,25 +533,20 @@ pub enum SyncState {
 // composer input
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendOptions {
     pub body: String,
     /// Rendered as Markdown when true; the design's composer sends plain text
     /// unless the user opts in.
     #[serde(default)]
-    #[ts(as = "Option<_>", optional)]
     pub markdown: bool,
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub reply_to: Option<String>,
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub thread_root: Option<String>,
     /// `m.text` (default), `m.emote`, `m.notice`
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub msgtype: Option<String>,
     /// Custom emotes the body might mention, as `:shortcode:`.
     ///
@@ -598,19 +554,16 @@ pub struct SendOptions {
     /// what's in the text; matching is done once, against the rendered HTML, so
     /// Markdown and emotes can both survive in one message.
     #[serde(default)]
-    #[ts(as = "Option<_>", optional)]
     pub emotes: Vec<EmoteRef>,
     /// People picked from the composer's suggestions, by the name put in
     /// the text: each that's still there becomes a pill and is listed in
     /// `m.mentions`, which is what notifies them.
     #[serde(default)]
-    #[ts(as = "Option<_>", optional)]
     pub mentions: Vec<MentionRef>,
 }
 
 /// Someone mentioned in an outgoing message.
-#[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MentionRef {
     pub user_id: String,
@@ -619,8 +572,7 @@ pub struct MentionRef {
 }
 
 /// One custom emote the composer can substitute into an outgoing message.
-#[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmoteRef {
     /// Without the surrounding colons.
@@ -629,24 +581,19 @@ pub struct EmoteRef {
 }
 
 /// One image from a pack, on its way out as an `m.sticker`.
-#[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StickerOptions {
     /// Alt text — the shortcode, unless the pack gave the image a body.
     pub body: String,
     pub url: String,
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub width: Option<u32>,
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub height: Option<u32>,
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub size: Option<u32>,
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub mimetype: Option<String>,
 }
 

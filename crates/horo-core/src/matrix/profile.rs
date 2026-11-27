@@ -19,7 +19,6 @@ use std::time::Duration;
 use matrix_sdk::ruma::UserId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use ts_rs::TS;
 
 use crate::{
     dto::Verification,
@@ -31,8 +30,7 @@ const BIO_KEY: &str = "chat.commet.profile_bio";
 const STATUS_KEY: &str = "chat.commet.profile_status";
 const COVER_KEY: &str = "gg.uwu.cover_url";
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "Profile")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileDto {
     pub user_id: String,
@@ -47,18 +45,14 @@ pub struct ProfileDto {
 }
 
 /// A partial update. `None` leaves a field alone; `Some("")` clears it.
-#[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileUpdate {
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub bio: Option<String>,
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub status: Option<String>,
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub cover_url: Option<String>,
 }
 
@@ -172,8 +166,7 @@ async fn set_field(core: &MatrixCore, key: &str, value: Value, clear: bool) -> R
 // ---------------------------------------------------------------------------
 
 /// A room both of you are in, reduced to what a profile card draws.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "SharedRoom")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharedRoomDto {
     pub id: String,
@@ -186,8 +179,7 @@ pub struct SharedRoomDto {
 /// The parts of a profile card that come from our own client rather than from
 /// the profile endpoint: whether we've verified them, whether there's already a
 /// DM, and where the two of you overlap.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "UserContext")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserContextDto {
     pub user_id: String,

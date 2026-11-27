@@ -25,7 +25,6 @@ use matrix_sdk::{
 };
 use matrix_sdk_ui::timeline::EncryptedMessage;
 use serde::Serialize;
-use ts_rs::TS;
 
 use crate::{
     error::{Error, Result},
@@ -38,8 +37,7 @@ use crate::{
 /// client to pick a flow that dead-ends here.
 const SAS_ONLY: &[VerificationMethod] = &[VerificationMethod::SasV1];
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "VerificationRequestInfo")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerificationRequestDto {
     pub flow_id: String,
@@ -62,8 +60,7 @@ pub struct VerificationRequestDto {
     pub cancel_code: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, rename = "SasStateInfo")]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SasStateDto {
     pub flow_id: String,
@@ -77,16 +74,14 @@ pub struct SasStateDto {
     pub cancel_code: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SasEmoji {
     pub symbol: String,
     pub description: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RequestState {
     Created,
@@ -98,8 +93,7 @@ pub enum RequestState {
 }
 
 /// `SasState`, without the payloads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SasStage {
     Created,
@@ -501,8 +495,7 @@ pub async fn cancel(core: &MatrixCore, user_id: &str, flow_id: &str) -> Result<(
 // this account's devices
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceInfo {
     pub device_id: String,
@@ -581,8 +574,7 @@ pub async fn verify_device(host: &Host, core: &Arc<MatrixCore>, device_id: &str)
 // recovery / key backup
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryStatus {
     pub state: RecoveryState,
@@ -591,8 +583,7 @@ pub struct RecoveryStatus {
 }
 
 /// The SDK's `RecoveryState`, which isn't `Serialize`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RecoveryState {
     Enabled,

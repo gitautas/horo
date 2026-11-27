@@ -7,7 +7,6 @@ use matrix_sdk::ruma::{
     directory::{Filter, PublicRoomsChunk, RoomTypeFilter},
     room::{JoinRuleKind, RoomSummary as HierarchySummary, RoomType},
 };
-use ts_rs::TS;
 
 use crate::{error::Result, matrix::MatrixCore};
 
@@ -20,8 +19,7 @@ const PREVIEW_LIMIT: u32 = 50;
 
 /// A room or space as seen from outside: what the directory and a space's
 /// hierarchy can tell you without joining.
-#[derive(Debug, Clone, serde::Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRoom {
     pub id: String,
@@ -43,8 +41,7 @@ pub struct PublicRoom {
     pub via: Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirectoryPage {
     pub rooms: Vec<PublicRoom>,
@@ -194,8 +191,7 @@ pub fn parse_via(via: &[String]) -> Vec<OwnedServerName> {
 }
 
 /// Someone the user directory knows, for suggesting as an invite is typed.
-#[derive(Debug, Clone, serde::Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserSuggestion {
     pub user_id: String,

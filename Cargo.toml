@@ -1,11 +1,10 @@
 # One workspace for every Rust crate in the app.
 #
-# `horo-core` is the Matrix layer and `horo-rtc` the calls (MatrixRTC, LiveKit,
-# media); both are UI-agnostic. `src-tauri` is the current shell, a thin adapter over them.
-# See docs/gpui-rewrite-plan.md for where this is going.
+# `horo-core` is the Matrix layer, `horo-rtc` is calls (MatrixRTC, LiveKit,
+# media), `horo-ui` is the gpui interface, and `apps/desktop` is the binary.
 [workspace]
 resolver = "3"
-members = ["src-tauri", "crates/*", "apps/*"]
+members = ["crates/*", "apps/*"]
 
 [workspace.package]
 version = "0.11.0"
@@ -40,9 +39,6 @@ futures-util = "0.3"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Generates src/lib/bindings from the wire types — `npm run bindings`. Reads
-# the serde attributes, so what it writes is what actually crosses the bridge.
-ts-rs = "12"
 
 anyhow = "1"
 thiserror = "2"
@@ -53,12 +49,16 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # Profiles only take effect at the workspace root.
 
 # Dependencies optimised even in dev builds. Unoptimised gpui (its layout
-# engine above all) can't hold a frame rate while scrolling. Our own crates
-# get a light pass too: at no optimisation the app felt laggy (the timeline,
-# video conversion, the call engine), and level 1 costs little build time
-# while keeping most of the debugging. No debug info for dependencies: it's
-# most of the target directory's size, and the disk is tight.
+# engine above all) can't hold a frame rate while scrolling. No debug info for
+# dependencies: it's most of the target directory's size, and the disk is tight.
+# Workspace crates stay at opt-level 0 with line tables only so UI edits
+# rebuild quickly; `horo-rtc` gets opt-level 1 so real-time audio/video stays
+# smooth in dev builds.
 [profile.dev]
+opt-level = 0
+debug = "line-tables-only"
+
+[profile.dev.package.horo-rtc]
 opt-level = 1
 
 [profile.dev.package."*"]
@@ -66,8 +66,7 @@ opt-level = 2
 debug = false
 
 [profile.release]
-codegen-units = 1
-lto = true
+lto = "thin"
 opt-level = "s"
 panic = "abort"
 strip = true
