@@ -8,13 +8,14 @@
 //! are folded into the view on gpui's executor. Audio only for now: the
 //! engine has no video yet.
 
-use std::{sync::{Arc, Mutex}, time::Duration};
+use std::{sync::{Arc, Mutex}, time::{Duration, Instant}};
 
 use gpui::{AppContext as _, Context};
 use horo_rtc::call::{
     Call, CallEvent, CallOptions, Joined, Participant, TokenSource,
     devices::{self, AudioDevices, RunningAudio},
 };
+use horo_rtc::audio::gate::GateReading;
 use matrix_sdk::ruma::OwnedRoomId;
 
 use crate::{backend::Backend, store::Store};
@@ -29,6 +30,13 @@ pub enum CallStatus {
     Reconnecting,
     Failed(String),
 }
+
+/// Louder than this (dBFS), with the gate open, is speech: the floor for
+/// when the gate is off and always open.
+const SPEAKING_DB: f32 = -50.;
+/// How long our ring stays lit after the last loud reading, so it doesn't
+/// flicker between words.
+const SPEAKING_HOLD: Duration = Duration::from_millis(250);
 
 /// Which tile is shown big in the call stage.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -63,8 +71,14 @@ pub struct CallView {
     pub identity: Option<String>,
     /// Everyone else.
     pub participants: Vec<Participant>,
-    /// Identities speaking now, ourselves included.
+    /// Identities speaking now, by the server's ear (ours is ignored: it
+    /// arrives late, see `self_speaking`).
     pub speaking: Vec<String>,
+    /// We're talking, by our own microphone: at once, where the server's
+    /// word lags by a few hundred milliseconds.
+    pub self_speaking: bool,
+    /// When the microphone last sounded like speech.
+    loud_at: Option<Instant>,
     /// The microphone's latest level and whether the gate lets it through
     /// (for the meter in settings; read without a redraw of its own).
     pub mic: Option<horo_rtc::audio::gate::GateReading>,
@@ -77,7 +91,19 @@ impl CallView {
 
     /// Whether `user_id` is talking (any of their devices).
     pub fn is_speaking(&self, user_id: &str) -> bool {
+        if self.identity.as_deref().map(user_of) == Some(user_id) {
+            return self.self_speaking;
+        }
         self.speaking.iter().any(|identity| user_of(identity) == user_id)
+    }
+
+    /// Take in a microphone reading; whether our speaking changed.
+    fn heard(&mut self, reading: GateReading, now: Instant) -> bool {
+        if reading.open && reading.level > SPEAKING_DB && !self.muted && !self.deafened {
+            self.loud_at = Some(now);
+        }
+        let speaking = self.loud_at.is_some_and(|at| now.duration_since(at) < SPEAKING_HOLD);
+        std::mem::replace(&mut self.self_speaking, speaking) != speaking
     }
 }
 
@@ -134,6 +160,8 @@ impl Store {
             identity: None,
             participants: Vec::new(),
             speaking: Vec::new(),
+            self_speaking: false,
+            loud_at: None,
             mic: None,
         });
         cx.notify();
@@ -309,9 +337,13 @@ impl Store {
                 view.speaking = speaking;
             }
             // Settings draws it every frame while it's open.
+            // Settings draws it every frame while it's open; a redraw only
+            // when our ring lights or goes out.
             CallEvent::Level(reading) => {
                 view.mic = Some(reading);
-                return;
+                if !view.heard(reading, Instant::now()) {
+                    return;
+                }
             }
             CallEvent::Ended(reason) => {
                 tracing::info!("call ended: {reason}");
@@ -370,6 +402,8 @@ impl Store {
         }
         if let Some(view) = &mut self.call {
             view.muted = muted;
+            view.self_speaking &= !muted;
+            view.loud_at = None;
         }
         cx.notify();
     }
@@ -383,6 +417,8 @@ impl Store {
         }
         if let Some(view) = &mut self.call {
             view.deafened = deafened;
+            view.self_speaking &= !deafened;
+            view.loud_at = None;
         }
         if deafened {
             self.set_call_muted(true, cx);

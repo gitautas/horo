@@ -271,6 +271,7 @@ impl Call {
             own_sid: String::new(),
             ping: (0, 0),
             participants: HashMap::new(),
+            speakers: HashMap::new(),
             remotes: remotes.clone(),
             video: video::Receiver::new(screens.clone(), broken_tx),
             outgoing,
@@ -431,6 +432,18 @@ impl Outgoing {
 /// high-density screen, and the server sends the layer that fits.
 const VIEW_SIZE: (u32, u32) = (640, 360);
 
+/// Fold a speakers update into who's speaking: the server sends only those
+/// whose state changed (started, stopped, or got louder or quieter).
+fn apply_speakers(speakers: &mut HashMap<String, f32>, updates: &[proto::SpeakerInfo]) {
+    for s in updates {
+        if s.active {
+            speakers.insert(s.sid.clone(), s.level);
+        } else {
+            speakers.remove(&s.sid);
+        }
+    }
+}
+
 fn sorted(participants: &HashMap<String, Participant>) -> Vec<Participant> {
     let mut list: Vec<Participant> = participants.values().cloned().collect();
     list.sort_by(|a, b| a.identity.cmp(&b.identity));
@@ -487,6 +500,9 @@ struct Engine {
     /// The server's ping interval and timeout, for a resumed connection.
     ping: (i32, i32),
     participants: HashMap<String, Participant>,
+    /// Who's speaking now, by sid, with their level. The server only says
+    /// whose state changed, so this keeps the rest.
+    speakers: HashMap<String, f32>,
     remotes: Arc<Mutex<Remotes>>,
     /// Remote cameras.
     video: video::Receiver,
@@ -527,11 +543,25 @@ impl Engine {
         }
     }
 
+    /// Who's speaking, loudest first, by identity.
+    fn send_speaking(&self) {
+        let mut loudest: Vec<(&String, f32)> = self.speakers.iter().map(|(sid, level)| (sid, *level)).collect();
+        loudest.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let speaking = loudest
+            .into_iter()
+            .filter_map(|(sid, _)| if *sid == self.own_sid { Some(self.identity.clone()) } else { self.participants.get(sid).map(|p| p.identity.clone()) })
+            .collect();
+        let _ = self.events.send(CallEvent::Speaking(speaking));
+    }
+
     /// Take in a join response: who we are, who's here.
     fn joined(&mut self, join: &proto::JoinResponse) {
         self.own_sid = join.participant.as_ref().map(|p| p.sid.clone()).unwrap_or_default();
         self.ping = (join.ping_interval, join.ping_timeout);
         self.participants = join.other_participants.iter().map(|p| (p.sid.clone(), participant(p))).collect();
+        // A new session: whoever was speaking will be said again.
+        self.speakers.clear();
+        let _ = self.events.send(CallEvent::Speaking(Vec::new()));
         self.size_cameras();
         let _ = self.events.send(CallEvent::Participants(sorted(&self.participants)));
     }
@@ -927,6 +957,9 @@ impl Engine {
                     }
                     if p.state == proto::participant_info::State::Disconnected as i32 {
                         self.participants.remove(&p.sid);
+                        if self.speakers.remove(&p.sid).is_some() {
+                            self.send_speaking();
+                        }
                     } else {
                         self.participants.insert(p.sid.clone(), now);
                     }
@@ -940,18 +973,8 @@ impl Engine {
                 }
             }
             SignalEvent::Speakers(speakers) => {
-                let speaking = speakers
-                    .iter()
-                    .filter(|s| s.active)
-                    .filter_map(|s| {
-                        if s.sid == self.own_sid {
-                            Some(self.identity.clone())
-                        } else {
-                            self.participants.get(&s.sid).map(|p| p.identity.clone())
-                        }
-                    })
-                    .collect();
-                let _ = self.events.send(CallEvent::Speaking(speaking));
+                apply_speakers(&mut self.speakers, &speakers);
+                self.send_speaking();
             }
             SignalEvent::Leave(leave) => {
                 use proto::leave_request::Action;
@@ -1127,5 +1150,29 @@ impl Speaker {
         if let Some(echo) = &self.echo {
             echo.render(out);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(sid: &str, level: f32, active: bool) -> proto::SpeakerInfo {
+        proto::SpeakerInfo { sid: sid.into(), level, active }
+    }
+
+    #[test]
+    fn speakers_updates_are_changes_not_the_whole_list() {
+        let mut speakers = HashMap::new();
+        apply_speakers(&mut speakers, &[info("a", 0.5, true)]);
+        // b starting doesn't stop a.
+        apply_speakers(&mut speakers, &[info("b", 0.8, true)]);
+        assert_eq!(speakers.len(), 2);
+        // a stopping leaves b, with a's level forgotten.
+        apply_speakers(&mut speakers, &[info("a", 0.0, false)]);
+        assert_eq!(speakers.keys().collect::<Vec<_>>(), [&"b".to_owned()]);
+        // A louder b is still b.
+        apply_speakers(&mut speakers, &[info("b", 0.9, true)]);
+        assert_eq!(speakers.get("b"), Some(&0.9));
     }
 }

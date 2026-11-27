@@ -30,7 +30,10 @@ use crate::{
     call::{CallStatus, CallView, FocusMode, user_of},
     store::{Known, Store},
     theme::Palette,
-    views::{avatar::avatar, verification::scrim},
+    views::{
+        avatar::{avatar, speaking_ring},
+        verification::scrim,
+    },
 };
 
 pub fn icon(path: &'static str) -> Icon {
@@ -199,7 +202,7 @@ pub fn roster(room: &RoomSummary, store: &Entity<Store>, palette: &Palette, cx: 
                 .gap_2()
                 .pl(zpx(40.))
                 .py(zpx(2.))
-                .child(div().flex_none().rounded_full().border_2().border_color(if person.speaking { palette.online } else { gpui::transparent_black() }).child(face))
+                .child(speaking_ring(face, zpx(20.), person.speaking, palette))
                 .child(div().truncate().text_xs().text_color(if person.speaking { palette.text } else { palette.text_secondary }).child(person.name))
                 .when(person.muted, |row| row.child(icon("icons/mic-off.svg").size(zpx(12.)).text_color(palette.text_tertiary))),
         );
@@ -380,7 +383,10 @@ fn draw(tile: &Tile, size: Size, focused: bool, store: &Entity<Store>, palette: 
         Size::Fill => 112.,
     };
     let face = avatar(&person.user_id, &person.real_name, person.avatar.as_deref(), zpx(face_size), cx);
+    // The whole tile lights too, as a camera's does.
     base.bg(palette.card)
+        .border_2()
+        .border_color(if person.speaking { palette.online } else { gpui::transparent_black() })
         .child(
             v_flex()
                 .size_full()
@@ -388,14 +394,7 @@ fn draw(tile: &Tile, size: Size, focused: bool, store: &Entity<Store>, palette: 
                 .px_1()
                 .items_center()
                 .justify_center()
-                .child(
-                    div()
-                        .rounded_full()
-                        .p(zpx(2.))
-                        .border_2()
-                        .border_color(if person.speaking { palette.online } else { gpui::transparent_black() })
-                        .child(face),
-                )
+                .child(speaking_ring(face, zpx(face_size), person.speaking, palette))
                 .child(
                     h_flex()
                         .gap_1()

@@ -88,6 +88,21 @@ pub fn avatar(id: &str, name: &str, mxc: Option<&str>, size: Pixels, cx: &mut Ap
     }
 }
 
+/// An avatar `size` across in a ring that lights while they're speaking, as
+/// Discord draws it: the ring follows the avatar's corners a hair outside
+/// them, and is there (unlit) when they're quiet, so nothing moves.
+pub fn speaking_ring(face: AnyElement, size: Pixels, speaking: bool, palette: &Palette) -> Div {
+    let gap = gpui::px(2.);
+    let width = gpui::px(2.);
+    div()
+        .flex_none()
+        .p(gap)
+        .rounded(corner(size) + gap + width)
+        .border_2()
+        .border_color(if speaking { palette.online } else { gpui::transparent_black() })
+        .child(face)
+}
+
 /// The status dot, cut into an avatar's bottom-right corner (out of `ring`,
 /// the colour behind the avatar). Goes in a `relative` parent.
 pub fn presence_dot(shown: Shown, size: Pixels, ring: Hsla, palette: &Palette) -> Div {
