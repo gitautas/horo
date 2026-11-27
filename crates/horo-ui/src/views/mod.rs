@@ -16,6 +16,7 @@ pub mod menu;
 pub mod modal;
 pub mod pack_settings;
 pub mod profile;
+pub mod quick_switcher;
 pub mod room_info;
 pub mod room_settings;
 pub mod shell;

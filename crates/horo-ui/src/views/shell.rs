@@ -23,13 +23,13 @@ use matrix_sdk::ruma::OwnedRoomId;
 use crate::theme::zpx;
 use crate::{
     backend::Backend,
-    OpenSettings,
+    OpenQuickSwitcher, OpenSettings,
     presence,
     media::Media,
     rooms::{self, Filter, View},
     store::{Phase, SettingsSection, Store, Tone},
     theme::{Palette, corner, heading, label, space, text},
-    views::{menu, avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target}, room_info::{OpenRoomSettings, RoomInfo}, room_settings::RoomSettings, invite_pane::InvitePane, invite_to_space::InviteToSpace, leave_space::LeaveSpace, explore::{Explore, Closed}, create_room::CreateRoom,
+    views::{menu, avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target}, quick_switcher::{self, QuickSwitcher}, room_info::{OpenRoomSettings, RoomInfo}, room_settings::RoomSettings, invite_pane::InvitePane, invite_to_space::InviteToSpace, leave_space::LeaveSpace, explore::{Explore, Closed}, create_room::CreateRoom,
         settings::Settings, timeline::{Timeline, TimelineAction}, verification, lightbox, voice},
 };
 
@@ -56,6 +56,8 @@ pub struct Shell {
     browse: Option<Entity<Explore>>,
     /// Settings, while they're open.
     settings: Option<Entity<Settings>>,
+    /// The ⌘K quick switcher, while it's open.
+    quick_switcher: Option<Entity<QuickSwitcher>>,
     /// The profile card, while one is open.
     profile: Option<Entity<ProfileCard>>,
     /// Holds the window's focus when nothing inside does, so ⌘, still
@@ -86,7 +88,7 @@ impl Shell {
         focus.focus(window, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("find or start a conversation"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, room_menu_can_delete: None, invite_to_space: None, leave_space: None, browse: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false, space_hierarchy: None, joining: HashSet::new() };
+        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, room_menu_can_delete: None, invite_to_space: None, leave_space: None, browse: None, settings: None, quick_switcher: None, profile: None, focus, search, filter: Filter::All, filters_open: false, space_hierarchy: None, joining: HashSet::new() };
         shell.follow_room(window, cx);
         shell.follow_space(cx);
         shell.follow_settings(window, cx);
@@ -642,17 +644,29 @@ impl Shell {
         cx.notify();
     }
 
-    /// The spaces rail, as SpacesRail.tsx: the wordmark, "all", the
-    /// spaces, and settings and you at the foot.
+    fn open_quick_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quick_switcher.is_some() {
+            self.quick_switcher = None;
+            cx.notify();
+            return;
+        }
+        let store = self.store.clone();
+        let switcher = cx.new(|cx| QuickSwitcher::new(store, window, cx));
+        cx.subscribe(&switcher, |this, _, _: &quick_switcher::Closed, cx| {
+            this.quick_switcher = None;
+            cx.notify();
+        })
+        .detach();
+        self.quick_switcher = Some(switcher);
+        cx.notify();
+    }
+
+    /// The spaces rail, as Discord's server list: the horo logo (Direct
+    /// Messages), the joined spaces, and Explore.
     fn rail(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
         let open = store.space.clone();
         let spaces = store.spaces.clone();
-        let me = match &store.phase {
-            Phase::SignedIn(info) => Some(info.clone()),
-            _ => None,
-        };
-        let away = store.is_away();
 
         let home_badge: u64 = rooms::filter(&store.rooms, &View { spaces: &spaces, ..Default::default() })
             .into_iter()
@@ -732,29 +746,14 @@ impl Shell {
             tiles.push(tile);
         }
 
-        let me_face = me.map(|info| {
-            let name = info.display_name.clone().unwrap_or_else(|| info.user_id.clone());
-            let face = avatar(&info.user_id, &name, info.avatar_url.as_deref(), zpx(38.), cx);
-            let shown = if away { presence::Shown::Away } else { presence::Shown::Online };
-            let (user_id, avatar_hint) = (info.user_id.clone(), info.avatar_url.clone());
-            div()
-                .id("rail-me")
-                .cursor_pointer()
-                .child(with_presence(face, Some(shown), palette.card, palette))
-                .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| {
-                    let (user_id, avatar_hint) = (user_id.clone(), avatar_hint.clone());
-                    this.store.update(cx, |s, cx| s.open_profile(user_id, click.position(), avatar_hint, cx));
-                }))
-        });
-
         v_flex()
             .id("rail")
             .relative()
-            .w(zpx(76.))
+            .w(zpx(72.))
             .h_full()
             .flex_none()
             .items_center()
-            .gap(space(14.))
+            .gap(space(12.))
             .pt(zpx(44.))
             .pb(zpx(16.))
             .bg(palette.card)
@@ -793,20 +792,90 @@ impl Shell {
                             .on_click(cx.listener(|this, _, window, cx| this.open_explore(window, cx))),
                     ),
             )
-            .child(
-                v_flex()
-                    .items_center()
-                    .gap(space(12.))
-                    .child(
-                        div()
-                            .id("rail-settings")
-                            .cursor_pointer()
-                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new(if cfg!(target_os = "macos") { "settings (⌘,)" } else { "settings (ctrl+,)" }).build(window, cx))
-                            .child(Icon::new(IconName::Settings).size(zpx(20.)).text_color(palette.text_tertiary))
-                            .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
-                    )
-                    .children(me_face),
-            )
+    }
+
+    /// Discord-style bottom-left user control bar: your avatar + status, audio
+    /// settings shortcut, and settings gear.
+    fn user_bar(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (info, away) = {
+            let store = self.store.read(cx);
+            let Phase::SignedIn(info) = &store.phase else { return None };
+            (info.clone(), store.is_away())
+        };
+        let name = info.display_name.clone().unwrap_or_else(|| info.user_id.clone());
+        let face = avatar(&info.user_id, &name, info.avatar_url.as_deref(), zpx(32.), cx);
+        let shown = if away { presence::Shown::Away } else { presence::Shown::Online };
+        let status_label = if away { "away" } else { "online" };
+        let (user_id, avatar_hint) = (info.user_id.clone(), info.avatar_url.clone());
+
+        Some(
+            h_flex()
+                .flex_none()
+                .items_center()
+                .gap(space(6.))
+                .px(space(10.))
+                .py(space(8.))
+                .bg(palette.inset)
+                .border_t_1()
+                .border_color(palette.border_subtle)
+                .child(
+                    h_flex()
+                        .id("user-bar-me")
+                        .flex_1()
+                        .min_w_0()
+                        .items_center()
+                        .gap(space(8.))
+                        .px(space(6.))
+                        .py(space(4.))
+                        .rounded(corner(10.))
+                        .cursor_pointer()
+                        .hover(|d| d.bg(palette.raised))
+                        .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| {
+                            let (user_id, avatar_hint) = (user_id.clone(), avatar_hint.clone());
+                            this.store.update(cx, |s, cx| s.open_profile(user_id, click.position(), avatar_hint, cx));
+                        }))
+                        .child(with_presence(face, Some(shown), palette.inset, palette))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(div().truncate().text_size(text(12.5)).font_weight(FontWeight::BOLD).text_color(palette.text).child(name))
+                                .child(div().truncate().text_xs().text_color(palette.text_tertiary).child(status_label)),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("user-bar-audio")
+                        .size(zpx(28.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(corner(8.))
+                        .cursor_pointer()
+                        .text_color(palette.text_tertiary)
+                        .hover(|d| d.bg(palette.raised).text_color(palette.text))
+                        .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("voice & media settings").build(window, cx))
+                        .child(voice::icon("icons/headphones.svg").size(zpx(16.)).text_color(palette.text_tertiary))
+                        .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.show_settings(Some(SettingsSection::Voice), cx)))),
+                )
+                .child(
+                    div()
+                        .id("rail-settings")
+                        .size(zpx(28.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(corner(8.))
+                        .cursor_pointer()
+                        .hover(|d| d.bg(palette.raised))
+                        .tooltip(|window, cx| {
+                            gpui_component::tooltip::Tooltip::new(if cfg!(target_os = "macos") { "settings (⌘,)" } else { "settings (ctrl+,)" }).build(window, cx)
+                        })
+                        .child(Icon::new(IconName::Settings).size(zpx(16.)).text_color(palette.text_tertiary))
+                        .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
+                )
+                .into_any_element(),
+        )
     }
 
     /// A room in the list, as RoomRow in RoomList.tsx.
@@ -1203,6 +1272,7 @@ impl Shell {
             )
             .child(list)
             .children(voice::panel(&self.store, palette, cx))
+            .children(self.user_bar(palette, cx))
     }
 
     /// The top of a room, as ChatPane.tsx: its face, name and lock, the
@@ -1493,6 +1563,9 @@ impl Render for Shell {
                     this.open_settings(cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &OpenQuickSwitcher, window, cx| {
+                this.open_quick_switcher(window, cx);
+            }))
             .size_full()
             .bg(palette.app)
             .text_color(palette.text)
@@ -1525,6 +1598,7 @@ impl Render for Shell {
             })
             .relative()
             .children(self.settings.clone())
+            .children(self.quick_switcher.clone())
             .children(voice::fullscreen(&self.store, &palette, window, cx))
             .children(lightbox::lightbox(&self.store, &palette, window, cx))
             .children(voice::ringing(&self.store, &palette, cx))
