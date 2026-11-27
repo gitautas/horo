@@ -146,6 +146,12 @@ jobs:
           choco install nasm make -y --no-progress
           echo "C:\Program Files\NASM" >> $env:GITHUB_PATH
 
+      # The Intel Mac row cross-builds libvpx with its x86 assembly
+      # (`--as=nasm` in crates/horo-rtc/build.rs); the runner has no nasm.
+      - name: Install libvpx build tools (Intel macOS)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: brew install nasm
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}

@@ -22,7 +22,11 @@ identifier = "lt.uwu.uwum"
 description = "a cute matrix client"
 long-description = "horo — a Matrix client with end-to-end encryption and LiveKit voice, in the UwU design system."
 homepage = "https://github.com/gitautas/horo"
-publisher = "uwu.lt"
+# What the Tauri installer called the manufacturer (it had no publisher, so
+# the identifier's second part): the NSIS installer files the install under
+# HKCU\Software\<publisher>\horo, and matching it lets an update find a
+# Tauri install wherever the user put it, and leaves no stale key behind.
+publisher = "uwu"
 category = "SocialNetworking"
 icons = [
   "packaging/icons/32x32.png",

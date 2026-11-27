@@ -45,6 +45,29 @@ unread).
    installed gpui build each taking a newer gpui bundle. Watch Windows: the
    Tauri NSIS install and the cargo-packager one must agree on install
    directory and uninstall registry key, or users end up with two copies.
+
+   Checked against the sources (tauri-plugin-updater 2.10.1, cargo-packager
+   0.11.8, cargo-packager-updater 0.2.3), 2026-11-27; what's left is
+   running it:
+   - Windows: same install directory (`%LOCALAPPDATA%\horo`), same uninstall
+     key (`…\Uninstall\horo`), same binary (`horo.exe`). The manufacturer
+     key (`HKCU\Software\<publisher>\horo`, where a custom install directory
+     is remembered) differed: Tauri derived `uwu` from the identifier, the
+     packager config said `uwu.lt`. Now `publisher = "uwu"`. Tauri's updater
+     runs the installer with `/P /R /UPDATE /ARGS`; the packager's NSIS
+     template honours `/P` (passive) and `/R` (relaunch) and ignores the rest.
+   - macOS: the packager's `.app.tar.gz` has `horo.app/` at its root, which
+     is what Tauri's updater expects (it drops the first path component).
+   - Linux: Tauri picks `linux-<arch>-appimage`, then `linux-<arch>`; both
+     land on the AppImage. A Tauri `.deb` install gets the AppImage too and
+     refuses it (`InvalidUpdaterFormat`), as before: the old manifest had no
+     deb entries either. Adding `linux-<arch>-deb` would migrate those, but
+     cargo-packager-updater rejects any `format` it doesn't know (`deb`), and
+     one bad entry fails the whole manifest for every gpui install.
+   - Signatures: both sides use base64-wrapped minisign boxes from the same
+     key format, so the Tauri secret signs for both updaters.
+   - CI: the Intel Mac row cross-builds libvpx with `--as=nasm`; the runner
+     had no nasm. `release.yml` now installs it for that row.
 3. Remove Tauri: `src/`, `index.html`, `vite.config.ts`, `vitest.config.ts`,
    the tsconfigs, `package.json`/lock, `node_modules`, `dist/`, `src-tauri/`
    (the workspace member too), ts-rs bindings in horo-core and the `TS_RS_*`
