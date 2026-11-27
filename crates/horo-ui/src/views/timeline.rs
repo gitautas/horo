@@ -223,6 +223,11 @@ impl Timeline {
         cx.notify();
     }
 
+    /// Whether the divider or marker at `ix` has nothing drawn under it.
+    fn empty_divider(&self, ix: usize) -> bool {
+        empty_divider(self.items.get(ix..).unwrap_or_default().iter().map(seen))
+    }
+
     /// Messages actually drawn: not call bookkeeping, dividers or markers.
     fn shown_messages(&self) -> usize {
         self.items.iter().filter_map(|i| i.event.as_deref()).filter(|e| worth_showing(&e.content)).count()
@@ -268,9 +273,18 @@ impl Timeline {
                 // The item after a change can gain or lose its header (it may
                 // now continue, or no longer continue, the group above).
                 let end = (range.start + count + 1).min(self.items.len());
+                let start = range.start;
                 self.list.splice(range, count);
                 if range_after(end, self.items.len()) {
                     self.list.remeasure_items(end - 1..end);
+                }
+                // A message landing in (or leaving) a day can show or hide
+                // its divider, and the "new" marker above it.
+                let before = &self.items[..start.min(self.items.len())];
+                let day = before.iter().rposition(|i| i.kind == TimelineRowKind::DateDivider);
+                let marker = self.items.iter().position(|i| i.kind == TimelineRowKind::ReadMarker);
+                for ix in [day, marker].into_iter().flatten() {
+                    self.list.remeasure_items(ix..ix + 1);
                 }
             }
         }
@@ -380,6 +394,44 @@ fn wave(samples: &[u16], played: f32, palette: &Palette) -> AnyElement {
 
 fn range_after(end: usize, len: usize) -> bool {
     end > 0 && end <= len
+}
+
+/// A row as far as whether a divider over it is worth drawing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Seen {
+    /// A day's divider.
+    Day,
+    /// The "new" marker.
+    Marker,
+    /// Something drawn: a message, a system line, the timeline's start.
+    Shown,
+    /// Not drawn: call bookkeeping.
+    Hidden,
+}
+
+fn seen(item: &TimelineItemDto) -> Seen {
+    match item.kind {
+        TimelineRowKind::DateDivider => Seen::Day,
+        TimelineRowKind::ReadMarker => Seen::Marker,
+        TimelineRowKind::Event => match item.event.as_deref() {
+            Some(event) if worth_showing(&event.content) => Seen::Shown,
+            _ => Seen::Hidden,
+        },
+        TimelineRowKind::TimelineStart => Seen::Shown,
+    }
+}
+
+/// Whether the divider at `ix` stands over nothing: a day whose only
+/// events are hidden ones, or a "new" with nothing drawn after it. Drawn,
+/// they'd stack up as a ladder of empty days.
+/// `rows` starts at the divider itself.
+fn empty_divider(mut rows: impl Iterator<Item = Seen>) -> bool {
+    match rows.next() {
+        // Up to the next day's divider.
+        Some(Seen::Day) => !rows.take_while(|r| *r != Seen::Day).any(|r| r == Seen::Shown),
+        Some(Seen::Marker) => !rows.any(|r| r == Seen::Shown),
+        _ => false,
+    }
 }
 
 /// How many of your recent reactions the hover bar offers.
@@ -891,6 +943,7 @@ impl Timeline {
     fn render_item(&mut self, ix: usize, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let Some(item) = self.items.get(ix).cloned() else { return div().into_any_element() };
         let row = match item.kind {
+            TimelineRowKind::DateDivider | TimelineRowKind::ReadMarker if self.empty_divider(ix) => div().into_any_element(),
             TimelineRowKind::DateDivider => divider(item.timestamp.map(day_label).unwrap_or_default(), palette.text_tertiary, palette.border_subtle),
             TimelineRowKind::ReadMarker => divider("new".into(), palette.accent_secondary, palette.accent_secondary),
             TimelineRowKind::TimelineStart => div()
@@ -1643,7 +1696,27 @@ fn reaction(r: &ReactionDto, known: &HashMap<String, horo_core::matrix::packs::P
 
 #[cfg(test)]
 mod tests {
-    use super::{clock, wave_heights};
+    use super::{Seen, clock, empty_divider, wave_heights};
+
+    #[test]
+    fn dividers_over_nothing_drawn_are_dropped() {
+        use Seen::*;
+        let rows = [Day, Shown, Day, Hidden, Marker, Day, Hidden, Day, Day, Shown];
+        let empty = |ix: usize| empty_divider(rows[ix..].iter().copied());
+        // A day with a message keeps its divider.
+        assert!(!empty(0));
+        // A day of only call bookkeeping (and the marker) loses it…
+        assert!(empty(2));
+        assert!(empty(5));
+        assert!(empty(7));
+        // …and the last day, with a message, keeps it.
+        assert!(!empty(8));
+        // "new" stays while anything drawn comes after it.
+        assert!(!empty(4));
+        assert!(empty_divider([Marker, Hidden, Day, Hidden].into_iter()));
+        // Messages aren't dividers.
+        assert!(!empty(1));
+    }
 
     #[test]
     fn times_read_like_a_player() {
