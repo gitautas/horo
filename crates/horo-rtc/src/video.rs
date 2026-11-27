@@ -240,7 +240,7 @@ impl Vp8Encoder {
             if wrapped.is_null() {
                 return Err(VideoError { action: "encode", message: "couldn't wrap the picture".into() });
             }
-            let flags = if keyframe { ffi::VPX_EFLAG_FORCE_KF as i64 } else { 0 };
+            let flags: ffi::vpx_enc_frame_flags_t = if keyframe { ffi::VPX_EFLAG_FORCE_KF as _ } else { 0 };
             let code = ffi::vpx_codec_encode(&mut *self.ctx, &img, at_ms, 33, flags, ffi::VPX_DL_REALTIME as _);
             check("encode", &self.ctx, code)?;
             let mut iter: ffi::vpx_codec_iter_t = ptr::null();
