@@ -190,11 +190,23 @@ impl Timeline {
         let list = ListState::new(0, ListAlignment::Bottom, zpx(400.));
         let this = cx.weak_entity();
         list.set_scroll_handler(move |event, _, cx| {
-            let away = event.count > 0 && event.visible_range.end + 4 < event.count;
+            let visible_end = event.visible_range.end;
+            let is_scrolled = event.is_scrolled;
             let paginate = event.visible_range.start < PAGINATE_WITHIN;
             let _ = this.update(cx, |timeline, cx| {
-                if timeline.scrolled_up != away {
-                    timeline.scrolled_up = away;
+                // Count real visible messages below the viewport (ignoring hidden
+                // call/state bookkeeping items at the tail).
+                let tail = timeline.items.get(visible_end.min(timeline.items.len())..).unwrap_or(&[]);
+                let below = tail.iter().filter(|i| seen(i) == Seen::Shown).count();
+                let next = if !is_scrolled || below <= 2 {
+                    false
+                } else if below >= 25 {
+                    true
+                } else {
+                    timeline.scrolled_up
+                };
+                if timeline.scrolled_up != next {
+                    timeline.scrolled_up = next;
                     cx.notify();
                 }
                 if paginate {
@@ -609,6 +621,10 @@ impl Timeline {
                                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                                 if let Some(pos) = this.items.iter().position(|i| i.event.as_deref().and_then(|e| e.event_id.as_deref()) == Some(target_id.as_str())) {
                                                                     this.list.scroll_to_reveal_item(pos);
+                                                                    let below = this.items[pos + 1..].iter().filter(|i| seen(i) == Seen::Shown).count();
+                                                                    if below >= 6 {
+                                                                        this.scrolled_up = true;
+                                                                    }
                                                                     this.pins_open = false;
                                                                     cx.notify();
                                                                 }
