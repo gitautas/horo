@@ -14,7 +14,7 @@ use gpui::{
 };
 use gpui_component::{
     h_flex, v_flex,
-    input::{IndentInline, InputEvent, MoveDown, MoveUp, Position, Textarea, TextareaState},
+    input::{IndentInline, InputEvent, MoveDown, MoveUp, Textarea, TextareaState},
 };
 use horo_core::{
     dto::{MentionRef, SendOptions, StickerOptions},
@@ -43,7 +43,6 @@ use crate::{
 pub enum Mode {
     Write,
     Reply { event_id: String, who: String, preview: String },
-    Edit { event_id: String },
 }
 
 pub struct Composer {
@@ -302,36 +301,20 @@ impl Composer {
         self.input.update(cx, |state, cx| state.focus(window, cx));
     }
 
-    /// Reply to, or edit, what the timeline says.
+    /// Reply to what the timeline says, or reclaim focus after an inline edit.
     pub fn take(&mut self, action: &TimelineAction, window: &mut Window, cx: &mut Context<Self>) {
         match action.clone() {
             TimelineAction::Reply { event_id, who, preview } => {
-                // Leaving an edit drops its text; a reply keeps what's typed.
-                if matches!(self.mode, Mode::Edit { .. }) {
-                    self.input.update(cx, |state, cx| state.set_value("", window, cx));
-                }
                 self.mode = Mode::Reply { event_id, who, preview };
+                self.error = None;
             }
-            TimelineAction::Edit { event_id, body } => {
-                // The caret goes after the text, where you'd carry on typing
-                // (the column is clamped to the last line's length).
-                let last_line = body.matches('\n').count() as u32;
-                self.input.update(cx, |state, cx| {
-                    state.set_value(body, window, cx);
-                    state.set_cursor_position(Position::new(last_line, u32::MAX), window, cx);
-                });
-                self.mode = Mode::Edit { event_id };
-            }
+            TimelineAction::FocusComposer => {}
         }
-        self.error = None;
         self.input.update(cx, |state, cx| state.focus(window, cx));
         cx.notify();
     }
 
-    fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.mode, Mode::Edit { .. }) {
-            self.input.update(cx, |state, cx| state.set_value("", window, cx));
-        }
+    fn cancel(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.mode = Mode::Write;
         cx.notify();
     }
@@ -585,16 +568,15 @@ impl Composer {
             return;
         }
         let empty = self.input.read(cx).value().is_empty();
-        if !empty || matches!(self.mode, Mode::Edit { .. }) {
+        if !empty {
             return;
         }
         let Some(timeline) = self.timeline.upgrade() else { return };
-        let action = if up {
-            timeline.read(cx).last_editable().map(|(event_id, body)| TimelineAction::Edit { event_id, body })
-        } else {
-            timeline.read(cx).last_replyable()
-        };
-        if let Some(action) = action {
+        if up {
+            if timeline.update(cx, |t, cx| t.edit_last(window, cx)) {
+                cx.stop_propagation();
+            }
+        } else if let Some(action) = timeline.read(cx).last_replyable() {
             self.take(&action, window, cx);
             cx.stop_propagation();
         }
@@ -699,17 +681,12 @@ impl Composer {
             let mentions = mentions.clone();
             async move {
                 let core = state.core().await?;
-                match mode {
-                    Mode::Edit { event_id } => timeline::edit(&core, &room_id, thread_root.as_deref(), &event_id, &body, true).await,
-                    Mode::Write | Mode::Reply { .. } => {
-                        let reply_to = match mode {
-                            Mode::Reply { event_id, .. } => Some(event_id),
-                            _ => None,
-                        };
-                        let options = SendOptions { body, markdown: true, reply_to, thread_root, msgtype: None, emotes, mentions };
-                        timeline::send(&core, &room_id, options).await
-                    }
-                }
+                let reply_to = match mode {
+                    Mode::Reply { event_id, .. } => Some(event_id),
+                    Mode::Write => None,
+                };
+                let options = SendOptions { body, markdown: true, reply_to, thread_root, msgtype: None, emotes, mentions };
+                timeline::send(&core, &room_id, options).await
             }
         };
         // The message shows in the timeline as soon as the SDK queues it;
@@ -899,7 +876,6 @@ impl Render for Composer {
         let bar = match &self.mode {
             Mode::Write => None,
             Mode::Reply { who, preview, .. } => Some((palette.accent_tertiary, format!("replying to {who}"), preview.clone())),
-            Mode::Edit { .. } => Some((palette.accent, "editing your message".to_owned(), "escape to cancel".to_owned())),
         };
         let can_send = !self.input.read(cx).value().trim().is_empty() || !self.staged.is_empty();
         let staged = self.staged_strip(&palette, cx);
@@ -1010,10 +986,7 @@ impl Render for Composer {
                     .rounded(corner(24.))
                     .bg(palette.raised)
                     .border_1()
-                    .border_color(match self.mode {
-                        Mode::Edit { .. } => palette.accent,
-                        _ => palette.border,
-                    })
+                    .border_color(palette.border)
                     .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| this.on_key(event, window, cx)))
                     // Tab is the field's indent action, caught on its way:
                     // with the shortcode menu up it completes instead.

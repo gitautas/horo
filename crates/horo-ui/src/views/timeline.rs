@@ -15,7 +15,7 @@ use gpui::{
 };
 use gpui_component::{
     Icon, IconName, h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, Position, Textarea, TextareaState},
     v_flex,
 };
 use horo_core::{
@@ -96,6 +96,15 @@ pub struct Timeline {
     pins: Option<Vec<TimelineItemDto>>,
     /// Cached OpenGraph link previews keyed by URL.
     link_previews: HashMap<String, LinkPreviewState>,
+    /// Message currently being edited inline in the timeline.
+    editing: Option<InlineEdit>,
+}
+
+struct InlineEdit {
+    event_id: String,
+    input: Entity<TextareaState>,
+    error: Option<SharedString>,
+    saving: bool,
 }
 
 enum LinkPreviewState {
@@ -168,7 +177,7 @@ impl PlayState {
 #[derive(Debug, Clone)]
 pub enum TimelineAction {
     Reply { event_id: String, who: String, preview: String },
-    Edit { event_id: String, body: String },
+    FocusComposer,
 }
 
 impl EventEmitter<TimelineAction> for Timeline {}
@@ -229,6 +238,7 @@ impl Timeline {
             pins_open: false,
             pins: None,
             link_previews: HashMap::new(),
+            editing: None,
         };
 
         let backend = Backend::global(cx);
@@ -948,8 +958,8 @@ impl Timeline {
             && let Some(body) = editable_body(&event.content)
         {
             let event_id = id.clone();
-            bar = bar.child(icon_button("edit", "icons/pencil.svg", "edit", palette.text_secondary).on_click(cx.listener(move |_, _, _, cx| {
-                cx.emit(TimelineAction::Edit { event_id: event_id.clone(), body: body.clone() })
+            bar = bar.child(icon_button("edit", "icons/pencil.svg", "edit", palette.text_secondary).on_click(cx.listener(move |this, _, window, cx| {
+                this.start_edit(event_id.clone(), body.clone(), window, cx);
             })));
         }
         if event.is_own && !matches!(event.content, ContentDto::Redacted) {
@@ -1047,14 +1057,168 @@ impl Timeline {
         cx.notify();
     }
 
-    /// The newest message of ours that can still be edited, for the up arrow.
-    pub fn last_editable(&self) -> Option<(String, String)> {
-        self.items.iter().rev().filter_map(|i| i.event.as_deref()).find_map(|e| {
+    /// Open an inline editor right where `event_id` sits in the timeline.
+    pub fn start_edit(&mut self, event_id: String, body: String, window: &mut Window, cx: &mut Context<Self>) {
+        let last_line = body.matches('\n').count() as u32;
+        let input = cx.new(|cx| {
+            let mut state = TextareaState::new(window, cx);
+            state.set_auto_grow(1, 10, cx);
+            state.set_submit_on_enter(true, cx);
+            state.set_value(body, window, cx);
+            state.set_cursor_position(Position::new(last_line, u32::MAX), window, cx);
+            state
+        });
+        cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| match event {
+            InputEvent::PressEnter { shift: false, .. } => this.submit_edit(window, cx),
+            InputEvent::Change => cx.notify(),
+            _ => {}
+        })
+        .detach();
+        input.update(cx, |state, cx| state.focus(window, cx));
+        self.menu = None;
+        self.confirm_delete = None;
+        self.editing = Some(InlineEdit { event_id, input, error: None, saving: false });
+        cx.notify();
+    }
+
+    /// Start inline-editing the newest editable message of ours (for Up arrow).
+    pub fn edit_last(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let found = self.items.iter().enumerate().rev().find_map(|(ix, item)| {
+            let e = item.event.as_deref()?;
             if !e.is_editable {
                 return None;
             }
-            Some((e.event_id.clone()?, editable_body(&e.content)?))
+            Some((ix, e.event_id.clone()?, editable_body(&e.content)?))
+        });
+        let Some((ix, event_id, body)) = found else {
+            return false;
+        };
+        self.list.scroll_to_reveal_item(ix);
+        self.start_edit(event_id, body, window, cx);
+        true
+    }
+
+    /// Leave inline edit mode without saving and return focus to the composer.
+    fn cancel_edit(&mut self, cx: &mut Context<Self>) {
+        if self.editing.take().is_some() {
+            cx.notify();
+            cx.emit(TimelineAction::FocusComposer);
+        }
+    }
+
+    /// Save the inline edit to Matrix.
+    fn submit_edit(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editing) = self.editing.as_mut() else { return };
+        if editing.saving {
+            return;
+        }
+        let body = editing.input.read(cx).value().trim().to_owned();
+        if body.is_empty() {
+            self.cancel_edit(cx);
+            return;
+        }
+        let event_id = editing.event_id.clone();
+        editing.saving = true;
+        editing.error = None;
+        cx.notify();
+
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let (state, room_id, thread_root, event_id) = (backend.state.clone(), self.room_id.clone(), self.thread_root.clone(), event_id.clone());
+            async move {
+                let core = state.core().await?;
+                timeline::edit(&core, &room_id, thread_root.as_deref(), &event_id, &body, true).await
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let failure = match task.await {
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(e.to_string()),
+                Err(e) => Some(e.to_string()),
+            };
+            let _ = this.update(cx, |this, cx| {
+                let matches = this.editing.as_ref().is_some_and(|e| e.event_id == event_id);
+                if !matches {
+                    return;
+                }
+                match failure {
+                    None => {
+                        this.editing = None;
+                        cx.emit(TimelineAction::FocusComposer);
+                    }
+                    Some(err) => {
+                        if let Some(editing) = this.editing.as_mut() {
+                            editing.saving = false;
+                            editing.error = Some(err.into());
+                        }
+                    }
+                }
+                cx.notify();
+            });
         })
+        .detach();
+    }
+
+    fn inline_editor(&self, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let Some(editing) = self.editing.as_ref() else {
+            return div().into_any_element();
+        };
+        let saving = editing.saving;
+        let error = editing.error.clone();
+        v_flex()
+            .w_full()
+            .max_w(zpx(640.))
+            .mt(zpx(4.))
+            .gap(zpx(4.))
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" {
+                    cx.stop_propagation();
+                    this.cancel_edit(cx);
+                }
+            }))
+            .child(
+                div()
+                    .w_full()
+                    .px(space(10.))
+                    .py(space(6.))
+                    .rounded(corner(12.))
+                    .bg(palette.card)
+                    .border_1()
+                    .border_color(palette.accent)
+                    .text_size(crate::theme::message_text())
+                    .child(Textarea::new(&editing.input).appearance(false)),
+            )
+            .child(
+                h_flex()
+                    .gap(zpx(4.))
+                    .text_size(text(11.))
+                    .text_color(palette.text_tertiary)
+                    .when(saving, |row| row.child("saving…"))
+                    .when(!saving, |row| {
+                        row.child("escape to")
+                            .child(
+                                div()
+                                    .id("inline-edit-cancel")
+                                    .cursor_pointer()
+                                    .text_color(palette.accent)
+                                    .hover(|d| d.underline())
+                                    .child("cancel")
+                                    .on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx))),
+                            )
+                            .child("• enter to")
+                            .child(
+                                div()
+                                    .id("inline-edit-save")
+                                    .cursor_pointer()
+                                    .text_color(palette.accent)
+                                    .hover(|d| d.underline())
+                                    .child("save")
+                                    .on_click(cx.listener(|this, _, window, cx| this.submit_edit(window, cx))),
+                            )
+                    }),
+            )
+            .when_some(error, |col, err| col.child(div().text_size(text(11.)).text_color(palette.danger).child(err)))
+            .into_any_element()
     }
 
     /// The newest message from someone else, for the down arrow.
@@ -1229,9 +1393,9 @@ impl Timeline {
             && let Some(body) = body.clone()
         {
             let event_id = id.clone();
-            list = list.child(menu::item("mm-edit", "edit", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+            list = list.child(menu::item("mm-edit", "edit", true, None, palette).on_click(cx.listener(move |this, _, window, cx| {
                 close(this, cx);
-                cx.emit(TimelineAction::Edit { event_id: event_id.clone(), body: body.clone() });
+                this.start_edit(event_id.clone(), body.clone(), window, cx);
             })));
         }
         list = list.child(menu::separator(palette));
@@ -1980,13 +2144,20 @@ impl Timeline {
                 .into_any_element();
         }
 
-        let body = v_flex()
-            .w_full()
-            .max_w(zpx(640.))
-            .text_size(crate::theme::message_text())
-            .line_height(gpui::relative(1.375))
-            .child(self.body(event, palette, cx))
-            .when(event.is_edited, |d| d.child(div().text_size(text(10.)).text_color(palette.text_tertiary).child("(edited)")));
+        let is_editing = self.editing.as_ref().is_some_and(|e| event.event_id.as_deref() == Some(e.event_id.as_str()));
+
+        let body = if is_editing {
+            self.inline_editor(palette, cx)
+        } else {
+            v_flex()
+                .w_full()
+                .max_w(zpx(640.))
+                .text_size(crate::theme::message_text())
+                .line_height(gpui::relative(1.375))
+                .child(self.body(event, palette, cx))
+                .when(event.is_edited, |d| d.child(div().text_size(text(10.)).text_color(palette.text_tertiary).child("(edited)")))
+                .into_any_element()
+        };
 
         let reply = event.reply.as_ref().map(|reply| {
             let who = reply.sender_name.clone().or_else(|| reply.sender.clone()).unwrap_or_default();
@@ -2105,7 +2276,7 @@ impl Timeline {
                 .children(shield)
         });
 
-        let preview_card = self.link_preview(event, palette, cx);
+        let preview_card = if is_editing { None } else { self.link_preview(event, palette, cx) };
         let content = v_flex()
             .flex_1()
             .min_w_0()
@@ -2150,7 +2321,7 @@ impl Timeline {
                 .into_any_element()
         };
 
-        let actions = self.actions(event, &name, palette, cx);
+        let actions = if is_editing { None } else { self.actions(event, &name, palette, cx) };
 
         h_flex()
             .w_full()
@@ -2166,9 +2337,10 @@ impl Timeline {
                     .px(space(8.))
                     .py(zpx(2.))
                     .rounded(corner(8.))
-                    .when(!event.is_highlighted && !search_hit, |row| row.hover(|row| row.bg(gpui::Hsla { a: 0.035, ..gpui::white() })))
-                    .when(event.is_highlighted && !search_hit, |row| row.bg(gpui::Hsla { a: 0.08, ..palette.accent_secondary }))
-                    .when(search_hit, |row| row.bg(gpui::Hsla { a: 0.16, ..palette.accent }))
+                    .when(!event.is_highlighted && !search_hit && !is_editing, |row| row.hover(|row| row.bg(gpui::Hsla { a: 0.035, ..gpui::white() })))
+                    .when(event.is_highlighted && !search_hit && !is_editing, |row| row.bg(gpui::Hsla { a: 0.08, ..palette.accent_secondary }))
+                    .when(is_editing, |row| row.bg(gpui::Hsla { a: 0.06, ..palette.accent }))
+                    .when(search_hit && !is_editing, |row| row.bg(gpui::Hsla { a: 0.16, ..palette.accent }))
                     .when(pending, |row| row.opacity(0.72))
                     .when_some(event.event_id.clone(), |row, id| {
                         row.on_mouse_down(
