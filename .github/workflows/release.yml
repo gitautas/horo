@@ -193,8 +193,8 @@ jobs:
       - name: Collect the bundles
         run: |
           set -euo pipefail
-          version="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n1)"
-          out="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/${{ matrix.target }}/release"
+          version="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n1 | tr -d '\r')"
+          out="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory | tr -d '\r')/${{ matrix.target }}/release"
           mkdir -p dist-release
           shopt -s nullglob
           for f in "$out"/*.dmg "$out"/*.deb "$out"/*.AppImage "$out"/*-setup.exe \

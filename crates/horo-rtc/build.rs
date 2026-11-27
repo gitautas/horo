@@ -85,9 +85,10 @@ fn build_msvc(source: &Path, out: &Path, target: &str) {
          --disable-examples --disable-tools --disable-docs --disable-unit-tests --disable-webm-io --disable-libyuv",
         unix(&source.join("configure")),
     );
-    run(Command::new("bash").current_dir(out).args(["--noprofile", "--norc", "-c", &configure]), "configuring libvpx");
+    let bash = find_windows_bash();
+    run(Command::new(&bash).current_dir(out).args(["--noprofile", "--norc", "-c", &configure]), "configuring libvpx");
     // Writes vpx.vcxproj and the headers it needs.
-    run(Command::new("bash").current_dir(out).args(["--noprofile", "--norc", "-c", "make dist"]), "generating libvpx's projects");
+    run(Command::new(&bash).current_dir(out).args(["--noprofile", "--norc", "-c", "make dist"]), "generating libvpx's projects");
 
     let msbuild = cc::windows_registry::find_tool(target, "msbuild.exe").unwrap_or_else(|| panic!("MSBuild not found: install Visual Studio's C++ build tools"));
     run(
@@ -101,6 +102,34 @@ fn build_msvc(source: &Path, out: &Path, target: &str) {
             .arg(format!("/p:SolutionDir={}\\", out.display())),
         "building libvpx",
     );
+}
+
+/// Find Git for Windows' or MSYS2's `bash.exe`, skipping WSL's shim in
+/// `Windows\System32\bash.exe` (which fails when no WSL distro is installed).
+fn find_windows_bash() -> PathBuf {
+    if let Some(path) = env::var_os("PATH") {
+        for dir in env::split_paths(&path) {
+            let lower = dir.to_string_lossy().to_ascii_lowercase();
+            if lower.contains(r"\windows\system32") || lower.contains(r"\windowsapps") {
+                continue;
+            }
+            let bash = dir.join("bash.exe");
+            if bash.is_file() {
+                return bash;
+            }
+        }
+    }
+    for candidate in [
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        r"C:\msys64\usr\bin\bash.exe",
+    ] {
+        let path = PathBuf::from(candidate);
+        if path.is_file() {
+            return path;
+        }
+    }
+    PathBuf::from("bash")
 }
 
 /// libvpx's own name for a Rust target.
