@@ -10,10 +10,14 @@ use std::{collections::{HashMap, HashSet}, rc::Rc};
 
 use chrono::{DateTime, Local, TimeZone};
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, Hsla, EventEmitter, InteractiveElement, StatefulInteractiveElement, FontWeight, IntoElement, ListAlignment, ListState, ParentElement, Render, SharedString, Styled,
+    AnyElement, App, AppContext, Context, Entity, Hsla, EventEmitter, InteractiveElement, KeyDownEvent, ListOffset, StatefulInteractiveElement, FontWeight, IntoElement, ListAlignment, ListState, ParentElement, Render, SharedString, Styled,
     WeakEntity, Window, div, img, list, AnimationExt, prelude::FluentBuilder, StyledImage,
 };
-use gpui_component::{h_flex, v_flex};
+use gpui_component::{
+    Icon, IconName, h_flex,
+    input::{Input, InputEvent, InputState},
+    v_flex,
+};
 use horo_core::{
     dto::{ContentDto, Diff, EventItemDto, MediaInfoDto, ReactionDto, TimelineItemDto, TimelineRowKind, TimelineUpdate},
     matrix::timeline,
@@ -81,6 +85,12 @@ pub struct Timeline {
     menu: Option<(String, gpui::Point<gpui::Pixels>)>,
     /// Messages whose spoilers the reader has clicked to reveal.
     revealed_spoilers: HashSet<String>,
+    /// True when the viewport is scrolled up away from the newest messages.
+    scrolled_up: bool,
+    /// In-room message search (⌘F / Ctrl+F).
+    search: Option<Entity<InputState>>,
+    search_matches: Vec<usize>,
+    search_cursor: usize,
 }
 
 /// A video or a sound played inside its message: fetched to a file, then
@@ -158,9 +168,17 @@ impl Timeline {
         let list = ListState::new(0, ListAlignment::Bottom, zpx(400.));
         let this = cx.weak_entity();
         list.set_scroll_handler(move |event, _, cx| {
-            if event.visible_range.start < PAGINATE_WITHIN {
-                let _ = this.update(cx, |timeline, cx| timeline.paginate(cx));
-            }
+            let away = event.count > 0 && event.visible_range.end + 4 < event.count;
+            let paginate = event.visible_range.start < PAGINATE_WITHIN;
+            let _ = this.update(cx, |timeline, cx| {
+                if timeline.scrolled_up != away {
+                    timeline.scrolled_up = away;
+                    cx.notify();
+                }
+                if paginate {
+                    timeline.paginate(cx);
+                }
+            });
         });
         // Presence dots change with the store.
         cx.observe(store, |_, _, cx| cx.notify()).detach();
@@ -187,7 +205,17 @@ impl Timeline {
             error: None,
             marking_read: false,
             confirm_delete: None,
-            notice: None, picker: None, playing: None, menu: None, revealed_spoilers: HashSet::new(), zoom_epoch: 0 };
+            notice: None,
+            picker: None,
+            playing: None,
+            menu: None,
+            revealed_spoilers: HashSet::new(),
+            zoom_epoch: 0,
+            scrolled_up: false,
+            search: None,
+            search_matches: Vec::new(),
+            search_cursor: 0,
+        };
 
         let backend = Backend::global(cx);
         let task = backend.run({
@@ -339,6 +367,159 @@ impl Timeline {
             }
         });
         drop(task);
+    }
+
+    /// Open (or refocus) the ⌘F in-room message search bar.
+    pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(input) = &self.search {
+            input.update(cx, |s, cx| s.focus(window, cx));
+            cx.notify();
+            return;
+        }
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("search messages in this room…"));
+        cx.subscribe(&input, |this, _, event: &InputEvent, cx| match event {
+            InputEvent::Change => this.update_search(cx),
+            InputEvent::PressEnter { .. } => this.step_search(1, cx),
+            _ => {}
+        })
+        .detach();
+        input.update(cx, |s, cx| s.focus(window, cx));
+        self.search = Some(input);
+        self.search_matches.clear();
+        self.search_cursor = 0;
+        cx.notify();
+    }
+
+    fn close_search(&mut self, cx: &mut Context<Self>) {
+        self.search = None;
+        self.search_matches.clear();
+        self.search_cursor = 0;
+        cx.notify();
+    }
+
+    fn update_search(&mut self, cx: &mut Context<Self>) {
+        let Some(input) = &self.search else { return };
+        let needle = input.read(cx).value().trim().to_lowercase();
+        self.search_matches.clear();
+        self.search_cursor = 0;
+        if !needle.is_empty() {
+            for (ix, item) in self.items.iter().enumerate().rev() {
+                if item.kind != TimelineRowKind::Event {
+                    continue;
+                }
+                let Some(event) = item.event.as_deref() else { continue };
+                if !worth_showing(&event.content) || is_system(&event.content) {
+                    continue;
+                }
+                let (text_body, _) = body_text(&event.content);
+                let sender = event.sender_name.as_deref().unwrap_or(event.sender.as_str());
+                if text_body.to_lowercase().contains(&needle) || sender.to_lowercase().contains(&needle) {
+                    self.search_matches.push(ix);
+                }
+            }
+        }
+        if let Some(&ix) = self.search_matches.first() {
+            self.list.scroll_to_reveal_item(ix);
+        }
+        cx.notify();
+    }
+
+    fn step_search(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let len = self.search_matches.len();
+        if len == 0 {
+            return;
+        }
+        self.search_cursor = (self.search_cursor as isize + delta).rem_euclid(len as isize) as usize;
+        if let Some(&ix) = self.search_matches.get(self.search_cursor) {
+            self.list.scroll_to_reveal_item(ix);
+        }
+        cx.notify();
+    }
+
+    fn jump_to_present(&mut self, cx: &mut Context<Self>) {
+        self.list.scroll_to(ListOffset { item_ix: self.items.len(), offset_in_item: zpx(0.) });
+        self.scrolled_up = false;
+        cx.notify();
+    }
+
+    fn search_bar(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let input = self.search.as_ref()?;
+        let has_query = !input.read(cx).value().trim().is_empty();
+        let total = self.search_matches.len();
+        let count_label = if !has_query {
+            String::new()
+        } else if total == 0 {
+            "no matches".to_owned()
+        } else {
+            format!("{} / {}", self.search_cursor + 1, total)
+        };
+        Some(
+            h_flex()
+                .flex_none()
+                .items_center()
+                .gap(space(8.))
+                .mx(space(22.))
+                .mt(space(10.))
+                .px(space(12.))
+                .py(space(6.))
+                .rounded(corner(12.))
+                .bg(palette.card)
+                .border_1()
+                .border_color(palette.border)
+                .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                    if event.keystroke.key == "escape" {
+                        cx.stop_propagation();
+                        this.close_search(cx);
+                    }
+                }))
+                .child(Icon::new(IconName::Search).size(zpx(14.)).text_color(palette.text_tertiary))
+                .child(div().flex_1().min_w_0().text_size(text(13.)).child(Input::new(input).appearance(false)))
+                .when(!count_label.is_empty(), |d| {
+                    d.child(div().flex_none().font_family(palette.mono_font.clone()).text_size(text(11.)).text_color(palette.text_tertiary).child(count_label))
+                })
+                .child(
+                    div()
+                        .id("search-prev")
+                        .px(space(6.))
+                        .py(zpx(2.))
+                        .rounded(corner(6.))
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(if total > 0 { palette.text_secondary } else { palette.text_tertiary })
+                        .hover(|d| d.bg(palette.raised))
+                        .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("older match").build(window, cx))
+                        .child("↑")
+                        .on_click(cx.listener(|this, _, _, cx| this.step_search(1, cx))),
+                )
+                .child(
+                    div()
+                        .id("search-next")
+                        .px(space(6.))
+                        .py(zpx(2.))
+                        .rounded(corner(6.))
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(if total > 0 { palette.text_secondary } else { palette.text_tertiary })
+                        .hover(|d| d.bg(palette.raised))
+                        .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("newer match").build(window, cx))
+                        .child("↓")
+                        .on_click(cx.listener(|this, _, _, cx| this.step_search(-1, cx))),
+                )
+                .child(
+                    div()
+                        .id("search-close")
+                        .px(space(6.))
+                        .py(zpx(2.))
+                        .rounded(corner(6.))
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(palette.text_tertiary)
+                        .hover(|d| d.bg(palette.raised).text_color(palette.text))
+                        .child("✕")
+                        .on_click(cx.listener(|this, _, _, cx| this.close_search(cx))),
+                )
+                .into_any_element(),
+        )
     }
 }
 
@@ -707,10 +888,35 @@ impl Render for Timeline {
         if !self.loaded {
             return div().size_full().flex().items_center().justify_center().text_color(palette.text_tertiary).child("loading…").into_any_element();
         }
+        let jump_bar = self.scrolled_up.then(|| {
+            h_flex()
+                .id("jump-to-present")
+                .absolute()
+                .bottom(zpx(34.))
+                .left(space(22.))
+                .right(space(22.))
+                .justify_between()
+                .items_center()
+                .px(space(14.))
+                .py(space(7.))
+                .rounded(corner(12.))
+                .bg(palette.raised)
+                .border_1()
+                .border_color(palette.border)
+                .shadow_md()
+                .cursor_pointer()
+                .hover(|d| d.bg(palette.card).border_color(palette.accent))
+                .on_click(cx.listener(|this, _, _, cx| this.jump_to_present(cx)))
+                .child(div().text_xs().text_color(palette.text_secondary).child("you're viewing older messages"))
+                .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(palette.accent).child("jump to present ↓"))
+        });
+
         let this: WeakEntity<Self> = cx.weak_entity();
         let palette_for_rows = palette.clone();
         v_flex()
+            .relative()
             .size_full()
+            .children(self.search_bar(&palette, cx))
             .child(
                 list(self.list.clone(), move |ix, _, cx| {
                     this.update(cx, |timeline, cx| timeline.render_item(ix, &palette_for_rows, cx))
@@ -721,6 +927,7 @@ impl Render for Timeline {
                 .w_full(),
             )
             .child(self.footer(&palette, cx))
+            .children(jump_bar)
             .children(self.message_menu(&palette, cx))
             .children(self.picker.as_ref().map(|(_, at, picker)| {
                 gpui::deferred(
@@ -966,7 +1173,8 @@ impl Timeline {
                         .find(|i| i.kind != TimelineRowKind::ReadMarker && i.event.as_deref().is_none_or(|e| worth_showing(&e.content)))
                         .and_then(|prev| prev.event.as_deref())
                         .is_some_and(|prev| continues_group(prev, event));
-                    self.message(event, continues, palette, cx)
+                    let search_hit = self.search_matches.get(self.search_cursor) == Some(&ix);
+                    self.message(event, continues, search_hit, palette, cx)
                 }
                 None => div().into_any_element(),
             },
@@ -1446,7 +1654,7 @@ impl Timeline {
     /// face (or, continuing a group, the time on hover), then the sender in
     /// their accent, the time and any device warning, the reply, the body,
     /// reactions and the thread.
-    fn message(&mut self, event: &EventItemDto, continues: bool, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+    fn message(&mut self, event: &EventItemDto, continues: bool, search_hit: bool, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let name = event.sender_name.clone().unwrap_or_else(|| event.sender.trim_start_matches('@').split(':').next().unwrap_or_default().to_owned());
 
         if is_system(&event.content) {
@@ -1661,8 +1869,9 @@ impl Timeline {
                     .px(space(8.))
                     .py(zpx(2.))
                     .rounded(corner(8.))
-                    .when(!event.is_highlighted, |row| row.hover(|row| row.bg(gpui::Hsla { a: 0.035, ..gpui::white() })))
-                    .when(event.is_highlighted, |row| row.bg(gpui::Hsla { a: 0.08, ..palette.accent_secondary }))
+                    .when(!event.is_highlighted && !search_hit, |row| row.hover(|row| row.bg(gpui::Hsla { a: 0.035, ..gpui::white() })))
+                    .when(event.is_highlighted && !search_hit, |row| row.bg(gpui::Hsla { a: 0.08, ..palette.accent_secondary }))
+                    .when(search_hit, |row| row.bg(gpui::Hsla { a: 0.16, ..palette.accent }))
                     .when(pending, |row| row.opacity(0.72))
                     .when_some(event.event_id.clone(), |row, id| {
                         row.on_mouse_down(

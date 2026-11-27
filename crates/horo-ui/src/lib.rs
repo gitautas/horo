@@ -39,6 +39,8 @@ gpui::actions!(
         OpenSettings,
         /// Open the quick switcher (⌘K on macOS, Ctrl+K elsewhere).
         OpenQuickSwitcher,
+        /// Search messages in the open room (⌘F on macOS, Ctrl+F elsewhere).
+        FindInRoom,
         Quit,
         /// Settings, at "about".
         About,
@@ -101,12 +103,13 @@ pub fn init(backend: Backend, cx: &mut App) {
     // ⌘ on macOS, Ctrl elsewhere. (This gpui has no `secondary-`: it
     // panics on it at startup.)
     #[cfg(target_os = "macos")]
-    let (settings, switcher, quit) = ("cmd-,", "cmd-k", "cmd-q");
+    let (settings, switcher, find, quit) = ("cmd-,", "cmd-k", "cmd-f", "cmd-q");
     #[cfg(not(target_os = "macos"))]
-    let (settings, switcher, quit) = ("ctrl-,", "ctrl-k", "ctrl-q");
+    let (settings, switcher, find, quit) = ("ctrl-,", "ctrl-k", "ctrl-f", "ctrl-q");
     cx.bind_keys([
         gpui::KeyBinding::new(settings, OpenSettings, None),
         gpui::KeyBinding::new(switcher, OpenQuickSwitcher, None),
+        gpui::KeyBinding::new(find, FindInRoom, None),
         gpui::KeyBinding::new(quit, Quit, None),
     ]);
     cx.bind_keys(shortcuts());
@@ -180,6 +183,7 @@ fn menus() -> Vec<gpui::Menu> {
             "View",
             vec![
                 MenuItem::action("Quick Switcher…", OpenQuickSwitcher),
+                MenuItem::action("Find in Room…", FindInRoom),
                 MenuItem::separator(),
                 MenuItem::action("Zoom In", ZoomIn),
                 MenuItem::action("Zoom Out", ZoomOut),

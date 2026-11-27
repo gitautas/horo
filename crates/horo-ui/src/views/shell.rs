@@ -23,7 +23,7 @@ use matrix_sdk::ruma::OwnedRoomId;
 use crate::theme::zpx;
 use crate::{
     backend::Backend,
-    OpenQuickSwitcher, OpenSettings,
+    FindInRoom, OpenQuickSwitcher, OpenSettings,
     presence,
     media::Media,
     rooms::{self, Filter, View},
@@ -1357,6 +1357,22 @@ impl Shell {
                 store.update(cx, |s, cx| if in_this_call { s.leave_call(cx) } else { s.join_call(room_id, cx) })
             });
 
+        let search_button = div()
+            .id("header-search")
+            .p(space(9.))
+            .rounded(corner(12.))
+            .cursor_pointer()
+            .bg(palette.raised)
+            .tooltip(|window, cx| {
+                gpui_component::tooltip::Tooltip::new(if cfg!(target_os = "macos") { "search messages (⌘F)" } else { "search messages (ctrl+f)" }).build(window, cx)
+            })
+            .child(voice::icon("icons/search.svg").size(zpx(17.)).text_color(palette.text_secondary))
+            .on_click(cx.listener(|this, _, window, cx| {
+                if let Some((_, timeline, _)) = &this.timeline {
+                    timeline.update(cx, |t, cx| t.open_search(window, cx));
+                }
+            }));
+
         let info_open = self.store.read(cx).prefs.show_info_panel;
         let store = self.store.clone();
         let info_button = div()
@@ -1404,6 +1420,7 @@ impl Shell {
                     .ml_auto()
                     .gap(space(8.))
                     .child(div().mr(zpx(4.)).font_family(palette.mono_font.clone()).text_size(text(11.)).text_color(palette.text_tertiary).child(room.member_count.to_string()))
+                    .child(search_button)
                     .child(call_button)
                     .child(info_button),
             )
@@ -1565,6 +1582,11 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|this, _: &OpenQuickSwitcher, window, cx| {
                 this.open_quick_switcher(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FindInRoom, window, cx| {
+                if let Some((_, timeline, _)) = &this.timeline {
+                    timeline.update(cx, |t, cx| t.open_search(window, cx));
+                }
             }))
             .size_full()
             .bg(palette.app)
