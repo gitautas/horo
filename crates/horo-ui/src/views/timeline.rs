@@ -37,8 +37,8 @@ use crate::{
     },
 };
 
-/// Messages from one sender this close together share a header.
-const GROUP_WINDOW_MS: u64 = 5 * 60 * 1000;
+/// Messages from one sender this close together share a header (Discord's 7m window).
+const GROUP_WINDOW_MS: u64 = 7 * 60 * 1000;
 /// Fetch older history when this close to the top.
 const PAGINATE_WITHIN: usize = 8;
 /// Fill pages fetched on open until this many messages show…
@@ -984,10 +984,11 @@ impl Timeline {
     }
 }
 
-/// Same sender, close in time, both ordinary messages: no second header.
+/// Same sender, close in time, both ordinary messages, and not a reply: no second header.
 fn continues_group(prev: &EventItemDto, event: &EventItemDto) -> bool {
     prev.sender == event.sender
         && event.timestamp.saturating_sub(prev.timestamp) < GROUP_WINDOW_MS
+        && event.reply.is_none()
         && !is_system(&prev.content)
         && !is_system(&event.content)
 }
@@ -1455,6 +1456,7 @@ impl Timeline {
                 .px(space(22.))
                 .child(
                     h_flex()
+                        .group("system-msg")
                         .w_full()
                         .gap(space(10.))
                         .py(space(6.))
@@ -1462,7 +1464,15 @@ impl Timeline {
                         .text_size(text(12.))
                         .text_color(palette.text_tertiary)
                         .child(div().flex_1().min_w_0().child(line))
-                        .child(div().flex_none().font_family(palette.mono_font.clone()).text_size(text(10.5)).child(time_label(event.timestamp))),
+                        .child(
+                            div()
+                                .flex_none()
+                                .font_family(palette.mono_font.clone())
+                                .text_size(text(10.5))
+                                .invisible()
+                                .group_hover("system-msg", |s| s.visible())
+                                .child(time_label(event.timestamp)),
+                        ),
                 )
                 .into_any_element();
         }
@@ -1471,7 +1481,7 @@ impl Timeline {
             .w_full()
             .max_w(zpx(640.))
             .text_size(crate::theme::message_text())
-            .line_height(gpui::relative(1.55))
+            .line_height(gpui::relative(1.375))
             .child(self.body(event, palette, cx))
             .when(event.is_edited, |d| d.child(div().text_size(text(10.)).text_color(palette.text_tertiary).child("(edited)")));
 
@@ -1566,7 +1576,7 @@ impl Timeline {
         let header = (!continues).then(|| {
             let (sender, hint) = (event.sender.clone(), event.sender_avatar.clone());
             h_flex()
-                .mb(zpx(3.))
+                .mb(zpx(1.))
                 .gap(space(8.))
                 .flex_wrap()
                 .child(
@@ -1580,7 +1590,15 @@ impl Timeline {
                         .child(name.clone())
                         .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| this.open_profile(sender.clone(), click.position(), hint.clone(), cx))),
                 )
-                .child(div().font_family(palette.mono_font.clone()).text_size(text(10.5)).text_color(palette.text_tertiary).child(time_label(event.timestamp)))
+                .child(
+                    div()
+                        .font_family(palette.mono_font.clone())
+                        .text_size(text(10.5))
+                        .text_color(palette.text_tertiary)
+                        .invisible()
+                        .group_hover("message", |s| s.visible())
+                        .child(time_label(event.timestamp)),
+                )
                 .children(shield)
         });
 
@@ -1603,7 +1621,7 @@ impl Timeline {
                 .flex_none()
                 .flex()
                 .justify_center()
-                .pt(space(4.))
+                .pt(zpx(3.))
                 .font_family(palette.mono_font.clone())
                 .text_size(text(9.5))
                 .text_color(palette.text_tertiary)
@@ -1620,7 +1638,7 @@ impl Timeline {
                 .flex_none()
                 .flex()
                 .justify_center()
-                .pt(space(2.))
+                .pt(zpx(2.))
                 .cursor_pointer()
                 .child(picture)
                 .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| this.open_profile(sender.clone(), click.position(), hint.clone(), cx)))
@@ -1632,7 +1650,7 @@ impl Timeline {
         h_flex()
             .w_full()
             .px(space(22.))
-            .pt(space(3.))
+            .when(!continues, |d| d.pt(space(14.)))
             .child(
                 h_flex()
                     .group("message")
@@ -1641,8 +1659,8 @@ impl Timeline {
                     .items_start()
                     .gap(space(12.))
                     .px(space(8.))
-                    .py(space(5.))
-                    .rounded(corner(16.))
+                    .py(zpx(2.))
+                    .rounded(corner(8.))
                     .when(!event.is_highlighted, |row| row.hover(|row| row.bg(gpui::Hsla { a: 0.035, ..gpui::white() })))
                     .when(event.is_highlighted, |row| row.bg(gpui::Hsla { a: 0.08, ..palette.accent_secondary }))
                     .when(pending, |row| row.opacity(0.72))

@@ -84,7 +84,7 @@ impl Shell {
         .detach();
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("find a room or friend~"));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("find or start a conversation"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
         let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, room_menu_can_delete: None, invite_to_space: None, leave_space: None, browse: None, settings: None, profile: None, focus, search, filter: Filter::All, filters_open: false, space_hierarchy: None, joining: HashSet::new() };
         shell.follow_room(window, cx);
@@ -654,33 +654,81 @@ impl Shell {
         };
         let away = store.is_away();
 
-        let all = space_tile("space-all", "all", None, open.is_none(), palette.accent, 0, palette, cx)
-            .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.open_space(None, cx))));
+        let home_badge: u64 = rooms::filter(&store.rooms, &View { spaces: &spaces, ..Default::default() })
+            .into_iter()
+            .map(|r| r.notification_count)
+            .sum();
+        let home_active = open.is_none();
+        let home = rail_pill(
+            home_active,
+            home_badge > 0,
+            palette,
+            div()
+                .id("space-home")
+                .relative()
+                .flex_none()
+                .cursor_pointer()
+                .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("direct messages").build(window, cx))
+                .child(
+                    div()
+                        .size(zpx(46.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .map(|d| {
+                            if home_active {
+                                d.rounded(corner(14.))
+                                    .bg(palette.raised)
+                                    .border_2()
+                                    .border_color(palette.accent)
+                            } else {
+                                d.rounded_full()
+                                    .bg(palette.raised)
+                                    .border_1()
+                                    .border_color(palette.border_subtle)
+                                    .hover(|d| d.rounded(corner(14.)).border_color(palette.accent))
+                            }
+                        })
+                        .child(img(logo()).w(zpx(34.)).h(zpx(34. * 295.9 / 830.3)).flex_none()),
+                )
+                .when(home_badge > 0, |d| d.child(unread_badge(home_badge, palette)))
+                .on_click(cx.listener(|this, _, _, cx| this.store.update(cx, |s, cx| s.open_space(None, cx)))),
+        );
         let mut tiles = Vec::new();
         for space in spaces {
             let id = space.id.clone();
             let badge = space.notification_count;
-            let tile = space_tile(
-                SharedString::from(format!("space-{}", space.id)),
-                &initials(&space.name),
-                space.avatar_url.as_deref(),
-                open.as_deref() == Some(&space.id),
-                accent_for(&space.id),
-                badge,
+            let active = open.as_deref() == Some(&space.id);
+            let tile = rail_pill(
+                active,
+                badge > 0,
                 palette,
-                cx,
-            )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                let id = id.clone();
-                this.store.update(cx, |s, cx| s.open_space(Some(id), cx))
-            }))
-            .on_mouse_down(gpui::MouseButton::Right, {
-                let (id, name) = (space.id.clone(), space.name.clone());
-                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                    this.space_menu = Some((id.clone(), name.clone(), event.position));
-                    cx.notify();
+                space_tile(
+                    SharedString::from(format!("space-{}", space.id)),
+                    &initials(&space.name),
+                    space.avatar_url.as_deref(),
+                    active,
+                    accent_for(&space.id),
+                    badge,
+                    palette,
+                    cx,
+                )
+                .tooltip({
+                    let name = space.name.clone();
+                    move |window, cx| gpui_component::tooltip::Tooltip::new(name.clone()).build(window, cx)
                 })
-            });
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let id = id.clone();
+                    this.store.update(cx, |s, cx| s.open_space(Some(id), cx))
+                }))
+                .on_mouse_down(gpui::MouseButton::Right, {
+                    let (id, name) = (space.id.clone(), space.name.clone());
+                    cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                        this.space_menu = Some((id.clone(), name.clone(), event.position));
+                        cx.notify();
+                    })
+                }),
+            );
             tiles.push(tile);
         }
 
@@ -714,9 +762,8 @@ impl Shell {
             .border_color(palette.border_subtle)
             // The window's title bar is gone; its top is where you drag it.
             .child(drag_strip(zpx(40.)))
-            .child(img(logo()).w(zpx(18. * 830.3 / 295.9)).h(zpx(18.)).flex_none())
-            .child(div().w(zpx(26.)).h(zpx(2.)).rounded_full().bg(palette.border).flex_none())
-            .child(all)
+            .child(home)
+            .child(div().w(zpx(32.)).h(zpx(2.)).rounded_full().bg(palette.border_subtle).flex_none())
             .child(
                 v_flex()
                     .id("rail-spaces")
@@ -724,7 +771,7 @@ impl Shell {
                     .min_h_0()
                     .w_full()
                     .items_center()
-                    .gap(space(12.))
+                    .gap(space(10.))
                     .overflow_y_scroll()
                     .children(tiles)
                     .child(
@@ -735,13 +782,13 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(corner(16.))
+                            .rounded_full()
                             .cursor_pointer()
                             .border_1()
                             .border_dashed()
                             .border_color(palette.border)
-                            .hover(|d| d.bg(palette.raised))
-                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("explore spaces").build(window, cx))
+                            .hover(|d| d.rounded(corner(14.)).bg(palette.raised))
+                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("explore servers").build(window, cx))
                             .child(voice::icon("icons/compass.svg").size(zpx(20.)).text_color(palette.text_tertiary))
                             .on_click(cx.listener(|this, _, window, cx| this.open_explore(window, cx))),
                     ),
@@ -935,15 +982,16 @@ impl Shell {
     fn room_list(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
         let open_space = store.current_space().cloned();
+        let spaces = store.spaces.clone();
         let selected = store.room.clone();
-        let title = open_space.as_ref().map_or_else(|| "everything".to_owned(), |s| s.name.to_lowercase());
+        let title = open_space.as_ref().map_or_else(|| "direct messages".to_owned(), |s| s.name.clone());
         let order = open_space.as_ref().map(|s| s.children.clone()).unwrap_or_default();
         let rooms = store.rooms.clone();
         let sync = store.sync;
 
         let search = self.search.read(cx).value().to_string();
         let hide_muted = open_space.as_ref().is_some_and(|s| store.prefs.hide_muted_in_spaces.contains(&s.id));
-        let visible = rooms::filter(&rooms, &View { space: open_space.as_ref(), filter: self.filter, search: &search, hide_muted });
+        let visible = rooms::filter(&rooms, &View { space: open_space.as_ref(), spaces: &spaces, filter: self.filter, search: &search, hide_muted });
         let unread_total: u64 = visible.iter().map(|r| r.notification_count).sum();
         let joined_groups = rooms::group(visible, &order);
         let hierarchy = open_space
@@ -986,7 +1034,7 @@ impl Shell {
                     .text_size(label(9.5))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(palette.text_tertiary)
-                    .child(section.title())
+                    .child(section.title(open_space.is_some()))
                     .child(div().flex_1().h(zpx(1.)).bg(palette.border_subtle))
                     .child((rooms.len() + unjoined.len()).to_string()),
             );
@@ -1010,9 +1058,9 @@ impl Shell {
             } else if rooms.is_empty() {
                 "loading rooms…".to_owned()
             } else if open_space.is_some() {
-                "nothing here yet — this space has no rooms you've joined".to_owned()
+                "nothing here yet — this server has no channels you've joined".to_owned()
             } else {
-                "no rooms yet~".to_owned()
+                "no direct messages yet~".to_owned()
             };
             list = list.child(
                 v_flex()
@@ -1115,9 +1163,9 @@ impl Shell {
                                     .truncate()
                                     .font_family(palette.heading_font.clone())
                                     .font_weight(FontWeight::EXTRA_BOLD)
-                                    .text_size(heading(22.))
+                                    .text_size(heading(20.))
                                     .text_color(palette.text)
-                                    .child(format!("{title}~")),
+                                    .child(title),
                             )
                             .child(
                                 h_flex()
@@ -1728,6 +1776,49 @@ pub(crate) fn logo() -> std::sync::Arc<gpui::Image> {
 /// A tile in the rail: a space's picture, or its initials on its accent
 /// when it's the open one (on the raised surface otherwise).
 #[allow(clippy::too_many_arguments)]
+/// A rail entry wrapped with Discord's left-edge active/unread pill indicator.
+fn rail_pill(active: bool, unread: bool, palette: &Palette, child: impl IntoElement) -> impl IntoElement {
+    div()
+        .relative()
+        .w_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .when(active || unread, |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .w(zpx(4.))
+                    .h(zpx(if active { 34. } else { 8. }))
+                    .rounded_r_full()
+                    .bg(if active { palette.accent } else { palette.text }),
+            )
+        })
+        .child(child)
+}
+
+fn unread_badge(badge: u64, palette: &Palette) -> impl IntoElement {
+    div()
+        .absolute()
+        .top(zpx(-4.))
+        .right(zpx(-4.))
+        .min_w(zpx(18.))
+        .h(zpx(18.))
+        .px(space(5.))
+        .rounded_full()
+        .bg(palette.accent_secondary)
+        .text_color(palette.text_on_accent)
+        .border_2()
+        .border_color(palette.card)
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(text(9.))
+        .font_weight(FontWeight::EXTRA_BOLD)
+        .child(if badge > 99 { "99+".to_owned() } else { badge.to_string() })
+}
+
 fn space_tile(
     id: impl Into<gpui::ElementId>,
     label_text: &str,
@@ -1741,7 +1832,6 @@ fn space_tile(
     let picture = mxc.and_then(|mxc| Media::image(mxc, Some((92, 92)), cx));
     let tile = div()
         .size(zpx(46.))
-        .rounded(corner(16.))
         .overflow_hidden()
         .flex()
         .items_center()
@@ -1750,7 +1840,8 @@ fn space_tile(
         .font_weight(FontWeight::EXTRA_BOLD)
         .map(|d| {
             if active {
-                d.bg(if picture.is_some() { gpui::transparent_black() } else { accent })
+                d.rounded(corner(14.))
+                    .bg(if picture.is_some() { gpui::transparent_black() } else { accent })
                     .text_color(palette.text_on_accent)
                     .border_2()
                     .border_color(palette.app)
@@ -1762,7 +1853,12 @@ fn space_tile(
                         inset: false,
                     }])
             } else {
-                d.bg(palette.raised).text_color(palette.text_secondary).border_1().border_color(palette.border_subtle)
+                d.rounded_full()
+                    .bg(palette.raised)
+                    .text_color(palette.text_secondary)
+                    .border_1()
+                    .border_color(palette.border_subtle)
+                    .hover(|d| d.rounded(corner(14.)))
             }
         })
         .map(|d| match picture {
@@ -1770,8 +1866,9 @@ fn space_tile(
             // gpui clips children to a rectangle.
             Some(image) => {
                 let border = zpx(if active { 2. } else { 1. });
+                let r = if active { corner(14.) - border } else { zpx(23.) };
                 // Square, so a portrait photo can't grow: see `avatar`.
-                d.child(img(image).size(zpx(46.) - border * 2.).aspect_square().rounded(corner(16.) - border).object_fit(gpui::ObjectFit::Cover))
+                d.child(img(image).size(zpx(46.) - border * 2.).aspect_square().rounded(r).object_fit(gpui::ObjectFit::Cover))
             }
             None => d.child(label_text.to_uppercase()),
         });
@@ -1781,28 +1878,7 @@ fn space_tile(
         .flex_none()
         .cursor_pointer()
         .child(tile)
-        .when(badge > 0, |d| {
-            d.child(
-                div()
-                    .absolute()
-                    .top(zpx(-4.))
-                    .right(zpx(-4.))
-                    .min_w(zpx(18.))
-                    .h(zpx(18.))
-                    .px(space(5.))
-                    .rounded_full()
-                    .bg(palette.accent_secondary)
-                    .text_color(palette.text_on_accent)
-                    .border_2()
-                    .border_color(palette.card)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(text(9.))
-                    .font_weight(FontWeight::EXTRA_BOLD)
-                    .child(if badge > 99 { "99+".to_owned() } else { badge.to_string() }),
-            )
-        })
+        .when(badge > 0, |d| d.child(unread_badge(badge, palette)))
 }
 
 /// What kind of room this is, in the avatar's corner: `#` for text, a

@@ -21,6 +21,9 @@ pub enum Filter {
 #[derive(Debug, Clone, Default)]
 pub struct View<'a> {
     pub space: Option<&'a SpaceSummary>,
+    /// All joined spaces; on Home (`space: None`) with no search/filter, rooms
+    /// that already live inside a space stay inside their space, as in Discord.
+    pub spaces: &'a [SpaceSummary],
     pub filter: Filter,
     pub search: &'a str,
     /// Leave muted rooms out; only applies inside a space, as in Discord.
@@ -68,10 +71,18 @@ pub fn filter<'r>(rooms: &'r [RoomSummary], view: &View) -> Vec<&'r RoomSummary>
             if room.is_utility || matches!(room.membership, RoomMembership::Left | RoomMembership::Banned) {
                 return false;
             }
-            if let Some(space) = view.space
-                && (!is_in_space(room, space) || (view.hide_muted && room.is_muted)) {
+            if let Some(space) = view.space {
+                if !is_in_space(room, space) || (view.hide_muted && room.is_muted) {
                     return false;
                 }
+            } else if needle.is_empty()
+                && view.filter == Filter::All
+                && !room.is_direct
+                && room.membership != RoomMembership::Invited
+                && view.spaces.iter().any(|s| is_in_space(room, s))
+            {
+                return false;
+            }
             let keep = match view.filter {
                 Filter::All => true,
                 Filter::Unread => room.has_unread,
@@ -127,12 +138,14 @@ pub enum Section {
 }
 
 impl Section {
-    pub fn title(self) -> &'static str {
-        match self {
-            Section::Invites => "invites",
-            Section::DirectMessages => "direct messages",
-            Section::Rooms => "rooms",
-            Section::Voice => "voice",
+    pub fn title(self, in_space: bool) -> &'static str {
+        match (self, in_space) {
+            (Section::Invites, _) => "invites",
+            (Section::DirectMessages, _) => "direct messages",
+            (Section::Rooms, true) => "text channels",
+            (Section::Rooms, false) => "group chats",
+            (Section::Voice, true) => "voice channels",
+            (Section::Voice, false) => "voice",
         }
     }
 }
@@ -354,5 +367,21 @@ mod tests {
         assert!(unjoined_in_space(&s, &hierarchy, &joined, Filter::Unread, "").0.is_empty());
         let (filtered, _) = unjoined_in_space(&s, &hierarchy, &joined, Filter::All, "alp");
         assert_eq!(filtered.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["!a"]);
+    }
+
+    #[test]
+    fn home_hides_space_channels_until_searched() {
+        let mut dm = room("!dm", "alice");
+        dm.is_direct = true;
+        let in_server = room("!chan", "general");
+        let standalone = room("!group", "friends");
+        let spaces = vec![space("!s", &["!chan"])];
+        let rooms = vec![dm, in_server, standalone];
+
+        let home = filter(&rooms, &View { spaces: &spaces, ..Default::default() });
+        assert_eq!(ids(&home), ["!dm", "!group"].map(String::from));
+
+        let searched = filter(&rooms, &View { spaces: &spaces, search: "gen", ..Default::default() });
+        assert_eq!(ids(&searched), ["!chan"].map(String::from));
     }
 }
