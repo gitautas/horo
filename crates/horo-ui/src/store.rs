@@ -220,9 +220,9 @@ pub struct Banner {
 const BANNER_INFO_FOR: Duration = Duration::from_secs(6);
 const BANNER_ERROR_FOR: Duration = Duration::from_secs(10);
 
-/// A picture to show full-size.
+/// A single picture entry in the lightbox.
 #[derive(Debug, Clone)]
-pub struct Lightbox {
+pub struct LightboxItem {
     /// The original.
     pub mxc: Option<String>,
     /// What the timeline already has, shown while the original loads.
@@ -230,6 +230,41 @@ pub struct Lightbox {
     pub width: Option<u64>,
     pub height: Option<u64>,
     pub name: String,
+}
+
+/// Pictures to show full-size, with `index` pointing at the current one.
+#[derive(Debug, Clone)]
+pub struct Lightbox {
+    pub items: Vec<LightboxItem>,
+    pub index: usize,
+}
+
+impl Lightbox {
+    pub fn single(item: LightboxItem) -> Self {
+        Self { items: vec![item], index: 0 }
+    }
+
+    pub fn current(&self) -> Option<&LightboxItem> {
+        self.items.get(self.index)
+    }
+
+    pub fn can_prev(&self) -> bool {
+        self.index > 0
+    }
+
+    pub fn can_next(&self) -> bool {
+        self.index + 1 < self.items.len()
+    }
+
+    pub fn step(&mut self, delta: isize) -> bool {
+        let next = self.index as isize + delta;
+        if next >= 0 && (next as usize) < self.items.len() {
+            self.index = next as usize;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Settings' sections, in the order the nav lists them.
@@ -1205,6 +1240,14 @@ impl Store {
     pub fn open_lightbox(&mut self, lightbox: Lightbox, cx: &mut Context<Self>) {
         self.lightbox = Some(lightbox);
         cx.notify();
+    }
+
+    pub fn step_lightbox(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if let Some(lightbox) = &mut self.lightbox
+            && lightbox.step(delta)
+        {
+            cx.notify();
+        }
     }
 
     pub fn close_lightbox(&mut self, cx: &mut Context<Self>) {

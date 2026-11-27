@@ -19,7 +19,7 @@ use crate::{
     backend::Backend,
     media::{Media, fit},
     rich::{Block, Inline, Marks},
-    store::{Lightbox, Store},
+    store::Store,
     theme::Palette,
 };
 
@@ -283,7 +283,14 @@ fn runs(inline: &Inline, colour: Hsla, spoilers_revealed: bool, palette: &Palett
 /// A picture attachment (or sticker): the thumbnail at its own shape, the
 /// full picture in the lightbox when clicked. Transparent cut-outs render
 /// frameless, the way stickers do.
-pub fn picture(id: &str, body: &str, media: &MediaInfoDto, sticker: bool, store: &Entity<Store>, palette: &Palette, cx: &mut App) -> AnyElement {
+pub fn picture(
+    id: &str,
+    media: &MediaInfoDto,
+    sticker: bool,
+    palette: &Palette,
+    cx: &mut App,
+    on_open: impl Fn(&mut App) + 'static,
+) -> AnyElement {
     let max = if sticker { STICKER_MAX } else { PICTURE_MAX };
     let (w, h) = fit(media.width, media.height, max, 48.);
     let source = media.thumbnail_mxc.clone().or_else(|| media.mxc.clone());
@@ -320,14 +327,7 @@ pub fn picture(id: &str, body: &str, media: &MediaInfoDto, sticker: bool, store:
         Some(image) => frame.child(img(image).size_full().aspect_ratio(w / h).when(!frameless, |i| i.rounded(zpx(10.))).object_fit(gpui::ObjectFit::Contain)),
         None => frame.flex().items_center().justify_center().child(div().text_xs().text_color(palette.text_tertiary).child("loading…")),
     };
-    let lightbox = Lightbox { mxc: media.mxc.clone(), thumbnail: source, width: media.width, height: media.height, name: body.to_owned() };
-    let store = store.clone();
-    frame
-        .on_click(move |_, _, cx| {
-            let lightbox = lightbox.clone();
-            store.update(cx, |s, cx| s.open_lightbox(lightbox, cx))
-        })
-        .into_any_element()
+    frame.on_click(move |_, _, cx| on_open(cx)).into_any_element()
 }
 
 /// What a card's click does.

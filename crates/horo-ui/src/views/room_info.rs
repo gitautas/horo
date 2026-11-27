@@ -29,7 +29,7 @@ use crate::{
     backend::Backend,
     media::Media,
     presence,
-    store::{Lightbox, Phase, Store},
+    store::{Lightbox, LightboxItem, Phase, Store},
     theme::{Palette, corner, heading, label, space, text},
     views::{
         avatar::{accent_for, avatar, presence_dot},
@@ -196,7 +196,7 @@ impl RoomInfo {
                     .child(picture)
                     .on_click(move |_, _, cx| {
                         if let Some(mxc) = mxc.clone() {
-                            let lightbox = Lightbox { mxc: Some(mxc), thumbnail: None, width: None, height: None, name: name.clone() };
+                            let lightbox = Lightbox::single(LightboxItem { mxc: Some(mxc), thumbnail: None, width: None, height: None, name: name.clone() });
                             store.update(cx, |s, cx| s.open_lightbox(lightbox, cx));
                         }
                     }),

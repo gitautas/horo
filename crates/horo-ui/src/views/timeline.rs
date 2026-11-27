@@ -30,7 +30,7 @@ use crate::{
     media::Media,
     packs,
     rich::{self, Block},
-    store::{Store, apply_diff},
+    store::{Lightbox, LightboxItem, Store, apply_diff},
     theme::{Palette, corner, space, text},
     views::{
         avatar::{accent_for, avatar},
@@ -2069,8 +2069,35 @@ impl Timeline {
             ContentDto::Emote { body, .. } => {
                 div().w_full().italic().text_color(palette.text).child(content::linked_plain(&id, &format!("* {body}"), palette.text, &rich_ctx, palette)).into_any_element()
             }
-            ContentDto::Image { body, media } => content::picture(&id, body, media, false, &store, palette, cx),
-            ContentDto::Sticker { body, media } => content::picture(&id, body, media, true, &store, palette, cx),
+            ContentDto::Image { body, media } => {
+                let entity = cx.entity().clone();
+                let store = store.clone();
+                let key = event_key(event);
+                let fallback = LightboxItem {
+                    mxc: media.mxc.clone(),
+                    thumbnail: media.thumbnail_mxc.clone().or_else(|| media.mxc.clone()),
+                    width: media.width,
+                    height: media.height,
+                    name: body.clone(),
+                };
+                content::picture(&id, media, false, palette, cx, move |cx| {
+                    let lightbox = entity.read(cx).lightbox_for(&key, fallback.clone());
+                    store.update(cx, |s, cx| s.open_lightbox(lightbox, cx));
+                })
+            }
+            ContentDto::Sticker { body, media } => {
+                let store = store.clone();
+                let item = LightboxItem {
+                    mxc: media.mxc.clone(),
+                    thumbnail: media.thumbnail_mxc.clone().or_else(|| media.mxc.clone()),
+                    width: media.width,
+                    height: media.height,
+                    name: body.clone(),
+                };
+                content::picture(&id, media, true, palette, cx, move |cx| {
+                    store.update(cx, |s, cx| s.open_lightbox(Lightbox::single(item.clone()), cx));
+                })
+            }
             ContentDto::Video { body, media } => self.video(event, body, media, palette, cx),
             ContentDto::Audio { body, media } => {
                 self.audio(event, body, media, palette, cx)
@@ -2086,6 +2113,32 @@ impl Timeline {
                     .child(content::plain(format!("select/{}", event_key(event)), text, palette))
                     .into_any_element()
             }
+        }
+    }
+
+    /// Collect every picture in the loaded timeline in chronological order and
+    /// point the lightbox at the clicked one so the user can step through
+    /// previously/subsequently sent media with arrows.
+    fn lightbox_for(&self, clicked_key: &str, fallback: LightboxItem) -> Lightbox {
+        let mut items = Vec::new();
+        let mut index = None;
+        for ev in self.items.iter().filter_map(|i| i.event.as_deref()) {
+            if let ContentDto::Image { body, media } = &ev.content {
+                if event_key(ev) == clicked_key {
+                    index = Some(items.len());
+                }
+                items.push(LightboxItem {
+                    mxc: media.mxc.clone(),
+                    thumbnail: media.thumbnail_mxc.clone().or_else(|| media.mxc.clone()),
+                    width: media.width,
+                    height: media.height,
+                    name: body.clone(),
+                });
+            }
+        }
+        match index {
+            Some(index) => Lightbox { items, index },
+            None => Lightbox::single(fallback),
         }
     }
 

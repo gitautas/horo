@@ -1818,9 +1818,25 @@ impl Render for Shell {
             // Escape closes the picture open over everything before
             // anything under it (the composer's reply, say) hears it.
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" && this.store.read(cx).lightbox.is_some() {
-                    this.store.update(cx, |s, cx| s.close_lightbox(cx));
-                    cx.stop_propagation();
+                if this.store.read(cx).lightbox.is_some() {
+                    match event.keystroke.key.as_str() {
+                        "escape" => {
+                            this.store.update(cx, |s, cx| s.close_lightbox(cx));
+                            cx.stop_propagation();
+                            return;
+                        }
+                        "left" => {
+                            this.store.update(cx, |s, cx| s.step_lightbox(-1, cx));
+                            cx.stop_propagation();
+                            return;
+                        }
+                        "right" => {
+                            this.store.update(cx, |s, cx| s.step_lightbox(1, cx));
+                            cx.stop_propagation();
+                            return;
+                        }
+                        _ => {}
+                    }
                 }
                 // Then the call filling the window.
                 else if event.keystroke.key == "escape" && this.store.read(cx).call.as_ref().is_some_and(|c| c.fullscreen) {
