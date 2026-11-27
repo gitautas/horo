@@ -503,6 +503,24 @@ impl Store {
         }
     }
 
+    /// Move an active call's camera to a newly chosen device (`before` is
+    /// what prefs said until now). Drops the old camera first so hardware /
+    /// PipeWire releases it before the new one opens.
+    pub(crate) fn follow_video_device(&mut self, before: Option<String>, cx: &mut Context<Self>) {
+        if self.prefs.video_input == before {
+            return;
+        }
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if self.call_live.is_some() && self.call.as_ref().is_some_and(|c| c.camera) {
+            if let Some(live) = &mut self.call_live {
+                live.camera = None;
+            }
+            self.set_call_camera(true, cx);
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let _ = cx;
+    }
+
     /// Turn our camera on or off in the call. It opens off the UI thread
     /// (that takes a moment); each picture goes to the encoder from the
     /// camera's own queue.
@@ -520,6 +538,7 @@ impl Store {
             return;
         }
         let device = self.prefs.video_input.clone();
+        let wanted_device = device.clone();
         let feed = live.feed.clone();
         let task = cx.background_spawn(async move {
             let first = std::sync::atomic::AtomicBool::new(true);
@@ -538,7 +557,7 @@ impl Store {
         cx.spawn(async move |this, cx| {
             let opened = task.await;
             let _ = this.update(cx, |store, cx| {
-                let wanted = store.call.as_ref().is_some_and(|c| c.camera);
+                let wanted = store.call.as_ref().is_some_and(|c| c.camera) && store.prefs.video_input == wanted_device;
                 match &opened {
                     Ok(_) => tracing::info!("camera opened (still wanted: {wanted})"),
                     Err(e) => tracing::warn!("camera didn't open: {e}"),
@@ -661,6 +680,7 @@ impl Store {
             return;
         }
         let device = self.prefs.video_input.clone();
+        let wanted_device = device.clone();
         let feed = live.feed.clone();
         let task = cx.background_spawn(async move {
             let first = std::sync::atomic::AtomicBool::new(true);
@@ -677,7 +697,7 @@ impl Store {
         cx.spawn(async move |this, cx| {
             let opened = task.await;
             let _ = this.update(cx, |store, cx| {
-                let wanted = store.call.as_ref().is_some_and(|c| c.camera);
+                let wanted = store.call.as_ref().is_some_and(|c| c.camera) && store.prefs.video_input == wanted_device;
                 match opened {
                     Ok(camera) if wanted => {
                         if let Some(live) = &mut store.call_live {
