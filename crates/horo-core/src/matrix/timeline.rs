@@ -25,8 +25,8 @@ use matrix_sdk_ui::timeline::{
 
 use crate::{
     dto::{
-        Diff, EmoteRef, MentionRef, SendOptions, StickerOptions, TimelineItemDto, TimelineUpdate,
-        convert_timeline_item,
+        Diff, EmoteRef, MentionRef, RoleMentionRef, SendOptions, StickerOptions, TimelineItemDto,
+        TimelineUpdate, convert_timeline_item,
     },
     error::{Error, Result},
     events::{Event, Host, emit, spawn_typing_task},
@@ -236,15 +236,19 @@ fn convert_diff(
 fn build_message(options: &SendOptions) -> RoomMessageEventContent {
     let content = build_plain_message(options);
     let content = with_emotes(content, &options.emotes);
-    with_mentions(content, &options.mentions)
+    with_mentions(content, &options.mentions, &options.role_mentions)
 }
 
 /// Make each mentioned name still in the text a pill (a `matrix.to` link)
 /// and list who's in it in `m.mentions`, so their clients notify them.
 ///
-/// The name is matched as a whole word, so mentioning "Al" doesn't turn
-/// the start of "Also" into a link; and, as with emotes, only outside tags.
-fn with_mentions(mut content: RoomMessageEventContent, mentions: &[MentionRef]) -> RoomMessageEventContent {
+/// Role mentions (`@RoleName`) expand all of the role's members into
+/// `m.mentions.user_ids` so every Matrix client still notifies them.
+fn with_mentions(
+    mut content: RoomMessageEventContent,
+    mentions: &[MentionRef],
+    role_mentions: &[RoleMentionRef],
+) -> RoomMessageEventContent {
     use matrix_sdk::ruma::{OwnedUserId, events::{Mentions, room::message::FormattedBody}};
 
     let (body, formatted) = match &content.msgtype {
@@ -258,30 +262,47 @@ fn with_mentions(mut content: RoomMessageEventContent, mentions: &[MentionRef]) 
         .filter(|m| !m.name.is_empty() && find_word(&body, &m.name, 0).is_some())
         .filter_map(|m| OwnedUserId::try_from(m.user_id.as_str()).ok().map(|id| (m, id)))
         .collect();
-    if present.is_empty() {
+    let present_roles: Vec<&RoleMentionRef> = role_mentions
+        .iter()
+        .filter(|r| !r.name.is_empty() && find_word(&body, &r.name, 0).is_some())
+        .collect();
+    if present.is_empty() && present_roles.is_empty() {
         return content;
     }
 
-    let mut html = match &formatted {
-        Some(f) => f.body.clone(),
-        None => escape_html(&body),
-    };
-    // Longest first, so "Ann Lee" is linked before "Ann" could split it.
-    let mut by_length: Vec<&(&MentionRef, OwnedUserId)> = present.iter().collect();
-    by_length.sort_by_key(|(m, _)| std::cmp::Reverse(m.name.len()));
-    for (mention, id) in by_length {
-        html = link_name(&html, &escape_html(&mention.name), id.as_str());
-    }
-    let formatted = FormattedBody::html(html);
-    match &mut content.msgtype {
-        MessageType::Text(m) => m.formatted = Some(formatted),
-        MessageType::Emote(m) => m.formatted = Some(formatted),
-        MessageType::Notice(m) => m.formatted = Some(formatted),
-        _ => {}
+    if !present.is_empty() {
+        let mut html = match &formatted {
+            Some(f) => f.body.clone(),
+            None => escape_html(&body),
+        };
+        // Longest first, so "Ann Lee" is linked before "Ann" could split it.
+        let mut by_length: Vec<&(&MentionRef, OwnedUserId)> = present.iter().collect();
+        by_length.sort_by_key(|(m, _)| std::cmp::Reverse(m.name.len()));
+        for (mention, id) in by_length {
+            html = link_name(&html, &escape_html(&mention.name), id.as_str());
+        }
+        let formatted = FormattedBody::html(html);
+        match &mut content.msgtype {
+            MessageType::Text(m) => m.formatted = Some(formatted),
+            MessageType::Emote(m) => m.formatted = Some(formatted),
+            MessageType::Notice(m) => m.formatted = Some(formatted),
+            _ => {}
+        }
     }
 
     let mut ids: Vec<OwnedUserId> = present.into_iter().map(|(_, id)| id).collect();
+    for role in present_roles {
+        for raw in &role.user_ids {
+            if let Ok(id) = OwnedUserId::try_from(raw.as_str()) {
+                ids.push(id);
+            }
+        }
+    }
+    ids.sort();
     ids.dedup();
+    if ids.is_empty() {
+        return content;
+    }
     content.add_mentions(Mentions::with_user_ids(ids))
 }
 
@@ -842,6 +863,7 @@ mod tests {
                 msgtype: None,
                 emotes: vec![],
                 mentions: mentions.iter().map(|(id, name)| MentionRef { user_id: (*id).into(), name: (*name).into() }).collect(),
+                role_mentions: vec![],
             }
         }
 
@@ -871,6 +893,24 @@ mod tests {
             assert_eq!(find_word("Alan", "Al", 0), None);
             let html = link_name("Al <img alt=\"Al\"> <a href=\"x\">Al</a>", "Al", "@al:x");
             assert_eq!(html, "<a href=\"https://matrix.to/#/@al:x\">Al</a> <img alt=\"Al\"> <a href=\"x\">Al</a>");
+        }
+
+        #[test]
+        fn role_mentions_expand_members_into_m_mentions() {
+            let mut opts = options("hey @Gamers ready?", &[]);
+            opts.role_mentions = vec![
+                crate::dto::RoleMentionRef {
+                    name: "@Gamers".into(),
+                    user_ids: vec!["@alice:x.org".into(), "@bob:x.org".into()],
+                },
+                crate::dto::RoleMentionRef {
+                    name: "@Unused".into(),
+                    user_ids: vec!["@carol:x.org".into()],
+                },
+            ];
+            let content = build_message(&opts);
+            let ids: Vec<String> = content.mentions.unwrap().user_ids.iter().map(ToString::to_string).collect();
+            assert_eq!(ids, vec!["@alice:x.org".to_owned(), "@bob:x.org".to_owned()]);
         }
     }
 

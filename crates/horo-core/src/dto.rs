@@ -560,6 +560,20 @@ pub struct SendOptions {
     /// `m.mentions`, which is what notifies them.
     #[serde(default)]
     pub mentions: Vec<MentionRef>,
+    /// Roles mentioned in the body (`@RoleName`): each still present in the
+    /// text expands its members into `m.mentions.user_ids` so every Matrix
+    /// client notifies them.
+    #[serde(default)]
+    pub role_mentions: Vec<RoleMentionRef>,
+}
+
+/// A custom role mentioned in an outgoing message.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoleMentionRef {
+    /// As written in the body (e.g. `@Gamers`).
+    pub name: String,
+    pub user_ids: Vec<String>,
 }
 
 /// Someone mentioned in an outgoing message.
@@ -853,6 +867,7 @@ fn convert_content(content: &TimelineItemContent) -> (ContentDto, ContentExtras<
                 "m.room.join_rules" => "changed who can join".to_owned(),
                 "m.room.history_visibility" => "changed history visibility".to_owned(),
                 "m.room.power_levels" => "updated room permissions".to_owned(),
+                "im.horo.roles" => "updated roles".to_owned(),
                 _ => event_type.clone(),
             };
             ContentDto::State {

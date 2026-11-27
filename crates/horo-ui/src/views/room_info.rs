@@ -315,6 +315,11 @@ impl RoomInfo {
                 .on_click(cx.listener(move |this, _, _, cx| this.verify(user.clone(), cx)))
                 .into_any_element()
         };
+        let name_color = self
+            .store
+            .read(cx)
+            .role_color_for(&self.room_id, &member.user_id)
+            .unwrap_or_else(|| accent_for(&member.user_id));
         h_flex()
             .id(SharedString::from(format!("member-{}", member.user_id)))
             .gap(space(10.))
@@ -334,7 +339,7 @@ impl RoomInfo {
                             .truncate()
                             .font_weight(FontWeight::BOLD)
                             .text_size(text(13.5))
-                            .text_color(accent_for(&member.user_id))
+                            .text_color(name_color)
                             .child(name),
                     )
                     .child(
@@ -486,7 +491,69 @@ impl Render for RoomInfo {
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(OpenRoomSettings))),
             );
 
-        let rows: Vec<AnyElement> = members.iter().flatten().take(self.shown).map(|m| self.member_row(m, &palette, cx)).collect();
+        let roles = self.store.read(cx).roles_for_room(&self.room_id).to_vec();
+        let shown_members: Vec<&RoomMemberDto> = members.iter().flatten().take(self.shown).collect();
+        let mut grouped_sections: Vec<AnyElement> = Vec::new();
+        let mut placed: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for role in roles.iter().filter(|r| r.hoist) {
+            let group: Vec<&RoomMemberDto> = shown_members
+                .iter()
+                .copied()
+                .filter(|m| !placed.contains(m.user_id.as_str()) && role.members.iter().any(|id| id == &m.user_id))
+                .collect();
+            if !group.is_empty() {
+                for m in &group {
+                    placed.insert(m.user_id.as_str());
+                }
+                let role_color: Hsla = gpui::rgb(role.color).into();
+                grouped_sections.push(
+                    h_flex()
+                        .items_center()
+                        .gap(space(6.))
+                        .px(space(4.))
+                        .pt(space(18.))
+                        .pb(space(6.))
+                        .child(div().size(zpx(7.)).rounded_full().bg(role_color))
+                        .child(
+                            div()
+                                .font_family(palette.heading_font.clone())
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_size(label(9.5))
+                                .text_color(role_color)
+                                .child(format!("{} · {}", role.name.to_lowercase(), group.len())),
+                        )
+                        .into_any_element(),
+                );
+                for m in group {
+                    grouped_sections.push(self.member_row(m, &palette, cx));
+                }
+            }
+        }
+        let ungrouped: Vec<&RoomMemberDto> = shown_members.into_iter().filter(|m| !placed.contains(m.user_id.as_str())).collect();
+        if !ungrouped.is_empty() || members.is_none() || grouped_sections.is_empty() {
+            let count_label = if members.is_none() {
+                "…".to_owned()
+            } else if grouped_sections.is_empty() {
+                total.to_string()
+            } else {
+                ungrouped.len().to_string()
+            };
+            grouped_sections.push(
+                div()
+                    .px(space(4.))
+                    .pt(space(18.))
+                    .pb(space(8.))
+                    .font_family(palette.heading_font.clone())
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_size(label(9.5))
+                    .text_color(palette.text_tertiary)
+                    .child(format!("members · {count_label}"))
+                    .into_any_element(),
+            );
+            for m in ungrouped {
+                grouped_sections.push(self.member_row(m, &palette, cx));
+            }
+        }
         let hidden = total.saturating_sub(self.shown);
         let more = (hidden > 0).then(|| {
             div()
@@ -533,19 +600,8 @@ impl Render for RoomInfo {
                     })
                     .child(encryption_card(&room, unverified, total, &palette))
                     .children(self.error.clone().map(|e| div().mt(zpx(10.)).text_size(text(12.)).text_color(palette.danger).child(e)))
-                    .child(
-                        div()
-                            .px(space(4.))
-                            .pt(space(20.))
-                            .pb(space(8.))
-                            .font_family(palette.heading_font.clone())
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_size(label(9.5))
-                            .text_color(palette.text_tertiary)
-                            .child(format!("members · {}", if members.is_some() { total.to_string() } else { "…".into() })),
-                    )
+                    .children(grouped_sections)
                     .when(members.is_none(), |d| d.child(div().py(space(20.)).text_center().text_size(text(12.)).text_color(palette.text_tertiary).child("loading…")))
-                    .children(rows)
                     .children(more),
             )
             .child(

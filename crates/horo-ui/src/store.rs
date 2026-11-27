@@ -129,6 +129,9 @@ pub struct Store {
     /// Counts zoom changes, so views that cache sizes (the timeline's
     /// rows) know to measure again.
     pub zoom_epoch: u64,
+    /// Custom Discord-style roles (`im.horo.roles`), keyed by room ID.
+    pub roles: HashMap<String, Vec<horo_core::matrix::roles::RoleDto>>,
+    roles_asked: HashSet<String>,
 }
 
 /// Looking for a newer horo.
@@ -324,6 +327,8 @@ impl Store {
             call: None,
             call_live: None,
             incoming: None,
+            roles: HashMap::new(),
+            roles_asked: HashSet::new(),
         };
         // The saved look and zoom, before anything is drawn.
         crate::theme::set_zoom(store.prefs.zoom);
@@ -717,6 +722,48 @@ impl Store {
     pub fn open_space(&mut self, space: Option<String>, cx: &mut Context<Self>) {
         self.space = space;
         cx.notify();
+    }
+
+    /// Custom roles defined on `room_id` (empty if none or not yet loaded).
+    pub fn roles_for_room(&self, room_id: &str) -> &[horo_core::matrix::roles::RoleDto] {
+        self.roles.get(room_id).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Highest-priority role color for `user_id` in `room_id`, if any.
+    pub fn role_color_for(&self, room_id: &str, user_id: &str) -> Option<gpui::Hsla> {
+        self.roles_for_room(room_id)
+            .iter()
+            .find(|r| r.members.iter().any(|m| m == user_id))
+            .map(|r| gpui::rgb(r.color).into())
+    }
+
+    /// Update the cached roles for `room_id` right after saving them.
+    pub fn set_roles_cached(&mut self, room_id: String, roles: Vec<horo_core::matrix::roles::RoleDto>, cx: &mut Context<Self>) {
+        self.roles.insert(room_id, roles);
+        cx.notify();
+    }
+
+    /// Fetch `im.horo.roles` for `room_id` if not already loaded (or when `force` is true).
+    pub fn load_roles(&mut self, room_id: &str, force: bool, cx: &mut Context<Self>) {
+        if !force && !self.roles_asked.insert(room_id.to_owned()) {
+            return;
+        }
+        let Ok(room) = matrix_sdk::ruma::OwnedRoomId::try_from(room_id) else { return };
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let state = backend.state.clone();
+            async move { horo_core::matrix::roles::list(&*state.core().await?, &room).await }
+        });
+        let wanted = room_id.to_owned();
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(roles)) = task.await {
+                let _ = this.update(cx, |s, cx| {
+                    s.roles.insert(wanted, roles);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     /// Load the packs usable in `room_id`, unless they're already here.

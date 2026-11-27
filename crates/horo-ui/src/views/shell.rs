@@ -220,7 +220,10 @@ impl Shell {
             self.info = Some(info);
         }
         let Ok(room_id) = OwnedRoomId::try_from(id.as_str()) else { return };
-        self.store.update(cx, |s, cx| s.load_packs(&id, cx));
+        self.store.update(cx, |s, cx| {
+            s.load_packs(&id, cx);
+            s.load_roles(&id, false, cx);
+        });
         let store = self.store.clone();
         let timeline = cx.new(|cx| Timeline::new(room_id.clone(), thread.clone(), &store, cx));
         let weak = timeline.downgrade();

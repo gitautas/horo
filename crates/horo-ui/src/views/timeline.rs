@@ -2307,6 +2307,11 @@ impl Timeline {
                 )
         });
 
+        let sender_color = self
+            .store
+            .read(cx)
+            .role_color_for(self.room_id.as_str(), &event.sender)
+            .unwrap_or_else(|| accent_for(&event.sender));
         let header = (!continues).then(|| {
             let (sender, hint) = (event.sender.clone(), event.sender_avatar.clone());
             h_flex()
@@ -2318,7 +2323,7 @@ impl Timeline {
                         .id(SharedString::from(format!("name/{}", event_key(event))))
                         .font_weight(FontWeight::EXTRA_BOLD)
                         .text_size(text(14.5))
-                        .text_color(accent_for(&event.sender))
+                        .text_color(sender_color)
                         .cursor_pointer()
                         .hover(|d| d.underline())
                         .child(name.clone())

@@ -17,8 +17,8 @@ use gpui_component::{
     input::{IndentInline, InputEvent, MoveDown, MoveUp, Textarea, TextareaState},
 };
 use horo_core::{
-    dto::{MentionRef, SendOptions, StickerOptions},
-    matrix::timeline,
+    dto::{MentionRef, RoleMentionRef, SendOptions, StickerOptions},
+    matrix::{roles::RoleDto, timeline},
 };
 use matrix_sdk::ruma::OwnedRoomId;
 
@@ -71,6 +71,8 @@ pub struct Composer {
     people_loading: bool,
     /// People picked from the suggestions for the message being written.
     mentions: Vec<MentionRef>,
+    /// Roles picked from the suggestions for the message being written.
+    role_mentions: Vec<RoleMentionRef>,
     /// Files pasted in, waiting to go with the message.
     staged: Vec<Staged>,
 }
@@ -147,6 +149,7 @@ struct Completing {
 enum Suggestion {
     Emote(horo_core::matrix::packs::PackImageDto),
     Person(Person),
+    Role(RoleDto),
 }
 
 /// How many matches the menu offers.
@@ -212,6 +215,7 @@ impl Composer {
             people: None,
             people_loading: false,
             mentions: Vec::new(),
+            role_mentions: Vec::new(),
             staged: Vec::new(),
         }
     }
@@ -327,16 +331,27 @@ impl Composer {
             (input.value().to_string(), input.cursor())
         };
         self.completing = if let Some((query, start)) = mentions::typing_mention(&text, caret) {
+            let q = query.to_lowercase();
+            let mut matches: Vec<Suggestion> = self
+                .store
+                .read(cx)
+                .roles_for_room(self.room_id.as_str())
+                .iter()
+                .filter(|r| r.mentionable && !r.members.is_empty() && (q.is_empty() || r.name.to_lowercase().contains(&q)))
+                .take(COMPLETIONS)
+                .cloned()
+                .map(Suggestion::Role)
+                .collect();
             match &self.people {
                 Some(people) => {
-                    let matches: Vec<Suggestion> = mentions::match_people(people, &query, COMPLETIONS).into_iter().map(Suggestion::Person).collect();
-                    (!matches.is_empty()).then_some(Completing { start, matches, active: 0 })
+                    let left = COMPLETIONS.saturating_sub(matches.len());
+                    matches.extend(mentions::match_people(people, &query, left).into_iter().map(Suggestion::Person));
                 }
                 None => {
                     self.load_people(cx);
-                    None
                 }
             }
+            (!matches.is_empty()).then_some(Completing { start, matches, active: 0 })
         } else {
             packs::typing_shortcode(&text, caret).and_then(|(query, start)| {
                 let matches: Vec<Suggestion> =
@@ -391,6 +406,13 @@ impl Composer {
                     self.mentions.push(MentionRef { user_id: person.user_id.clone(), name: person.name.clone() });
                 }
                 format!("{} ", person.name)
+            }
+            Suggestion::Role(role) => {
+                let tag = format!("@{}", role.name);
+                if !self.role_mentions.iter().any(|r| r.name == tag) {
+                    self.role_mentions.push(RoleMentionRef { name: tag.clone(), user_ids: role.members.clone() });
+                }
+                format!("{tag} ")
             }
         };
         self.input.update(cx, |state, cx| {
@@ -671,6 +693,7 @@ impl Composer {
         self.stop_typing(cx);
         self.error = None;
         let mentions = std::mem::take(&mut self.mentions);
+        let role_mentions = std::mem::take(&mut self.role_mentions);
         let backend = Backend::global(cx);
         let job = {
             let (state, room_id, body, mode) = (backend.state.clone(), self.room_id.clone(), body.clone(), mode.clone());
@@ -679,13 +702,14 @@ impl Composer {
             let emotes = packs::emote_refs(&self.store.read(cx).packs);
             // The core keeps only the ones still named in the text.
             let mentions = mentions.clone();
+            let role_mentions = role_mentions.clone();
             async move {
                 let core = state.core().await?;
                 let reply_to = match mode {
                     Mode::Reply { event_id, .. } => Some(event_id),
                     Mode::Write => None,
                 };
-                let options = SendOptions { body, markdown: true, reply_to, thread_root, msgtype: None, emotes, mentions };
+                let options = SendOptions { body, markdown: true, reply_to, thread_root, msgtype: None, emotes, mentions, role_mentions };
                 timeline::send(&core, &room_id, options).await
             }
         };
@@ -914,6 +938,14 @@ impl Render for Composer {
                         div().child(person.name.clone()),
                         Some(person.user_id.clone()),
                     ),
+                    Suggestion::Role(role) => {
+                        let c: gpui::Hsla = gpui::rgb(role.color).into();
+                        (
+                            div().size(zpx(22.)).flex().items_center().justify_center().child(div().size(zpx(12.)).rounded_full().bg(c)).into_any_element(),
+                            div().text_color(c).child(format!("@{}", role.name)),
+                            Some(format!("{} {}", role.members.len(), if role.members.len() == 1 { "member" } else { "members" })),
+                        )
+                    }
                 };
                 list = list.child(
                     h_flex()
