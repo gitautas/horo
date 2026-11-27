@@ -79,6 +79,8 @@ pub struct CallView {
     pub participant_volumes: std::collections::HashMap<String, f32>,
     /// Whether the per-user call volume mixer popover is open.
     pub mixer_open: bool,
+    /// User minimized the bottom-right mini call modal.
+    pub pip_hidden: bool,
     /// Identities speaking now, by the server's ear (ours is ignored: it
     /// arrives late, see `self_speaking`).
     pub speaking: Vec<String>,
@@ -169,6 +171,7 @@ impl Store {
             participants: Vec::new(),
             participant_volumes: std::collections::HashMap::new(),
             mixer_open: false,
+            pip_hidden: false,
             speaking: Vec::new(),
             self_speaking: false,
             loud_at: None,
@@ -509,6 +512,13 @@ impl Store {
     pub fn toggle_call_mixer(&mut self, cx: &mut Context<Self>) {
         if let Some(view) = &mut self.call {
             view.mixer_open = !view.mixer_open;
+            cx.notify();
+        }
+    }
+
+    pub fn set_call_pip_hidden(&mut self, hidden: bool, cx: &mut Context<Self>) {
+        if let Some(view) = &mut self.call {
+            view.pip_hidden = hidden;
             cx.notify();
         }
     }

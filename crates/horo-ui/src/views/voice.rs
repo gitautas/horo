@@ -126,17 +126,33 @@ pub fn panel(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<A
     };
     let failed = matches!(call.status, CallStatus::Failed(_));
 
-    let (open, leave, expand) = (store.clone(), store.clone(), store.clone());
+    let (open, leave, expand, pop_out) = (store.clone(), store.clone(), store.clone(), store.clone());
     let room_id = call.room_id.clone();
-    let corner = if failed {
-        Button::new("call-dismiss").ghost().label("dismiss").on_click(move |_, _, cx| leave.update(cx, |s, cx| s.clear_failed_call(cx)))
+    let pip_hidden = call.pip_hidden;
+    let corner: AnyElement = if failed {
+        Button::new("call-dismiss").ghost().label("dismiss").on_click(move |_, _, cx| leave.update(cx, |s, cx| s.clear_failed_call(cx))).into_any_element()
     } else {
-        Button::new("call-expand-panel")
-            .ghost()
-            .small()
-            .icon(icon("icons/maximize-2.svg"))
-            .tooltip("fill the window with the call")
-            .on_click(move |_, _, cx| expand.update(cx, |s, cx| s.set_call_fullscreen(true, cx)))
+        h_flex()
+            .gap_1()
+            .when(pip_hidden, |row| {
+                row.child(
+                    Button::new("call-pip-show")
+                        .ghost()
+                        .small()
+                        .icon(icon("icons/video.svg"))
+                        .tooltip("show mini call window")
+                        .on_click(move |_, _, cx| pop_out.update(cx, |s, cx| s.set_call_pip_hidden(false, cx))),
+                )
+            })
+            .child(
+                Button::new("call-expand-panel")
+                    .ghost()
+                    .small()
+                    .icon(icon("icons/maximize-2.svg"))
+                    .tooltip("fill the window with the call")
+                    .on_click(move |_, _, cx| expand.update(cx, |s, cx| s.set_call_fullscreen(true, cx))),
+            )
+            .into_any_element()
     };
 
     Some(
@@ -470,10 +486,10 @@ fn draw(tile: &Tile, size: Size, focused: bool, store: &Entity<Store>, palette: 
 fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, area: Option<(f32, f32)>, cx: &mut App) -> AnyElement {
     let full = area.is_some();
     let mut tiles = tiles(call, store, cx);
-    // Inline, only video gets a tile, as in Discord: a face in a box says
-    // nothing the sidebar's roster doesn't. Filling the window, everyone
-    // shows, so there's something to look at.
-    if !full {
+    // In the mini PiP modal: when someone has video on, focus on video tiles
+    // so they stay large; when it's voice-only, show everyone's avatar tile
+    // with live speaking rings.
+    if !full && tiles.iter().any(|t| !matches!(t.shows, Shows::Face)) {
         tiles.retain(|t| !matches!(t.shows, Shows::Face));
     }
     let first_screen = || tiles.iter().position(|t| matches!(t.shows, Shows::Screen { .. }));
@@ -514,15 +530,13 @@ fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, area: Option
         .into_any_element()
 }
 
-/// Floating picture-in-picture video call modal anchored in the bottom-right
-/// corner (unless the call fills the window). Stays visible while browsing
-/// other rooms.
+/// Floating mini call modal anchored in the bottom-right corner whenever
+/// you're in a live call (unless fullscreen or minimized). Shows video tiles
+/// when anyone is on camera/screen, or participant avatar tiles with speaking
+/// rings in voice-only calls.
 pub fn floating(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<AnyElement> {
     let state = store.read(cx);
-    let call = state.call.clone().filter(|c| c.is_live() && !c.fullscreen)?;
-    if !has_video(&call) {
-        return None;
-    }
+    let call = state.call.clone().filter(|c| c.is_live() && !c.fullscreen && !c.pip_hidden)?;
     let room_id = call.room_id.clone();
     let room_name = state
         .rooms
@@ -532,6 +546,7 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Optio
         .unwrap_or_else(|| call.room_id.clone());
     let connecting = call.status == CallStatus::Connecting;
     let expand = store.clone();
+    let hide = store.clone();
     let open_room = store.clone();
     Some(
         v_flex()
@@ -579,12 +594,24 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Optio
                             }),
                     )
                     .child(
-                        Button::new("call-expand")
-                            .ghost()
-                            .small()
-                            .icon(icon("icons/maximize-2.svg"))
-                            .tooltip("fill the window")
-                            .on_click(move |_, _, cx| expand.update(cx, |s, cx| s.set_call_fullscreen(true, cx))),
+                        h_flex()
+                            .gap_1()
+                            .child(
+                                Button::new("call-expand")
+                                    .ghost()
+                                    .small()
+                                    .icon(icon("icons/maximize-2.svg"))
+                                    .tooltip("fill the window")
+                                    .on_click(move |_, _, cx| expand.update(cx, |s, cx| s.set_call_fullscreen(true, cx))),
+                            )
+                            .child(
+                                Button::new("call-pip-hide")
+                                    .ghost()
+                                    .small()
+                                    .icon(icon("icons/minimize-2.svg"))
+                                    .tooltip("minimize mini call window")
+                                    .on_click(move |_, _, cx| hide.update(cx, |s, cx| s.set_call_pip_hidden(true, cx))),
+                            ),
                     ),
             )
             .child(
