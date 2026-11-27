@@ -85,10 +85,24 @@ fn build_msvc(source: &Path, out: &Path, target: &str) {
          --disable-examples --disable-tools --disable-docs --disable-unit-tests --disable-webm-io --disable-libyuv",
         unix(&source.join("configure")),
     );
-    let bash = find_windows_bash();
-    run(Command::new(&bash).current_dir(out).args(["--noprofile", "--norc", "-c", &configure]), "configuring libvpx");
+    let (bash, extra_path) = find_windows_bash();
+    let bash_cmd = |script: &str| {
+        let mut cmd = Command::new(&bash);
+        cmd.current_dir(out).args(["--noprofile", "--norc", "-c", script]);
+        if let Some(dir) = &extra_path {
+            let mut paths = vec![dir.clone()];
+            if let Some(existing) = env::var_os("PATH") {
+                paths.extend(env::split_paths(&existing));
+            }
+            if let Ok(joined) = env::join_paths(paths) {
+                cmd.env("PATH", joined);
+            }
+        }
+        cmd
+    };
+    run(&mut bash_cmd(&configure), "configuring libvpx");
     // Writes vpx.vcxproj and the headers it needs.
-    run(Command::new(&bash).current_dir(out).args(["--noprofile", "--norc", "-c", "make dist"]), "generating libvpx's projects");
+    run(&mut bash_cmd("make dist"), "generating libvpx's projects");
 
     let msbuild = cc::windows_registry::find_tool(target, "msbuild.exe").unwrap_or_else(|| panic!("MSBuild not found: install Visual Studio's C++ build tools"));
     run(
@@ -104,9 +118,19 @@ fn build_msvc(source: &Path, out: &Path, target: &str) {
     );
 }
 
-/// Find Git for Windows' or MSYS2's `bash.exe`, skipping WSL's shim in
+/// Find MSYS2's or Git for Windows' `bash.exe`, skipping WSL's shim in
 /// `Windows\System32\bash.exe` (which fails when no WSL distro is installed).
-fn find_windows_bash() -> PathBuf {
+///
+/// Prefers MSYS2 when both `bash.exe` and `make.exe` are present there, and
+/// returns its `usr\bin` directory to prepend to `PATH` for the configure and
+/// `make dist` steps only — MSYS2's `make` understands `/d/…` POSIX paths
+/// whereas native Win32 `make` (e.g. Chocolatey's) does not.
+fn find_windows_bash() -> (PathBuf, Option<PathBuf>) {
+    let msys_bin = PathBuf::from(r"C:\msys64\usr\bin");
+    let msys_bash = msys_bin.join("bash.exe");
+    if msys_bash.is_file() && msys_bin.join("make.exe").is_file() {
+        return (msys_bash, Some(msys_bin));
+    }
     if let Some(path) = env::var_os("PATH") {
         for dir in env::split_paths(&path) {
             let lower = dir.to_string_lossy().to_ascii_lowercase();
@@ -115,7 +139,7 @@ fn find_windows_bash() -> PathBuf {
             }
             let bash = dir.join("bash.exe");
             if bash.is_file() {
-                return bash;
+                return (bash, None);
             }
         }
     }
@@ -126,10 +150,10 @@ fn find_windows_bash() -> PathBuf {
     ] {
         let path = PathBuf::from(candidate);
         if path.is_file() {
-            return path;
+            return (path, None);
         }
     }
-    PathBuf::from("bash")
+    (PathBuf::from("bash"), None)
 }
 
 /// libvpx's own name for a Rust target.

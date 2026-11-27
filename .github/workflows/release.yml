@@ -137,14 +137,16 @@ jobs:
             libx11-xcb-dev libxcb1-dev libvulkan-dev \
             libfontconfig1-dev libfreetype6-dev
 
-      # libvpx's Windows build: configure and `make dist` under Git's bash,
-      # nasm for its assembly, then MSBuild (crates/horo-rtc/build.rs).
+      # libvpx's Windows build: configure and `make dist` under MSYS2's bash +
+      # make (native Win32 make rejects `/d/...` paths), nasm for its assembly,
+      # then MSBuild (crates/horo-rtc/build.rs).
       - name: Install libvpx build tools (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install nasm make -y --no-progress
+          choco install nasm -y --no-progress
           echo "C:\Program Files\NASM" >> $env:GITHUB_PATH
+          C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed make diffutils perl
 
       # The Intel Mac row cross-builds libvpx with its x86 assembly
       # (`--as=nasm` in crates/horo-rtc/build.rs); the runner has no nasm.
