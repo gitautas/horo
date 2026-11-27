@@ -644,8 +644,12 @@ fn profile_avatar(details: &TimelineDetails<matrix_sdk_ui::timeline::Profile>) -
 }
 
 fn convert_message(msg: &matrix_sdk_ui::timeline::Message) -> ContentDto {
-    let body = msg.body().to_owned();
-    match msg.msgtype() {
+    convert_message_type(msg.msgtype())
+}
+
+pub fn convert_message_type(msgtype: &MessageType) -> ContentDto {
+    let body = msgtype.body().to_owned();
+    match msgtype {
         MessageType::Text(c) => ContentDto::Text {
             body: c.body.clone(),
             formatted: c.formatted.as_ref().map(|f| f.body.clone()),
@@ -838,11 +842,25 @@ fn convert_content(content: &TimelineItemContent) -> (ContentDto, ContentExtras<
         TimelineItemContent::ProfileChange(change) => {
             ContentDto::ProfileChange { summary: describe_profile_change(change) }
         }
-        TimelineItemContent::OtherState(state) => ContentDto::State {
-            event_type: state.content().event_type().to_string(),
-            state_key: state.state_key().to_owned(),
-            summary: state.content().event_type().to_string(),
-        },
+        TimelineItemContent::OtherState(state) => {
+            let event_type = state.content().event_type().to_string();
+            let summary = match event_type.as_str() {
+                "m.room.pinned_events" => "updated pinned messages".to_owned(),
+                "m.room.name" => "changed the room name".to_owned(),
+                "m.room.topic" => "changed the room topic".to_owned(),
+                "m.room.avatar" => "changed the room icon".to_owned(),
+                "m.room.encryption" => "enabled end-to-end encryption".to_owned(),
+                "m.room.join_rules" => "changed who can join".to_owned(),
+                "m.room.history_visibility" => "changed history visibility".to_owned(),
+                "m.room.power_levels" => "updated room permissions".to_owned(),
+                _ => event_type.clone(),
+            };
+            ContentDto::State {
+                event_type,
+                state_key: state.state_key().to_owned(),
+                summary,
+            }
+        }
         TimelineItemContent::FailedToParseMessageLike { event_type, .. } => {
             ContentDto::Unsupported { event_type: event_type.to_string() }
         }

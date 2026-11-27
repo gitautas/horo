@@ -896,19 +896,85 @@ mod tests {
     }
 }
 
-/// The set of events currently pinned in a room, newest first.
+/// The set of events currently pinned in a room, newest pinned first.
 pub async fn pinned_events(core: &MatrixCore, room_id: &RoomId) -> Result<Vec<TimelineItemDto>> {
+    use matrix_sdk::ruma::events::{AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent};
+
     let room = core.room(&room_id.to_owned())?;
     let own_user = core.own_user_id()?;
 
-    let timeline = room
-        .timeline_builder()
-        .with_focus(TimelineFocus::PinnedEvents)
-        .build()
-        .await?;
+    let ids = match room.load_pinned_events().await {
+        Ok(Some(ids)) => ids,
+        Ok(None) => room.pinned_event_ids().unwrap_or_default(),
+        Err(_) => room.pinned_event_ids().unwrap_or_default(),
+    };
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    let items = timeline.items().await;
-    Ok(items.iter().map(|i| convert_timeline_item(i, &own_user)).collect())
+    let live = get(core, room_id, None).await.ok();
+    let mut out = Vec::with_capacity(ids.len());
+
+    for event_id in ids.into_iter().rev() {
+        if let Some(tl) = live.as_ref()
+            && let Some(item) = tl.item_by_event_id(&event_id).await
+        {
+            let ev = crate::dto::convert_event_item(&item, &own_user);
+            out.push(TimelineItemDto {
+                id: event_id.to_string(),
+                kind: crate::dto::TimelineRowKind::Event,
+                timestamp: Some(ev.timestamp),
+                event: Some(Box::new(ev)),
+            });
+            continue;
+        }
+
+        let Ok(fetched) = room.event(&event_id, None).await else {
+            continue;
+        };
+        let Ok(AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(
+            SyncMessageLikeEvent::Original(ev),
+        ))) = fetched.raw().deserialize()
+        else {
+            continue;
+        };
+
+        let member = room.get_member_no_sync(&ev.sender).await.ok().flatten();
+        let sender_name = member.as_ref().and_then(|m| m.display_name().map(str::to_owned));
+        let sender_avatar = member.as_ref().and_then(|m| m.avatar_url().map(|u| u.to_string()));
+        let timestamp: u64 = ev.origin_server_ts.get().into();
+        let content = crate::dto::convert_message_type(&ev.content.msgtype);
+
+        out.push(TimelineItemDto {
+            id: event_id.to_string(),
+            kind: crate::dto::TimelineRowKind::Event,
+            timestamp: Some(timestamp),
+            event: Some(Box::new(crate::dto::EventItemDto {
+                event_id: Some(event_id.to_string()),
+                transaction_id: None,
+                sender: ev.sender.to_string(),
+                sender_name,
+                sender_avatar,
+                timestamp,
+                is_own: ev.sender == own_user,
+                is_editable: false,
+                can_reply: true,
+                is_highlighted: false,
+                is_edited: false,
+                is_emoji_only: false,
+                send_state: None,
+                shield: None,
+                content,
+                reactions: Vec::new(),
+                reply: None,
+                thread_root: None,
+                thread_summary: None,
+                read_receipts: Vec::new(),
+            })),
+        });
+    }
+
+    Ok(out)
 }
 
 /// Pin or unpin an event in a room (`m.room.pinned_events`).

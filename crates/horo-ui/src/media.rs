@@ -52,6 +52,47 @@ pub struct Media {
 impl Global for Media {}
 
 impl Media {
+    /// A remote `https://` picture (for link embed thumbnails), if it's here
+    /// yet. Starts fetching it otherwise.
+    pub fn remote_image(url: &str, cx: &mut App) -> Option<Arc<Image>> {
+        if !url.starts_with("https://") {
+            return None;
+        }
+        let key = Key { mxc: url.to_owned(), size: None };
+        let media = cx.default_global::<Media>();
+        media.clock += 1;
+        let now = media.clock;
+        if let Some((entry, used)) = media.entries.get_mut(&key) {
+            *used = now;
+            match entry {
+                Entry::Ready { image, .. } => return Some(image.clone()),
+                Entry::Loading => return None,
+                Entry::Failed(at) if at.elapsed() < RETRY_AFTER => return None,
+                Entry::Failed(_) => {}
+            }
+        }
+        media.insert(key.clone(), Entry::Loading);
+
+        let backend = Backend::global(cx);
+        let fetch_url = key.mxc.clone();
+        let task = backend.run(async move { horo_core::link_preview::fetch_image(&fetch_url).await });
+        cx.spawn(async move |cx| {
+            let entry = match task.await {
+                Ok(Some((mime, bytes))) => match format(&mime) {
+                    Some(fmt) => Entry::Ready { image: Arc::new(Image::from_bytes(fmt, bytes)), cutout: false },
+                    None => Entry::Failed(Instant::now()),
+                },
+                _ => Entry::Failed(Instant::now()),
+            };
+            cx.update(|cx| {
+                cx.default_global::<Media>().insert(key, entry);
+                cx.refresh_windows();
+            });
+        })
+        .detach();
+        None
+    }
+
     /// The picture at `mxc` (a server thumbnail at `size`, when given), if
     /// it's here yet. Starts fetching it otherwise.
     pub fn image(mxc: &str, size: Option<(u32, u32)>, cx: &mut App) -> Option<Arc<Image>> {

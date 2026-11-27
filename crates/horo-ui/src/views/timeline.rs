@@ -94,6 +94,7 @@ pub struct Timeline {
     /// Pinned messages popover (`m.room.pinned_events`).
     pins_open: bool,
     pins: Option<Vec<TimelineItemDto>>,
+    pinned_ids: HashSet<String>,
     /// Cached OpenGraph link previews keyed by URL.
     link_previews: HashMap<String, LinkPreviewState>,
     /// Message currently being edited inline in the timeline.
@@ -107,6 +108,7 @@ struct InlineEdit {
     saving: bool,
 }
 
+#[derive(Clone)]
 enum LinkPreviewState {
     Loading,
     Ready(horo_core::link_preview::LinkPreview),
@@ -237,6 +239,7 @@ impl Timeline {
             search_cursor: 0,
             pins_open: false,
             pins: None,
+            pinned_ids: HashSet::new(),
             link_previews: HashMap::new(),
             editing: None,
         };
@@ -484,10 +487,23 @@ impl Timeline {
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.pins = Some(match outcome {
-                    Ok(Ok(items)) => items,
-                    _ => Vec::new(),
-                });
+                match outcome {
+                    Ok(Ok(items)) => {
+                        this.pinned_ids = items
+                            .iter()
+                            .filter_map(|i| i.event.as_deref().and_then(|e| e.event_id.clone()))
+                            .collect();
+                        this.pins = Some(items);
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!("couldn't load pinned messages: {e}");
+                        this.pins = Some(Vec::new());
+                    }
+                    Err(e) => {
+                        tracing::warn!("couldn't load pinned messages: {e}");
+                        this.pins = Some(Vec::new());
+                    }
+                }
                 cx.notify();
             });
         })
@@ -498,15 +514,20 @@ impl Timeline {
         let room_id = self.room_id.clone();
         let backend = Backend::global(cx);
         let state = backend.state.clone();
-        let task = backend.run(async move { timeline::pin_event(&*state.core().await?, &room_id, &event_id, pin).await });
+        let eid = event_id.clone();
+        let task = backend.run(async move { timeline::pin_event(&*state.core().await?, &room_id, &eid, pin).await });
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
             let _ = this.update(cx, |this, cx| match outcome {
                 Ok(Ok(_)) => {
+                    if pin {
+                        this.pinned_ids.insert(event_id);
+                    } else {
+                        this.pinned_ids.remove(&event_id);
+                    }
                     if this.pins_open {
                         this.load_pins(cx);
                     }
-                    this.notice = Some(if pin { "message pinned~".into() } else { "message unpinned".into() });
                     cx.notify();
                 }
                 Ok(Err(e)) => {
@@ -1412,9 +1433,11 @@ impl Timeline {
         })));
         if reactable {
             let pin_id = id.clone();
-            list = list.child(menu::item("mm-pin", "pin message", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+            let pinned = self.pinned_ids.contains(&id);
+            let label = if pinned { "unpin message" } else { "pin message" };
+            list = list.child(menu::item("mm-pin", label, true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
                 close(this, cx);
-                this.set_pin(pin_id.clone(), true, cx);
+                this.set_pin(pin_id.clone(), !pinned, cx);
             })));
         }
         list = list.child(menu::item("mm-unread", "mark as unread", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
@@ -2063,28 +2086,61 @@ impl Timeline {
             _ => return None,
         };
         let url = horo_core::link_preview::first_url(body)?;
-        match self.link_previews.get(&url) {
+        match self.link_previews.get(&url).cloned() {
             Some(LinkPreviewState::Ready(preview)) => {
                 let open_url = preview.url.clone();
+                let embed_image = preview.image.as_deref().and_then(|img_url| Media::remote_image(img_url, cx));
+                if preview.is_direct_image {
+                    let image = embed_image?;
+                    return Some(
+                        div()
+                            .id(SharedString::from(format!("lp-img/{}", event_key(event))))
+                            .mt(zpx(6.))
+                            .max_w(zpx(380.))
+                            .max_h(zpx(280.))
+                            .rounded(corner(10.))
+                            .overflow_hidden()
+                            .cursor_pointer()
+                            .on_click(move |_, _, cx| cx.open_url(&open_url))
+                            .child(img(image).max_w(zpx(380.)).max_h(zpx(280.)).object_fit(gpui::ObjectFit::Contain))
+                            .into_any_element(),
+                    );
+                }
+                let bar_color: Hsla = preview.color.map(|c| gpui::rgb(c).into()).unwrap_or(palette.accent);
                 Some(
-                    v_flex()
+                    h_flex()
                         .id(SharedString::from(format!("lp/{}", event_key(event))))
                         .mt(zpx(6.))
-                        .max_w(zpx(420.))
-                        .gap(zpx(2.))
-                        .px(space(12.))
-                        .py(space(8.))
+                        .max_w(zpx(440.))
                         .rounded(corner(10.))
+                        .overflow_hidden()
                         .bg(palette.card)
                         .border_1()
                         .border_color(palette.border_subtle)
-                        .border_l_2()
                         .cursor_pointer()
                         .hover(|d| d.bg(palette.raised))
                         .on_click(move |_, _, cx| cx.open_url(&open_url))
-                        .child(div().text_size(text(10.5)).text_color(palette.text_tertiary).child(preview.site.clone()))
-                        .child(div().text_size(text(13.)).font_weight(FontWeight::BOLD).text_color(palette.accent).child(preview.title.clone()))
-                        .children(preview.description.clone().map(|desc| div().text_size(text(12.)).text_color(palette.text_secondary).child(desc)))
+                        .child(div().flex_none().w(zpx(3.5)).self_stretch().bg(bar_color))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap(zpx(3.))
+                                .px(space(12.))
+                                .py(space(9.))
+                                .child(div().text_size(text(11.)).text_color(palette.text_tertiary).child(preview.site))
+                                .child(div().text_size(text(13.5)).font_weight(FontWeight::BOLD).text_color(palette.accent).child(preview.title))
+                                .children(preview.description.map(|desc| div().text_size(text(12.)).text_color(palette.text_secondary).child(desc)))
+                                .children(embed_image.map(|image| {
+                                    div()
+                                        .mt(zpx(6.))
+                                        .max_w(zpx(380.))
+                                        .max_h(zpx(210.))
+                                        .rounded(corner(8.))
+                                        .overflow_hidden()
+                                        .child(img(image).w_full().max_h(zpx(210.)).object_fit(gpui::ObjectFit::Cover))
+                                })),
+                        )
                         .into_any_element(),
                 )
             }
@@ -2117,7 +2173,11 @@ impl Timeline {
         let name = event.sender_name.clone().unwrap_or_else(|| event.sender.trim_start_matches('@').split(':').next().unwrap_or_default().to_owned());
 
         if is_system(&event.content) {
-            let (line, _) = body_text(&event.content);
+            let (raw_line, _) = body_text(&event.content);
+            let line = match &event.content {
+                ContentDto::State { .. } | ContentDto::CallInvite => format!("{name} {raw_line}"),
+                _ => raw_line,
+            };
             return h_flex()
                 .w_full()
                 .px(space(22.))
