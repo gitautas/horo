@@ -81,3 +81,59 @@ fn the_microphone_delivers_fifty_frames_a_second() {
     assert!((85..=105).contains(&got), "{got} frames");
     assert_eq!(glitches, 0);
 }
+
+/// Bluetooth headphones change sample rate whenever any app opens or closes
+/// their microphone, and cpal then pauses every stream on them for good. A
+/// capture has to notice and open the device again, or the call goes on
+/// without our voice.
+///
+/// Changes a real microphone's sample rate, so it's run by hand:
+/// `HORO_TEST_INPUT="MacBook Air Microphone" cargo test -p horo-rtc --test devices -- --ignored`
+/// (any input whose name contains it; the first that offers two rates if unset).
+#[test]
+#[ignore = "changes a microphone's sample rate"]
+fn the_microphone_comes_back_after_its_sample_rate_changes() {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    let wanted = std::env::var("HORO_TEST_INPUT").ok();
+    let host = cpal::default_host();
+    let Some((device, other_rate)) = host.input_devices().unwrap().find_map(|d| {
+        let name = d.description().map(|n| n.to_string()).unwrap_or_default();
+        if wanted.as_deref().is_some_and(|w| !name.contains(w)) {
+            return None;
+        }
+        let now = d.default_input_config().ok()?.sample_rate();
+        let other = [48_000, 44_100, 24_000, 16_000]
+            .into_iter()
+            .find(|&r| r != now && d.supported_input_configs().is_ok_and(|mut c| c.any(|c| (c.min_sample_rate()..=c.max_sample_rate()).contains(&r))))?;
+        Some((d, other))
+    }) else {
+        eprintln!("no microphone here offers a second rate; skipping");
+        return;
+    };
+    let id = device.id().unwrap().to_string();
+
+    let got = Arc::new(AtomicUsize::new(0));
+    let capture = {
+        let got = got.clone();
+        Capture::start(Some(&id), move |_frame: &[f32; FRAME]| {
+            got.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap()
+    };
+    std::thread::sleep(Duration::from_secs(1));
+
+    // Another app (here, us) opens it at another rate.
+    let mut config = device.default_input_config().unwrap().config();
+    config.sample_rate = other_rate;
+    let other = device.build_input_stream(config, |_: &[f32], _| {}, |_| {}, None).unwrap();
+    other.play().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    drop(other);
+
+    let before = got.load(Ordering::Relaxed);
+    std::thread::sleep(RUN);
+    let after = got.load(Ordering::Relaxed) - before;
+    drop(capture);
+    eprintln!("after switching to {other_rate} Hz: {after} frames in {RUN:?}");
+    assert!(after >= 80, "the microphone stayed silent: {after} frames");
+}

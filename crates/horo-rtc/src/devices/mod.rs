@@ -173,6 +173,46 @@ impl Drop for Capture {
     }
 }
 
+/// How long to wait before reopening a device whose stream was lost, and
+/// between tries while it won't open.
+const REOPEN_AFTER: Duration = Duration::from_millis(300);
+
+/// Set by a stream's error callback when cpal has given the stream up: the
+/// device went away, or its sample rate changed under us (Bluetooth
+/// headphones do, between their music and headset modes, whenever any app
+/// opens or closes their microphone). cpal pauses such a stream for good, so
+/// the thread that owns it has to open the device again.
+fn on_stream_error(which: &'static str, lost: Arc<AtomicBool>) -> impl FnMut(cpal::Error) + Send + 'static {
+    move |e| match e.kind() {
+        // An overrun or a followed route change: the stream carries on.
+        cpal::ErrorKind::Xrun | cpal::ErrorKind::DeviceChanged => tracing::debug!("{which}: {e}"),
+        _ => {
+            tracing::warn!("{which} stopped ({e}); reopening it");
+            lost.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Reopen a lost device with `open`: the one asked for, else the system
+/// default, trying again until it opens or `stop` is set.
+fn reopen<T>(which: &str, device_id: Option<&str>, stop: &AtomicBool, mut open: impl FnMut(Option<&str>) -> Result<T>) -> Option<T> {
+    while !stop.load(Ordering::Relaxed) {
+        std::thread::sleep(REOPEN_AFTER);
+        match open(device_id) {
+            Ok(opened) => return Some(opened),
+            Err(e) if device_id.is_some() => match open(None) {
+                Ok(opened) => {
+                    tracing::warn!("{which}: {e}; using the system default until it's back");
+                    return Some(opened);
+                }
+                Err(e) => tracing::warn!("{which}: still can't reopen: {e}"),
+            },
+            Err(e) => tracing::warn!("{which}: still can't reopen: {e}"),
+        }
+    }
+    None
+}
+
 fn capture_thread(
     device_id: Option<String>,
     mut on_frame: impl FnMut(&[f32; FRAME]),
@@ -180,23 +220,26 @@ fn capture_thread(
     stats: Arc<DeviceStats>,
     ready: mpsc::Sender<Result<u32>>,
 ) {
-    let setup = (|| {
-        let device = find(Direction::Input, device_id.as_deref())?;
+    let lost = Arc::new(AtomicBool::new(false));
+    let open = |device_id: Option<&str>| {
+        lost.store(false, Ordering::Relaxed);
+        let device = find(Direction::Input, device_id)?;
         let config = device.default_input_config()?;
         let rate = config.sample_rate();
         let channels = config.channels() as usize;
         // Half a second of headroom between the callback and this thread.
         let (producer, consumer) = HeapRb::<f32>::new(rate as usize / 2).split();
+        let (stats, lost) = (stats.clone(), lost.clone());
         let stream = match config.sample_format() {
-            cpal::SampleFormat::F32 => input_stream::<f32>(&device, &config.into(), channels, producer, stats.clone())?,
-            cpal::SampleFormat::I16 => input_stream::<i16>(&device, &config.into(), channels, producer, stats.clone())?,
+            cpal::SampleFormat::F32 => input_stream::<f32>(&device, &config.into(), channels, producer, stats, lost)?,
+            cpal::SampleFormat::I16 => input_stream::<i16>(&device, &config.into(), channels, producer, stats, lost)?,
             other => return Err(DeviceError::UnsupportedFormat(other)),
         };
         stream.play().map_err(|e| DeviceError::Cpal(e.to_string()))?;
         let frames = ToFrames::new(rate).map_err(DeviceError::Resampler)?;
         Ok((stream, consumer, frames, rate))
-    })();
-    let (_stream, mut consumer, mut frames, rate) = match setup {
+    };
+    let (mut stream, mut consumer, mut frames, rate) = match open(device_id.as_deref()) {
         Ok(ok) => ok,
         Err(e) => {
             let _ = ready.send(Err(e));
@@ -207,6 +250,12 @@ fn capture_thread(
 
     let mut scratch = vec![0f32; rate as usize / 10];
     while !stop.load(Ordering::Relaxed) {
+        if lost.load(Ordering::Relaxed) {
+            drop(stream);
+            let Some(opened) = reopen("microphone", device_id.as_deref(), &stop, &open) else { return };
+            (stream, consumer, frames, _) = opened;
+            continue;
+        }
         loop {
             let n = consumer.pop_slice(&mut scratch);
             if n == 0 {
@@ -227,6 +276,7 @@ fn input_stream<T>(
     channels: usize,
     mut producer: impl Producer<Item = f32> + Send + 'static,
     stats: Arc<DeviceStats>,
+    lost: Arc<AtomicBool>,
 ) -> Result<cpal::Stream>
 where
     T: SizedSample,
@@ -243,7 +293,7 @@ where
                 }
             }
         },
-        |e| tracing::warn!("microphone: {e}"),
+        on_stream_error("microphone", lost),
         None,
     )?;
     Ok(stream)
@@ -295,21 +345,24 @@ fn playback_thread(
     stats: Arc<DeviceStats>,
     ready: mpsc::Sender<Result<u32>>,
 ) {
-    let setup = (|| {
-        let device = find(Direction::Output, device_id.as_deref())?;
+    let lost = Arc::new(AtomicBool::new(false));
+    let open = |device_id: Option<&str>| {
+        lost.store(false, Ordering::Relaxed);
+        let device = find(Direction::Output, device_id)?;
         let config = device.default_output_config()?;
         let rate = config.sample_rate();
         let channels = config.channels() as usize;
         let (producer, consumer) = HeapRb::<f32>::new(rate as usize / 2).split();
+        let (stats, lost) = (stats.clone(), lost.clone());
         let stream = match config.sample_format() {
-            cpal::SampleFormat::F32 => output_stream::<f32>(&device, &config.into(), channels, consumer, stats.clone())?,
-            cpal::SampleFormat::I16 => output_stream::<i16>(&device, &config.into(), channels, consumer, stats.clone())?,
+            cpal::SampleFormat::F32 => output_stream::<f32>(&device, &config.into(), channels, consumer, stats, lost)?,
+            cpal::SampleFormat::I16 => output_stream::<i16>(&device, &config.into(), channels, consumer, stats, lost)?,
             other => return Err(DeviceError::UnsupportedFormat(other)),
         };
         let frames = FromFrames::new(rate).map_err(DeviceError::Resampler)?;
         Ok((stream, producer, frames, rate))
-    })();
-    let (stream, mut producer, mut frames, rate) = match setup {
+    };
+    let (mut stream, mut producer, mut frames, rate) = match open(device_id.as_deref()) {
         Ok(ok) => ok,
         Err(e) => {
             let _ = ready.send(Err(e));
@@ -319,9 +372,10 @@ fn playback_thread(
 
     // Keep about 40 ms queued ahead of the device: enough to ride out this
     // thread being scheduled late, little enough not to add much delay.
-    let target = (rate as usize / 1000) * 40;
+    let target_for = |rate: u32| (rate as usize / 1000) * 40;
+    let mut target = target_for(rate);
     let mut frame = [0f32; FRAME];
-    let mut fill = |producer: &mut ringbuf::HeapProd<f32>, frames: &mut FromFrames| {
+    let mut fill = |producer: &mut ringbuf::HeapProd<f32>, frames: &mut FromFrames, target: usize| {
         while producer.occupied_len() < target {
             next_frame(&mut frame);
             stats.frames.fetch_add(1, Ordering::Relaxed);
@@ -331,14 +385,30 @@ fn playback_thread(
         }
     };
     // Prime before starting, so the device's first callback isn't empty.
-    fill(&mut producer, &mut frames);
+    fill(&mut producer, &mut frames, target);
     if let Err(e) = stream.play() {
         let _ = ready.send(Err(DeviceError::Cpal(e.to_string())));
         return;
     }
     let _ = ready.send(Ok(rate));
     while !stop.load(Ordering::Relaxed) {
-        fill(&mut producer, &mut frames);
+        if lost.load(Ordering::Relaxed) {
+            drop(stream);
+            // Primed and started like the first time; a reopened device may
+            // run at another rate (headset mode is 16 or 24 kHz).
+            let restart = |device_id: Option<&str>| {
+                let (stream, mut producer, mut frames, rate) = open(device_id)?;
+                fill(&mut producer, &mut frames, target_for(rate));
+                stream.play().map_err(|e| DeviceError::Cpal(e.to_string()))?;
+                Ok((stream, producer, frames, rate))
+            };
+            let Some(opened) = reopen("loudspeaker", device_id.as_deref(), &stop, restart) else { return };
+            let rate;
+            (stream, producer, frames, rate) = opened;
+            target = target_for(rate);
+            continue;
+        }
+        fill(&mut producer, &mut frames, target);
         std::thread::sleep(POLL);
     }
 }
@@ -349,6 +419,7 @@ fn output_stream<T>(
     channels: usize,
     mut consumer: impl Consumer<Item = f32> + Send + 'static,
     stats: Arc<DeviceStats>,
+    lost: Arc<AtomicBool>,
 ) -> Result<cpal::Stream>
 where
     T: SizedSample + FromSample<f32>,
@@ -367,7 +438,7 @@ where
                 }
             }
         },
-        |e| tracing::warn!("loudspeaker: {e}"),
+        on_stream_error("loudspeaker", lost),
         None,
     )?;
     Ok(stream)
