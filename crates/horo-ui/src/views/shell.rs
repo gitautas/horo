@@ -1700,7 +1700,6 @@ impl Shell {
         let store = self.store.read(cx);
         let room = store.room.as_ref().and_then(|id| store.rooms.iter().find(|r| r.id == *id)).cloned();
         let (thread, thread_preview) = (store.thread.clone(), store.thread_preview.clone());
-        let strip = room.as_ref().and_then(|r| voice::strip(&r.id, &self.store, palette, cx));
 
         let header = room.as_ref().map(|r| self.room_header(r, palette, cx));
         // A thread replaces the room's timeline, said in a bar above it
@@ -1763,7 +1762,6 @@ impl Shell {
                 .flex_1()
                 .min_h_0()
                 .children(thread_bar)
-                .children(strip)
                 .child(div().flex_1().min_h_0().child(timeline.clone()))
                 .child(composer.clone())
                 .child(drop_zone(&room.name, in_thread, composer.clone(), palette)),
@@ -1894,6 +1892,7 @@ impl Render for Shell {
             .relative()
             .children(self.settings.clone())
             .children(self.quick_switcher.clone())
+            .children(voice::floating(&self.store, &palette, cx))
             .children(voice::fullscreen(&self.store, &palette, window, cx))
             .children(lightbox::lightbox(&self.store, &palette, window, cx))
             .children(voice::ringing(&self.store, &palette, cx))

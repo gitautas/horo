@@ -335,15 +335,6 @@ enum Size {
     Fill,
 }
 
-/// A tile's own size in the grid: screens big, cameras 16:9, faces small.
-fn natural(shows: &Shows) -> (f32, f32) {
-    match shows {
-        Shows::Screen { .. } => (480., 270.),
-        Shows::Sharing | Shows::OwnCamera | Shows::Camera { .. } => (240., 135.),
-        Shows::Face => (96., 104.),
-    }
-}
-
 /// The biggest 16:9 tiles `count` of which fit in `width` x `height` with
 /// gaps between them, over whichever number of columns does best.
 fn fit(count: usize, width: f32, height: f32) -> (f32, f32) {
@@ -492,18 +483,16 @@ fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, area: Option
         FocusMode::Grid => None,
     };
     let Some(focused) = focused else {
-        let fitted = area.map(|(w, h)| fit(tiles.len(), w, h));
+        let fitted = area.map(|(w, h)| fit(tiles.len(), w, h)).unwrap_or_else(|| fit(tiles.len(), 320., 184.));
         let drawn: Vec<AnyElement> = tiles
             .iter()
-            .map(|t| {
-                let size = fitted.unwrap_or_else(|| natural(&t.shows));
-                draw(t, Size::Fixed(size.0, size.1), false, store, palette, cx)
-            })
+            .map(|t| draw(t, Size::Fixed(fitted.0, fitted.1), false, store, palette, cx))
             .collect();
         return h_flex()
             .flex_wrap()
             .gap_2()
-            .when(full, |d| d.flex_1().min_h_0().justify_center().content_center())
+            .justify_center()
+            .when(full, |d| d.flex_1().min_h_0().content_center())
             .children(drawn)
             .into_any_element();
     };
@@ -512,47 +501,99 @@ fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, area: Option
         .iter()
         .enumerate()
         .filter(|(i, _)| *i != focused)
-        .map(|(_, t)| draw(t, Size::Fixed(FILM.0, FILM.1), false, store, palette, cx))
+        .map(|(_, t)| {
+            let sz = if full { FILM } else { (98., 56.) };
+            draw(t, Size::Fixed(sz.0, sz.1), false, store, palette, cx)
+        })
         .collect();
     v_flex()
         .gap_2()
         .when(full, |d| d.flex_1().min_h_0())
-        .child(div().w_full().map(|d| if full { d.flex_1().min_h_0() } else { d.h(zpx(420.)) }).child(big))
+        .child(div().w_full().map(|d| if full { d.flex_1().min_h_0() } else { d.h(zpx(184.)) }).child(big))
         .when(!others.is_empty(), |d| d.child(h_flex().flex_wrap().gap_2().when(full, |d| d.justify_center()).children(others)))
         .into_any_element()
 }
 
-/// The call's people, above the timeline of the call's room (unless the
-/// call fills the window).
-pub fn strip(room_id: &str, store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<AnyElement> {
-    let call = store.read(cx).call.clone().filter(|c| c.room_id == room_id && c.is_live() && !c.fullscreen)?;
-    // A voice call with nobody on camera or sharing has no stage at all:
-    // who's in it is listed under the room, and the controls live in the
-    // voice panel at the foot of the room list.
+/// Floating picture-in-picture video call modal anchored in the bottom-right
+/// corner (unless the call fills the window). Stays visible while browsing
+/// other rooms.
+pub fn floating(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<AnyElement> {
+    let state = store.read(cx);
+    let call = state.call.clone().filter(|c| c.is_live() && !c.fullscreen)?;
     if !has_video(&call) {
         return None;
     }
+    let room_id = call.room_id.clone();
+    let room_name = state
+        .rooms
+        .iter()
+        .find(|r| r.id == call.room_id)
+        .map(|r| r.name.clone())
+        .unwrap_or_else(|| call.room_id.clone());
     let connecting = call.status == CallStatus::Connecting;
     let expand = store.clone();
+    let open_room = store.clone();
     Some(
-        div()
-            .relative()
-            .px_4()
-            .py_3()
-            .border_b_1()
-            .border_color(palette.border_subtle)
-            .when(connecting, |strip| strip.child(div().pb_2().text_sm().text_color(palette.text_tertiary).child("joining the call…")))
-            .child(stage(&call, store, palette, None, cx))
+        v_flex()
+            .id("call-floating")
+            .absolute()
+            .bottom(space(18.))
+            .right(space(18.))
+            .w(zpx(344.))
+            .occlude()
+            .rounded(corner(16.))
+            .bg(palette.card)
+            .border_1()
+            .border_color(palette.border)
+            .shadow_lg()
+            .overflow_hidden()
             .child(
-                // Over the big tile's corner: its click is the button's alone.
-                div().absolute().top(zpx(14.)).right(zpx(18.)).occlude().child(
-                    Button::new("call-expand")
-                        .ghost()
-                        .small()
-                        .icon(icon("icons/maximize-2.svg"))
-                        .tooltip("fill the window")
-                        .on_click(move |_, _, cx| expand.update(cx, |s, cx| s.set_call_fullscreen(true, cx))),
-                ),
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(space(8.))
+                    .px(space(12.))
+                    .py(space(8.))
+                    .border_b_1()
+                    .border_color(palette.border_subtle)
+                    .child(
+                        h_flex()
+                            .id("call-floating-room")
+                            .flex_1()
+                            .min_w_0()
+                            .items_center()
+                            .gap(space(7.))
+                            .cursor_pointer()
+                            .child(div().flex_none().size(zpx(8.)).rounded_full().bg(palette.online))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(text(12.5))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(palette.text)
+                                    .child(room_name),
+                            )
+                            .on_click(move |_, _, cx| {
+                                let id = room_id.clone();
+                                open_room.update(cx, |s, cx| s.open_room(id, cx));
+                            }),
+                    )
+                    .child(
+                        Button::new("call-expand")
+                            .ghost()
+                            .small()
+                            .icon(icon("icons/maximize-2.svg"))
+                            .tooltip("fill the window")
+                            .on_click(move |_, _, cx| expand.update(cx, |s, cx| s.set_call_fullscreen(true, cx))),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .p(space(10.))
+                    .gap(space(8.))
+                    .when(connecting, |col| col.child(div().text_xs().text_color(palette.text_tertiary).child("joining the call…")))
+                    .child(stage(&call, store, palette, None, cx))
+                    .child(h_flex().justify_center().child(controls(store, &call))),
             )
             .into_any_element(),
     )
