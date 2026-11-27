@@ -82,3 +82,78 @@ pub fn relaunch() -> ! {
     }
     std::process::exit(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// Confirm `cargo-packager-updater` accepts the dual-updater `latest.json`
+    /// written by `.github/workflows/release.yml` (with both `darwin-*` for
+    /// Tauri installs and `macos-*` for gpui installs). When
+    /// `HORO_UPDATER_TEST_DIR` points at a downloaded CI artifact directory,
+    /// also downloads and verifies its real `.app.tar.gz` + `.sig` against
+    /// `horo_core::update::PUBKEY`.
+    #[test]
+    fn manifest_and_signature_verify() {
+        let test_dir = std::env::var_os("HORO_UPDATER_TEST_DIR").map(PathBuf::from);
+        let (archive_bytes, sig) = match &test_dir {
+            Some(dir) => (
+                std::fs::read(dir.join("horo_0.11.0_aarch64.app.tar.gz")).expect("archive"),
+                std::fs::read_to_string(dir.join("horo_0.11.0_aarch64.app.tar.gz.sig")).expect("sig"),
+            ),
+            None => (Vec::new(), "dummy-sig".to_owned()),
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().unwrap();
+        let manifest = serde_json::json!({
+            "version": "0.11.0",
+            "notes": "test release",
+            "pub_date": "2026-11-27T00:00:00Z",
+            "platforms": {
+                "macos-aarch64": { "url": format!("http://{addr}/bundle.app.tar.gz"), "signature": sig, "format": "app" },
+                "darwin-aarch64": { "url": format!("http://{addr}/bundle.app.tar.gz"), "signature": sig, "format": "app" },
+                "macos-x86_64": { "url": format!("http://{addr}/bundle.app.tar.gz"), "signature": sig, "format": "app" },
+                "darwin-x86_64": { "url": format!("http://{addr}/bundle.app.tar.gz"), "signature": sig, "format": "app" },
+                "linux-x86_64": { "url": format!("http://{addr}/bundle.AppImage"), "signature": sig, "format": "appimage" },
+                "linux-aarch64": { "url": format!("http://{addr}/bundle.AppImage"), "signature": sig, "format": "appimage" },
+                "windows-x86_64": { "url": format!("http://{addr}/bundle-setup.exe"), "signature": sig, "format": "nsis" },
+            }
+        })
+        .to_string();
+
+        let requests = if test_dir.is_some() { 2 } else { 1 };
+        let server = std::thread::spawn(move || {
+            for _ in 0..requests {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 1024];
+                let n = stream.read(&mut buf).unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let (ctype, body): (&str, &[u8]) = if req.starts_with("GET /latest.json") {
+                    ("application/json", manifest.as_bytes())
+                } else {
+                    ("application/octet-stream", &archive_bytes)
+                };
+                let header = format!("HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                stream.write_all(header.as_bytes()).unwrap();
+                stream.write_all(body).unwrap();
+            }
+        });
+
+        let config = Config {
+            endpoints: vec![format!("http://{addr}/latest.json").parse().unwrap()],
+            pubkey: horo_core::update::PUBKEY.to_owned(),
+            windows: Some(WindowsConfig { installer_args: None, install_mode: Some(WindowsUpdateInstallMode::Passive) }),
+        };
+        let updater = UpdaterBuilder::new(semver::Version::new(0, 10, 0), config).build().expect("builder");
+        let update = updater.check().expect("check").expect("update available");
+        assert_eq!(update.version, "0.11.0");
+        if test_dir.is_some() {
+            let bytes = update.download().expect("download & minisign signature verification");
+            assert!(!bytes.is_empty());
+        }
+        server.join().unwrap();
+    }
+}
