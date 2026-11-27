@@ -1894,6 +1894,7 @@ impl Render for Shell {
             .children(self.quick_switcher.clone())
             .children(voice::floating(&self.store, &palette, cx))
             .children(voice::fullscreen(&self.store, &palette, window, cx))
+            .children(voice::mixer(&self.store, &palette, cx))
             .children(lightbox::lightbox(&self.store, &palette, window, cx))
             .children(voice::ringing(&self.store, &palette, cx))
             .children(self.explore.clone())

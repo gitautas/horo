@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 
 use gpui::{
-    AnyElement, App, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled, div,
+    AnyElement, App, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, StatefulInteractiveElement, Styled, div,
     prelude::FluentBuilder,
 };
 use gpui_component::{
@@ -177,7 +177,7 @@ pub fn panel(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<A
                 )
                 .child(corner),
             )
-            .when(!failed, |d| d.child(controls(store, &call)))
+            .when(!failed, |d| d.child(controls(store, &call, "panel")))
             .into_any_element(),
     )
 }
@@ -593,7 +593,7 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Optio
                     .gap(space(8.))
                     .when(connecting, |col| col.child(div().text_xs().text_color(palette.text_tertiary).child("joining the call…")))
                     .child(stage(&call, store, palette, None, cx))
-                    .child(h_flex().justify_center().child(controls(store, &call))),
+                    .child(h_flex().justify_center().child(controls(store, &call, "float"))),
             )
             .into_any_element(),
     )
@@ -635,20 +635,246 @@ pub fn fullscreen(store: &Entity<Store>, palette: &Palette, window: &gpui::Windo
                     ),
             )
             .child(stage(&call, store, palette, Some(area), cx))
-            .child(h_flex().justify_center().child(controls(store, &call)))
+            .child(h_flex().justify_center().child(controls(store, &call, "full")))
             .into_any_element(),
     )
 }
 
-/// Our camera, screen, microphone, hearing and the way out.
-fn controls(store: &Entity<Store>, call: &CallView) -> gpui::Div {
+/// Floating per-user volume mixer popover (`0%–200%` + local mute per speaker),
+/// accessible from the call controls in the voice panel, PiP modal, or fullscreen.
+pub fn mixer(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<AnyElement> {
+    let state = store.read(cx);
+    let call = state.call.clone().filter(|c| c.is_live() && c.mixer_open)?;
+    let own_identity = call.identity.clone();
+    let list = people(&call, &state.profiles);
+    let remotes: Vec<Person> = list
+        .into_iter()
+        .filter(|p| p.identity.as_deref() != own_identity.as_deref())
+        .collect();
+    let any_custom = call.participant_volumes.values().any(|&v| (v - 1.0).abs() > 0.01);
+    let close_out = store.clone();
+    let close_btn = store.clone();
+    let reset_store = store.clone();
+
+    let rows: AnyElement = if remotes.is_empty() {
+        div()
+            .py(space(20.))
+            .text_center()
+            .text_xs()
+            .text_color(palette.text_tertiary)
+            .child("waiting for others to join the call…")
+            .into_any_element()
+    } else {
+        v_flex()
+            .gap(space(10.))
+            .children(remotes.into_iter().enumerate().map(|(ix, p)| {
+                let id = p.identity.clone().unwrap_or_else(|| p.user_id.clone());
+                let vol = call.participant_volumes.get(&id).copied().unwrap_or(1.0);
+                let pct = (vol * 100.0).round() as u32;
+                let muted = vol <= 0.001;
+                let face = avatar(&p.user_id, &p.real_name, p.avatar.as_deref(), zpx(26.), cx);
+                let (s_mute, s_down, s_up) = (store.clone(), store.clone(), store.clone());
+                let (id_mute, id_down, id_up) = (id.clone(), id.clone(), id.clone());
+
+                // 20 clickable segments from 10% to 200% (segment 10 = 100%).
+                let bar = h_flex()
+                    .flex_1()
+                    .h(zpx(18.))
+                    .items_center()
+                    .gap(zpx(2.))
+                    .children((1u32..=20u32).map(|step| {
+                        let target_vol = step as f32 * 0.1;
+                        let lit = !muted && vol + 0.001 >= target_vol;
+                        let boost = step > 10;
+                        let is_unity = step == 10;
+                        let s_seg = store.clone();
+                        let id_seg = id.clone();
+                        div()
+                            .id(SharedString::from(format!("mix-seg-{ix}-{step}")))
+                            .flex_1()
+                            .h(zpx(if is_unity { 12. } else { 7. }))
+                            .rounded(corner(2.))
+                            .cursor_pointer()
+                            .bg(if lit {
+                                if boost { palette.idle } else { palette.accent }
+                            } else {
+                                palette.inset
+                            })
+                            .hover(|d| d.bg(if boost { palette.idle } else { palette.accent }))
+                            .on_click(move |_, _, cx| {
+                                let id = id_seg.clone();
+                                s_seg.update(cx, |s, cx| s.set_participant_volume(id, target_vol, cx));
+                            })
+                    }));
+
+                v_flex()
+                    .gap(zpx(6.))
+                    .p(space(9.))
+                    .rounded(corner(12.))
+                    .bg(palette.app)
+                    .border_1()
+                    .border_color(if p.speaking { palette.online } else { palette.border_subtle })
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(space(8.))
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .items_center()
+                                    .gap(space(8.))
+                                    .child(face)
+                                    .child(div().truncate().text_xs().font_weight(FontWeight::BOLD).text_color(palette.text).child(p.name)),
+                            )
+                            .child(
+                                div()
+                                    .id(("mix-mute", ix))
+                                    .px(space(7.))
+                                    .py(zpx(2.))
+                                    .rounded(corner(6.))
+                                    .cursor_pointer()
+                                    .bg(if muted { Hsla { a: 0.16, ..palette.danger } } else { palette.card })
+                                    .hover(|d| d.bg(palette.raised))
+                                    .font_family(palette.mono_font.clone())
+                                    .text_size(text(10.5))
+                                    .text_color(if muted {
+                                        palette.danger
+                                    } else if pct > 100 {
+                                        palette.idle
+                                    } else {
+                                        palette.text_secondary
+                                    })
+                                    .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("click to mute / unmute locally").build(window, cx))
+                                    .child(if muted { "muted".to_owned() } else { format!("{pct}%") })
+                                    .on_click(move |_, _, cx| {
+                                        let id = id_mute.clone();
+                                        s_mute.update(cx, |s, cx| s.set_participant_volume(id, if muted { 1.0 } else { 0.0 }, cx));
+                                    }),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap(space(6.))
+                            .child(
+                                div()
+                                    .id(("mix-down", ix))
+                                    .size(zpx(20.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(corner(6.))
+                                    .cursor_pointer()
+                                    .bg(palette.card)
+                                    .hover(|d| d.bg(palette.raised))
+                                    .text_xs()
+                                    .text_color(palette.text_secondary)
+                                    .child("−")
+                                    .on_click(move |_, _, cx| {
+                                        let id = id_down.clone();
+                                        s_down.update(cx, |s, cx| s.set_participant_volume(id, (vol - 0.1).max(0.0), cx));
+                                    }),
+                            )
+                            .child(bar)
+                            .child(
+                                div()
+                                    .id(("mix-up", ix))
+                                    .size(zpx(20.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(corner(6.))
+                                    .cursor_pointer()
+                                    .bg(palette.card)
+                                    .hover(|d| d.bg(palette.raised))
+                                    .text_xs()
+                                    .text_color(palette.text_secondary)
+                                    .child("+")
+                                    .on_click(move |_, _, cx| {
+                                        let id = id_up.clone();
+                                        s_up.update(cx, |s, cx| s.set_participant_volume(id, (vol + 0.1).min(2.0), cx));
+                                    }),
+                            ),
+                    )
+            }))
+            .into_any_element()
+    };
+
+    Some(
+        v_flex()
+            .id("call-mixer-popover")
+            .occlude()
+            .absolute()
+            .bottom(space(78.))
+            .right(space(18.))
+            .w(zpx(320.))
+            .max_h(zpx(400.))
+            .rounded(corner(16.))
+            .bg(palette.card)
+            .border_1()
+            .border_color(palette.border)
+            .shadow_lg()
+            .overflow_hidden()
+            .on_mouse_down_out(move |_, _, cx| close_out.update(cx, |s, cx| s.close_call_mixer(cx)))
+            .child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .px(space(14.))
+                    .py(space(10.))
+                    .border_b_1()
+                    .border_color(palette.border_subtle)
+                    .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(palette.text).child("volume mixer"))
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap(space(6.))
+                            .when(any_custom, |row| {
+                                row.child(
+                                    div()
+                                        .id("mix-reset-all")
+                                        .px(space(7.))
+                                        .py(zpx(2.))
+                                        .rounded(corner(6.))
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(palette.accent)
+                                        .hover(|d| d.bg(palette.raised))
+                                        .child("reset")
+                                        .on_click(move |_, _, cx| reset_store.update(cx, |s, cx| s.reset_participant_volumes(cx))),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .id("mix-close")
+                                    .px(space(6.))
+                                    .py(zpx(2.))
+                                    .rounded(corner(6.))
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(palette.text_tertiary)
+                                    .hover(|d| d.bg(palette.raised).text_color(palette.text))
+                                    .child("✕")
+                                    .on_click(move |_, _, cx| close_btn.update(cx, |s, cx| s.close_call_mixer(cx))),
+                            ),
+                    ),
+            )
+            .child(div().id("mix-scroll").flex_1().min_h_0().overflow_y_scroll().p(space(10.)).child(rows))
+            .into_any_element(),
+    )
+}
+
+/// Our camera, screen, microphone, hearing, volume mixer and the way out.
+fn controls(store: &Entity<Store>, call: &CallView, prefix: &'static str) -> gpui::Div {
     let row = h_flex().gap_1();
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     let row = {
         let (share, sharing) = (store.clone(), call.sharing);
         let (camera, camera_on) = (store.clone(), call.camera);
         row.child(
-            Button::new("call-screen")
+            Button::new(SharedString::from(format!("{prefix}-call-screen")))
                 .ghost()
                 .icon(icon(if sharing { "icons/screen-share-off.svg" } else { "icons/screen-share.svg" }))
                 .tooltip(if sharing { "stop sharing your screen" } else { "share your screen" })
@@ -656,7 +882,7 @@ fn controls(store: &Entity<Store>, call: &CallView) -> gpui::Div {
                 .on_click(move |_, _, cx| share.update(cx, |s, cx| s.set_call_screen(!sharing, cx))),
         )
         .child(
-            Button::new("call-camera")
+            Button::new(SharedString::from(format!("{prefix}-call-camera")))
                 .ghost()
                 .icon(icon(if camera_on { "icons/video.svg" } else { "icons/video-off.svg" }))
                 .tooltip(if camera_on { "turn your camera off" } else { "turn your camera on" })
@@ -664,10 +890,10 @@ fn controls(store: &Entity<Store>, call: &CallView) -> gpui::Div {
                 .on_click(move |_, _, cx| camera.update(cx, |s, cx| s.set_call_camera(!camera_on, cx))),
         )
     };
-    let (mute, deafen, leave) = (store.clone(), store.clone(), store.clone());
-    let (muted, deafened) = (call.muted, call.deafened);
+    let (mute, deafen, mixer_store, leave) = (store.clone(), store.clone(), store.clone(), store.clone());
+    let (muted, deafened, mixer_open) = (call.muted, call.deafened, call.mixer_open);
     row.child(
-        Button::new("call-mute")
+        Button::new(SharedString::from(format!("{prefix}-call-mute")))
             .ghost()
             .icon(icon(if muted { "icons/mic-off.svg" } else { "icons/mic.svg" }))
             .tooltip(if muted { "unmute" } else { "mute" })
@@ -675,7 +901,7 @@ fn controls(store: &Entity<Store>, call: &CallView) -> gpui::Div {
             .on_click(move |_, _, cx| mute.update(cx, |s, cx| s.set_call_muted(!muted, cx))),
     )
     .child(
-        Button::new("call-deafen")
+        Button::new(SharedString::from(format!("{prefix}-call-deafen")))
             .ghost()
             .icon(icon(if deafened { "icons/headphone-off.svg" } else { "icons/headphones.svg" }))
             .tooltip(if deafened { "undeafen" } else { "deafen" })
@@ -683,7 +909,15 @@ fn controls(store: &Entity<Store>, call: &CallView) -> gpui::Div {
             .on_click(move |_, _, cx| deafen.update(cx, |s, cx| s.set_call_deafened(!deafened, cx))),
     )
     .child(
-        Button::new("call-leave")
+        Button::new(SharedString::from(format!("{prefix}-call-mixer")))
+            .ghost()
+            .icon(gpui_component::Icon::new(gpui_component::IconName::Settings2))
+            .tooltip("per-user volume mixer")
+            .when(mixer_open, |b| b.primary())
+            .on_click(move |_, _, cx| mixer_store.update(cx, |s, cx| s.toggle_call_mixer(cx))),
+    )
+    .child(
+        Button::new(SharedString::from(format!("{prefix}-call-leave")))
             .danger()
             .icon(icon("icons/phone-off.svg"))
             .tooltip("leave the call")

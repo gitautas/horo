@@ -77,6 +77,8 @@ pub struct CallView {
     pub participants: Vec<Participant>,
     /// Per-participant local playback volume (`0.0` = muted, `1.0` = 100%, up to `2.0`).
     pub participant_volumes: std::collections::HashMap<String, f32>,
+    /// Whether the per-user call volume mixer popover is open.
+    pub mixer_open: bool,
     /// Identities speaking now, by the server's ear (ours is ignored: it
     /// arrives late, see `self_speaking`).
     pub speaking: Vec<String>,
@@ -166,6 +168,7 @@ impl Store {
             identity: None,
             participants: Vec::new(),
             participant_volumes: std::collections::HashMap::new(),
+            mixer_open: false,
             speaking: Vec::new(),
             self_speaking: false,
             loud_at: None,
@@ -501,6 +504,39 @@ impl Store {
             view.fullscreen = on;
             cx.notify();
         }
+    }
+
+    pub fn toggle_call_mixer(&mut self, cx: &mut Context<Self>) {
+        if let Some(view) = &mut self.call {
+            view.mixer_open = !view.mixer_open;
+            cx.notify();
+        }
+    }
+
+    pub fn close_call_mixer(&mut self, cx: &mut Context<Self>) {
+        if let Some(view) = &mut self.call
+            && view.mixer_open
+        {
+            view.mixer_open = false;
+            cx.notify();
+        }
+    }
+
+    pub fn reset_participant_volumes(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<String> = self
+            .call
+            .as_ref()
+            .map(|v| v.participant_volumes.keys().cloned().collect())
+            .unwrap_or_default();
+        if let Some(live) = &self.call_live {
+            for id in &ids {
+                live.call.set_participant_volume(id, 1.0);
+            }
+        }
+        if let Some(view) = &mut self.call {
+            view.participant_volumes.clear();
+        }
+        cx.notify();
     }
 
     /// Move an active call's camera to a newly chosen device (`before` is
