@@ -5,7 +5,7 @@
 
 use gpui::{
     AnyElement, AppContext as _, Context, Entity, EventEmitter, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
-    Render, SharedString, StatefulInteractiveElement, Styled, Window, div, linear_color_stop, linear_gradient, prelude::FluentBuilder,
+    Render, SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div, img, linear_color_stop, linear_gradient, prelude::FluentBuilder,
 };
 use gpui_component::{
     Disableable, Sizable,
@@ -27,6 +27,7 @@ use matrix_sdk::ruma::OwnedRoomId;
 use crate::theme::zpx;
 use crate::{
     backend::Backend,
+    media::Media,
     store::Store,
     theme::{Palette, corner, heading, label, space, text},
     views::{
@@ -89,9 +90,11 @@ pub struct SpaceSettings {
     tag: Entity<InputState>,
     traits: [Entity<InputState>; 5],
     banner: Option<String>,
+    banner_url: Option<String>,
     profile_dirty: bool,
     saving_profile: bool,
     uploading_avatar: bool,
+    uploading_banner: bool,
     /// Roles tab state.
     selected_role: Option<String>,
     new_role_name: Entity<InputState>,
@@ -128,7 +131,7 @@ impl SpaceSettings {
         ];
         let new_role_name = cx.new(|cx| InputState::new(window, cx).placeholder("new role name (e.g. Gamers)"));
         let alias_input = cx.new(|cx| InputState::new(window, cx).placeholder("my-space"));
-        let link_base_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://matrix.to/#/ (or your domain)"));
+        let link_base_input = cx.new(|cx| InputState::new(window, cx).placeholder("auto (inferred from space homeserver)"));
 
         cx.subscribe(&name, |this, _, e: &InputEvent, cx| {
             if matches!(e, InputEvent::Change) {
@@ -187,9 +190,11 @@ impl SpaceSettings {
             tag,
             traits,
             banner: None,
+            banner_url: None,
             profile_dirty: false,
             saving_profile: false,
             uploading_avatar: false,
+            uploading_banner: false,
             selected_role: None,
             new_role_name,
             new_role_color: ROLE_COLORS[0],
@@ -234,6 +239,7 @@ impl SpaceSettings {
                         input.update(cx, |s, cx| s.set_value(val, window, cx));
                     }
                     this.banner = details.profile.banner.clone();
+                    this.banner_url = details.profile.banner_url.clone();
                     let alias_local = details
                         .canonical_alias
                         .as_deref()
@@ -290,6 +296,7 @@ impl SpaceSettings {
         let tag_raw = self.tag.read(cx).value().trim().chars().take(4).collect::<String>();
         let profile = SpaceProfileDto {
             banner: self.banner.clone(),
+            banner_url: self.banner_url.clone(),
             tag: (!tag_raw.is_empty()).then_some(tag_raw),
             traits: self.draft_traits(cx),
             link_base: details.profile.link_base.clone(),
@@ -348,6 +355,58 @@ impl SpaceSettings {
                     }
                 }
                 cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn pick_banner(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.uploading_banner {
+            return;
+        }
+        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("choose space banner image".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else { return };
+            let Some(path) = paths.into_iter().next() else { return };
+            let Ok(bytes) = std::fs::read(&path) else { return };
+            let mime = match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+                Some("png") => "image/png",
+                Some("jpg" | "jpeg") => "image/jpeg",
+                Some("webp") => "image/webp",
+                Some("gif") => "image/gif",
+                _ => "image/png",
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.uploading_banner = true;
+                this.error = None;
+                cx.notify();
+                let backend = Backend::global(cx);
+                let task = backend.run({
+                    let state = backend.state.clone();
+                    async move { spaces::upload_banner(&*state.core().await?, bytes, mime).await }
+                });
+                cx.spawn(async move |this, cx| {
+                    let outcome = task.await;
+                    let _ = this.update(cx, |this, cx| {
+                        this.uploading_banner = false;
+                        match outcome {
+                            Ok(Ok(mxc)) => {
+                                this.banner_url = Some(mxc);
+                                this.profile_dirty = true;
+                                this.save_profile(cx);
+                            }
+                            Ok(Err(e)) => this.error = Some(format!("couldn't upload banner: {e}").into()),
+                            Err(e) => this.error = Some(format!("couldn't upload banner: {e}").into()),
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
             });
         })
         .detach();
@@ -737,9 +796,24 @@ impl SpaceSettings {
         let live_tag = self.tag.read(cx).value().trim().chars().take(4).collect::<String>();
         let live_traits = self.draft_traits(cx);
 
-        let preview_banner = match self.banner.as_deref().and_then(banner_gradient) {
-            Some((a, b)) => div().h(zpx(86.)).w_full().bg(linear_gradient(135., linear_color_stop(gpui::rgb(a), 0.), linear_color_stop(gpui::rgb(b), 1.))),
-            None => div().h(zpx(86.)).w_full().bg(palette.raised),
+        let preview_banner = {
+            let base = if let Some(image) = self.banner_url.as_deref().and_then(|mxc| Media::image(mxc, Some((640, 260)), cx)) {
+                div().relative().h(zpx(96.)).w_full().overflow_hidden().child(img(image).size_full().object_fit(gpui::ObjectFit::Cover))
+            } else if let Some((a, b)) = self.banner.as_deref().and_then(banner_gradient) {
+                div().relative().h(zpx(96.)).w_full().bg(linear_gradient(135., linear_color_stop(gpui::rgb(a), 0.), linear_color_stop(gpui::rgb(b), 1.)))
+            } else {
+                div().relative().h(zpx(96.)).w_full().bg(palette.raised)
+            };
+            base.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(linear_gradient(
+                        180.,
+                        linear_color_stop(gpui::transparent_black(), 0.25),
+                        linear_color_stop(palette.app, 1.),
+                    )),
+            )
         };
 
         let preview_card = v_flex()
@@ -859,8 +933,37 @@ impl SpaceSettings {
                     .gap(zpx(8.))
                     .child(section_label("banner", palette))
                     .child(
+                        h_flex()
+                            .gap(space(8.))
+                            .child(
+                                accent_button(
+                                    "space-banner-upload",
+                                    if self.uploading_banner { "uploading…" } else { "upload banner image" },
+                                    can_edit_profile && !self.uploading_banner,
+                                    true,
+                                    palette,
+                                )
+                                .on_click(cx.listener(|this, _, window, cx| this.pick_banner(window, cx))),
+                            )
+                            .when((self.banner_url.is_some() || self.banner.is_some()) && can_edit_profile, |row| {
+                                row.child(
+                                    Button::new("space-banner-remove")
+                                        .ghost()
+                                        .small()
+                                        .label("remove banner")
+                                        .disabled(self.uploading_banner)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.banner_url = None;
+                                            this.banner = None;
+                                            this.profile_dirty = true;
+                                            this.save_profile(cx);
+                                        })),
+                                )
+                            }),
+                    )
+                    .child(
                         h_flex().flex_wrap().gap(space(8.)).children(BANNER_PRESETS.into_iter().enumerate().map(|(ix, (id, a, b))| {
-                            let active = self.banner.as_deref() == Some(id);
+                            let active = self.banner_url.is_none() && self.banner.as_deref() == Some(id);
                             div()
                                 .id(("banner-swatch", ix))
                                 .w(zpx(68.))
@@ -871,6 +974,7 @@ impl SpaceSettings {
                                 .border_color(if active { palette.text } else { gpui::transparent_black() })
                                 .when(can_edit_profile, |d| {
                                     d.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| {
+                                        this.banner_url = None;
                                         this.banner = if this.banner.as_deref() == Some(id) { None } else { Some(id.to_owned()) };
                                         this.profile_dirty = true;
                                         cx.notify();
@@ -1335,7 +1439,10 @@ impl SpaceSettings {
                         div()
                             .text_size(text(11.))
                             .text_color(palette.text_tertiary)
-                            .child(format!("leave blank for matrix.to, or enter e.g. https://{}/#/", if domain.is_empty() { "your.homeserver" } else { &domain })),
+                            .child(format!(
+                                "leave blank to infer https://{}/#/ from this space, or set a custom base URL (e.g. https://matrix.to/#/)",
+                                spaces::space_server_name(&address).unwrap_or(if domain.is_empty() { "your.homeserver" } else { &domain })
+                            )),
                     ),
             )
             .child(

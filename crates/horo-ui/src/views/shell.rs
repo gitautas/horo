@@ -1372,16 +1372,43 @@ impl Shell {
             }))
         });
 
-        let space_banner = open_space
-            .as_ref()
-            .and_then(|sp| self.store.read(cx).space_profile(&sp.id).and_then(|p| p.banner.as_deref()).and_then(space_settings::banner_gradient))
-            .map(|(a, b)| {
+        let space_banner: Option<AnyElement> = open_space.as_ref().and_then(|sp| {
+            let profile = self.store.read(cx).space_profile(&sp.id).cloned()?;
+            let bg = if let Some(image) = profile.banner_url.as_deref().and_then(|mxc| crate::media::Media::image(mxc, Some((640, 280)), cx)) {
                 div()
-                    .flex_none()
-                    .w_full()
-                    .h(zpx(64.))
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top_0()
+                    .h(zpx(128.))
+                    .overflow_hidden()
+                    .child(gpui::StyledImage::object_fit(gpui::img(image).size_full(), gpui::ObjectFit::Cover))
+            } else if let Some((a, b)) = profile.banner.as_deref().and_then(space_settings::banner_gradient) {
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top_0()
+                    .h(zpx(128.))
                     .bg(gpui::linear_gradient(135., gpui::linear_color_stop(gpui::rgb(a), 0.), gpui::linear_color_stop(gpui::rgb(b), 1.)))
-            });
+            } else {
+                return None;
+            };
+            Some(
+                bg.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .bg(gpui::linear_gradient(
+                            180.,
+                            gpui::linear_color_stop(Hsla { a: 0.12, ..gpui::black() }, 0.),
+                            gpui::linear_color_stop(palette.card, 1.),
+                        )),
+                )
+                .into_any_element(),
+            )
+        });
+        let has_banner = space_banner.is_some();
 
         let width = store_width(&self.store, Pane::RoomList, cx);
         v_flex()
@@ -1393,12 +1420,13 @@ impl Shell {
             .child(resize_handle(Pane::RoomList, palette))
             .border_r_1()
             .border_color(palette.border_subtle)
-            .child(drag_strip(zpx(18.)))
             .children(space_banner)
+            .child(drag_strip(zpx(18.)))
             .child(
                 v_flex()
+                    .relative()
                     .px(space(18.))
-                    .pt(space(18.))
+                    .pt(if has_banner { zpx(76.) } else { space(18.) })
                     .pb(space(12.))
                     .child(
                         h_flex()

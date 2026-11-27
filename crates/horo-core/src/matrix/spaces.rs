@@ -40,6 +40,9 @@ pub struct SpaceProfileDto {
     /// Banner gradient preset id (e.g. "pink", "blurple", "coral", ...).
     #[serde(default)]
     pub banner: Option<String>,
+    /// Custom uploaded banner image (`mxc://...`). Takes priority over `banner`.
+    #[serde(default)]
+    pub banner_url: Option<String>,
     /// Short 2-4 char badge tag for the space.
     #[serde(default)]
     pub tag: Option<String>,
@@ -52,10 +55,27 @@ pub struct SpaceProfileDto {
     pub link_base: Option<String>,
 }
 
-/// Build the shareable invite URL for a Space using a custom base URL if set,
-/// otherwise falling back to `https://matrix.to/#/`.
+/// Extract the homeserver domain from a Matrix room ID (`!id:domain`) or
+/// canonical alias (`#alias:domain`).
+pub fn space_server_name(address: &str) -> Option<&str> {
+    address.split_once(':').map(|(_, host)| host.trim()).filter(|h| !h.is_empty())
+}
+
+/// Build the shareable invite URL for a Space. Uses `link_base` when set;
+/// otherwise infers `https://<homeserver>/#/` directly from the Space's
+/// alias or room ID (falling back to `https://matrix.to/#/`).
 pub fn space_invite_url(link_base: Option<&str>, address: &str) -> String {
-    let base = link_base.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("https://matrix.to/#/");
+    let inferred;
+    let base = match link_base.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(custom) => custom,
+        None => match space_server_name(address) {
+            Some(host) => {
+                inferred = format!("https://{host}/#/");
+                inferred.as_str()
+            }
+            None => "https://matrix.to/#/",
+        },
+    };
     if base.ends_with('/') || base.ends_with('#') || base.ends_with('=') {
         format!("{base}{address}")
     } else {
@@ -177,6 +197,13 @@ pub async fn details(core: &MatrixCore, space_id: &RoomId) -> Result<SpaceDetail
         can_ban,
         can_change_power,
     })
+}
+
+/// Upload a custom Space banner image to Matrix media and return its `mxc://` URI.
+pub async fn upload_banner(core: &MatrixCore, bytes: Vec<u8>, mime_str: &str) -> Result<String> {
+    let mime: mime::Mime = mime_str.parse().map_err(|_| Error::Other("unsupported image format".into()))?;
+    let res = core.client.media().upload(&mime, bytes, None).await?;
+    Ok(res.content_uri.to_string())
 }
 
 /// Upload a new Space icon (`m.room.avatar`).
@@ -303,6 +330,7 @@ mod tests {
     fn space_profile_round_trips() {
         let profile = SpaceProfileDto {
             banner: Some("pink".into()),
+            banner_url: Some("mxc://example.org/banner123".into()),
             tag: Some("UWU".into()),
             traits: vec![SpaceTrait { emoji: "🎮".into(), label: "gaming".into() }],
             link_base: Some("https://m.uwu.lt/#/".into()),
@@ -314,9 +342,9 @@ mod tests {
 
     #[test]
     fn builds_space_invite_url_with_default_or_custom_domain() {
-        assert_eq!(space_invite_url(None, "#uwu:m.uwu.lt"), "https://matrix.to/#/#uwu:m.uwu.lt");
-        assert_eq!(space_invite_url(Some(""), "#uwu:m.uwu.lt"), "https://matrix.to/#/#uwu:m.uwu.lt");
-        assert_eq!(space_invite_url(Some("https://m.uwu.lt/#/"), "#uwu:m.uwu.lt"), "https://m.uwu.lt/#/#uwu:m.uwu.lt");
+        assert_eq!(space_invite_url(None, "#uwu:m.uwu.lt"), "https://m.uwu.lt/#/#uwu:m.uwu.lt");
+        assert_eq!(space_invite_url(Some(""), "!abc:m.uwu.lt"), "https://m.uwu.lt/#/!abc:m.uwu.lt");
+        assert_eq!(space_invite_url(Some("https://matrix.to/#/"), "#uwu:m.uwu.lt"), "https://matrix.to/#/#uwu:m.uwu.lt");
         assert_eq!(space_invite_url(Some("https://uwu.lt/join"), "#uwu:m.uwu.lt"), "https://uwu.lt/join/#uwu:m.uwu.lt");
     }
 }
