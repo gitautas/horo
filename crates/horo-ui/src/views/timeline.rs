@@ -382,6 +382,9 @@ fn range_after(end: usize, len: usize) -> bool {
     end > 0 && end <= len
 }
 
+/// How many of your recent reactions the hover bar offers.
+const HOVER_REACTIONS: usize = 3;
+
 impl Timeline {
     /// The bar that shows over a message on hover: quick reactions, then
     /// icon buttons for react, reply, thread, edit, and delete (matching
@@ -439,7 +442,9 @@ impl Timeline {
                 (store.prefs.recent_reactions.clone(), packs::image_lookup(&store.packs))
             };
             let has_recent = !recent.is_empty();
-            for (i, key) in recent.into_iter().enumerate() {
+            // Only the latest few, to keep the bar short; the picker has
+            // the rest.
+            for (i, key) in recent.into_iter().take(HOVER_REACTIONS).enumerate() {
                 // A custom emote is remembered by its address (or a
                 // shortcode another client used): drawn as its picture.
                 let picture = packs::reaction_image(&key, &known);
