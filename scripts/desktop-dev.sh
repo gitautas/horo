@@ -21,7 +21,7 @@ done
 cargo build -p horo-desktop ${flags[@]+"${flags[@]}"} --manifest-path "$root/Cargo.toml"
 
 app="$root/target/$profile/horo-dev.app"
-mkdir -p "$app/Contents/MacOS"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 # A copy still running would only be brought forward by `open`, on the old
 # build: quit it first, the way the app quits itself (a kill makes macOS
 # offer to reopen its windows next time).
@@ -39,6 +39,7 @@ done
 # cached signature fails with "Launchd job spawn failed" (POSIX 162).
 rm -f "$app/Contents/MacOS/horo"
 cp "$root/target/$profile/horo" "$app/Contents/MacOS/horo"
+cp "$root/apps/desktop/packaging/icons/icon.icns" "$app/Contents/Resources/icon.icns"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -46,6 +47,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>lt.uwu.horo.dev</string>
   <key>CFBundleName</key><string>horo (gpui dev)</string>
   <key>CFBundleExecutable</key><string>horo</string>
+  <key>CFBundleIconFile</key><string>icon.icns</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.0.0</string>
   <key>NSHighResolutionCapable</key><true/>
@@ -53,6 +55,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>NSCameraUsageDescription</key><string>horo uses the camera in video calls.</string>
 </dict></plist>
 PLIST
+touch "$app"
 echo "$app"
 # A dev build never runs on the installed app's data (or its keychain
 # entry): its own directory unless told otherwise.

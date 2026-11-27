@@ -507,6 +507,30 @@ impl Render for RoomInfo {
                     .children(rows)
                     .children(more),
             )
+            .child(
+                div()
+                    .id("info-close")
+                    .absolute()
+                    .top(zpx(14.))
+                    .left(zpx(14.))
+                    .size(zpx(28.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .cursor_pointer()
+                    .bg(palette.card)
+                    .hover(|d| d.bg(palette.raised).text_color(palette.text))
+                    .border_1()
+                    .border_color(palette.border_subtle)
+                    .text_size(text(11.))
+                    .text_color(palette.text_secondary)
+                    .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("close sidebar").build(window, cx))
+                    .child("✕")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.store.update(cx, |s, cx| s.update_prefs(|p| p.show_info_panel = false, cx));
+                    })),
+            )
             // Tucked in the corner: things you set once and forget.
             .child(
                 h_flex()

@@ -1165,10 +1165,19 @@ impl Shell {
             let store = self.store.read(cx);
             presence::shown(store.presence.get(user), store.presence_supported).zip(store.presence.get(user).cloned())
         });
+        let info_open = self.store.read(cx).prefs.show_info_panel;
+        let face_store = self.store.clone();
         let picture = avatar(&room.id, &room.name, room.avatar_url.as_deref(), zpx(42.), cx);
         let face = div()
+            .id("header-face")
             .relative()
             .flex_none()
+            .cursor_pointer()
+            .hover(|d| d.opacity(0.85))
+            .tooltip(move |window, cx| {
+                gpui_component::tooltip::Tooltip::new(if info_open { "hide room info" } else { "show room info" }).build(window, cx)
+            })
+            .on_click(move |_, _, cx| face_store.update(cx, |s, cx| s.update_prefs(|p| p.show_info_panel = !p.show_info_panel, cx)))
             .child(picture)
             .when(!room.is_direct, |d| d.child(channel_badge(room.is_video_room, 18., palette.app, palette)))
             .children(shown.as_ref().map(|(s, _)| presence_dot(*s, zpx(13.), palette.app, palette)));
