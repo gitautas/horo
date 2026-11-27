@@ -8,6 +8,7 @@ pub mod profile;
 pub mod roles;
 pub mod rooms;
 pub mod session;
+pub mod spaces;
 pub mod timeline;
 
 pub use core::MatrixCore;

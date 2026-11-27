@@ -129,9 +129,12 @@ pub struct Store {
     /// Counts zoom changes, so views that cache sizes (the timeline's
     /// rows) know to measure again.
     pub zoom_epoch: u64,
-    /// Custom Discord-style roles (`im.horo.roles`), keyed by room ID.
+    /// Custom Discord-style roles (`im.horo.roles`), keyed by space ID.
     pub roles: HashMap<String, Vec<horo_core::matrix::roles::RoleDto>>,
     roles_asked: HashSet<String>,
+    /// Custom Space profiles (`im.horo.space_profile`), keyed by space ID.
+    pub space_profiles: HashMap<String, horo_core::matrix::spaces::SpaceProfileDto>,
+    space_profiles_asked: HashSet<String>,
 }
 
 /// Looking for a newer horo.
@@ -329,6 +332,8 @@ impl Store {
             incoming: None,
             roles: HashMap::new(),
             roles_asked: HashSet::new(),
+            space_profiles: HashMap::new(),
+            space_profiles_asked: HashSet::new(),
         };
         // The saved look and zoom, before anything is drawn.
         crate::theme::set_zoom(store.prefs.zoom);
@@ -722,9 +727,41 @@ impl Store {
     pub fn open_space(&mut self, space: Option<String>, cx: &mut Context<Self>) {
         if let Some(sid) = space.as_deref() {
             self.load_roles(sid, false, cx);
+            self.load_space_profile(sid, false, cx);
         }
         self.space = space;
         cx.notify();
+    }
+
+    pub fn space_profile(&self, space_id: &str) -> Option<&horo_core::matrix::spaces::SpaceProfileDto> {
+        self.space_profiles.get(space_id)
+    }
+
+    pub fn set_space_profile_cached(&mut self, space_id: String, profile: horo_core::matrix::spaces::SpaceProfileDto, cx: &mut Context<Self>) {
+        self.space_profiles.insert(space_id, profile);
+        cx.notify();
+    }
+
+    pub fn load_space_profile(&mut self, space_id: &str, force: bool, cx: &mut Context<Self>) {
+        if !force && !self.space_profiles_asked.insert(space_id.to_owned()) {
+            return;
+        }
+        let Ok(space) = matrix_sdk::ruma::OwnedRoomId::try_from(space_id) else { return };
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let state = backend.state.clone();
+            async move { horo_core::matrix::spaces::get_profile(&*state.core().await?, &space).await }
+        });
+        let wanted = space_id.to_owned();
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(profile)) = task.await {
+                let _ = this.update(cx, |s, cx| {
+                    s.space_profiles.insert(wanted, profile);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     /// The Space that owns `room_id` (preferring the currently active Space if

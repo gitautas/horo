@@ -23,7 +23,7 @@ pub mod shell;
 pub mod security;
 pub mod selectable;
 pub mod settings;
-pub mod space_roles;
+pub mod space_settings;
 pub mod timeline;
 pub mod verification;
 pub mod voice;

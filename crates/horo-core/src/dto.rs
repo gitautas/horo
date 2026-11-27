@@ -868,6 +868,7 @@ fn convert_content(content: &TimelineItemContent) -> (ContentDto, ContentExtras<
                 "m.room.history_visibility" => "changed history visibility".to_owned(),
                 "m.room.power_levels" => "updated room permissions".to_owned(),
                 "im.horo.roles" => "updated roles".to_owned(),
+                "im.horo.space_profile" => "updated the space profile".to_owned(),
                 _ => event_type.clone(),
             };
             ContentDto::State {
