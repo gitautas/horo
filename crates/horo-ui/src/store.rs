@@ -720,13 +720,39 @@ impl Store {
     }
 
     pub fn open_space(&mut self, space: Option<String>, cx: &mut Context<Self>) {
+        if let Some(sid) = space.as_deref() {
+            self.load_roles(sid, false, cx);
+        }
         self.space = space;
         cx.notify();
     }
 
-    /// Custom roles defined on `room_id` (empty if none or not yet loaded).
+    /// The Space that owns `room_id` (preferring the currently active Space if
+    /// it contains the room), or `None` for DMs / standalone rooms.
+    pub fn space_for_room(&self, room_id: &str) -> Option<String> {
+        let room = self.rooms.iter().find(|r| r.id == room_id)?;
+        if room.is_direct {
+            return None;
+        }
+        if let Some(active) = self.space.as_deref()
+            && self.spaces.iter().find(|s| s.id == active).is_some_and(|s| crate::rooms::is_in_space(room, s))
+        {
+            return Some(active.to_owned());
+        }
+        self.spaces.iter().find(|s| crate::rooms::is_in_space(room, s)).map(|s| s.id.clone())
+    }
+
+    /// Custom roles defined on a Space (`space_id`).
+    pub fn roles_for_space(&self, space_id: &str) -> &[horo_core::matrix::roles::RoleDto] {
+        self.roles.get(space_id).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Custom roles applicable to `room_id` (inherited from its parent Space).
     pub fn roles_for_room(&self, room_id: &str) -> &[horo_core::matrix::roles::RoleDto] {
-        self.roles.get(room_id).map(Vec::as_slice).unwrap_or(&[])
+        let Some(space_id) = self.space_for_room(room_id) else {
+            return &[];
+        };
+        self.roles_for_space(&space_id)
     }
 
     /// Highest-priority role color for `user_id` in `room_id`, if any.
@@ -737,24 +763,24 @@ impl Store {
             .map(|r| gpui::rgb(r.color).into())
     }
 
-    /// Update the cached roles for `room_id` right after saving them.
-    pub fn set_roles_cached(&mut self, room_id: String, roles: Vec<horo_core::matrix::roles::RoleDto>, cx: &mut Context<Self>) {
-        self.roles.insert(room_id, roles);
+    /// Update the cached roles for `space_id` right after saving them.
+    pub fn set_roles_cached(&mut self, space_id: String, roles: Vec<horo_core::matrix::roles::RoleDto>, cx: &mut Context<Self>) {
+        self.roles.insert(space_id, roles);
         cx.notify();
     }
 
-    /// Fetch `im.horo.roles` for `room_id` if not already loaded (or when `force` is true).
-    pub fn load_roles(&mut self, room_id: &str, force: bool, cx: &mut Context<Self>) {
-        if !force && !self.roles_asked.insert(room_id.to_owned()) {
+    /// Fetch `im.horo.roles` for `space_id` if not already loaded (or when `force` is true).
+    pub fn load_roles(&mut self, space_id: &str, force: bool, cx: &mut Context<Self>) {
+        if !force && !self.roles_asked.insert(space_id.to_owned()) {
             return;
         }
-        let Ok(room) = matrix_sdk::ruma::OwnedRoomId::try_from(room_id) else { return };
+        let Ok(space) = matrix_sdk::ruma::OwnedRoomId::try_from(space_id) else { return };
         let backend = Backend::global(cx);
         let task = backend.run({
             let state = backend.state.clone();
-            async move { horo_core::matrix::roles::list(&*state.core().await?, &room).await }
+            async move { horo_core::matrix::roles::list(&*state.core().await?, &space).await }
         });
-        let wanted = room_id.to_owned();
+        let wanted = space_id.to_owned();
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(roles)) = task.await {
                 let _ = this.update(cx, |s, cx| {

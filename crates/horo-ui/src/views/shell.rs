@@ -29,7 +29,7 @@ use crate::{
     rooms::{self, Filter, View},
     store::{Phase, SettingsSection, Store, Tone},
     theme::{Palette, corner, heading, label, space, text},
-    views::{menu, avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target}, quick_switcher::{self, QuickSwitcher}, room_info::{OpenRoomSettings, RoomInfo}, room_settings::RoomSettings, invite_pane::InvitePane, invite_to_space::InviteToSpace, leave_space::LeaveSpace, explore::{Explore, Closed}, create_room::CreateRoom,
+    views::{menu, avatar::{accent_for, avatar, initials, presence_dot, with_presence}, composer::Composer, profile::{ProfileCard, same_target}, quick_switcher::{self, QuickSwitcher}, room_info::{OpenRoomSettings, RoomInfo}, room_settings::RoomSettings, space_roles::SpaceRoles, invite_pane::InvitePane, invite_to_space::InviteToSpace, leave_space::LeaveSpace, explore::{Explore, Closed}, create_room::CreateRoom,
         settings::Settings, timeline::{Timeline, TimelineAction}, verification, lightbox, voice},
 };
 
@@ -52,6 +52,7 @@ pub struct Shell {
     /// Whether the room whose menu is open may be deleted by this account.
     room_menu_can_delete: Option<(String, bool)>,
     invite_to_space: Option<Entity<InviteToSpace>>,
+    space_roles: Option<Entity<SpaceRoles>>,
     leave_space: Option<Entity<LeaveSpace>>,
     browse: Option<Entity<Explore>>,
     /// Settings, while they're open.
@@ -90,7 +91,7 @@ impl Shell {
         focus.focus(window, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("find or start a conversation"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, room_menu_can_delete: None, invite_to_space: None, leave_space: None, browse: None, settings: None, quick_switcher: None, status_menu: None, profile: None, focus, search, filter: Filter::All, filters_open: false, space_hierarchy: None, joining: HashSet::new() };
+        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, room_menu_can_delete: None, invite_to_space: None, space_roles: None, leave_space: None, browse: None, settings: None, quick_switcher: None, status_menu: None, profile: None, focus, search, filter: Filter::All, filters_open: false, space_hierarchy: None, joining: HashSet::new() };
         shell.follow_room(window, cx);
         shell.follow_space(cx);
         shell.follow_settings(window, cx);
@@ -222,7 +223,9 @@ impl Shell {
         let Ok(room_id) = OwnedRoomId::try_from(id.as_str()) else { return };
         self.store.update(cx, |s, cx| {
             s.load_packs(&id, cx);
-            s.load_roles(&id, false, cx);
+            if let Some(sid) = s.space_for_room(&id) {
+                s.load_roles(&sid, false, cx);
+            }
         });
         let store = self.store.clone();
         let timeline = cx.new(|cx| Timeline::new(room_id.clone(), thread.clone(), &store, cx));
@@ -300,6 +303,19 @@ impl Shell {
         })
         .detach();
         self.invite_to_space = Some(dialog);
+        cx.notify();
+    }
+
+    fn open_space_roles(&mut self, space_id: String, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.space_menu = None;
+        let store = self.store.clone();
+        let dialog = cx.new(|cx| SpaceRoles::new(store, space_id, name, window, cx));
+        cx.subscribe(&dialog, |this, _, _: &Closed, cx| {
+            this.space_roles = None;
+            cx.notify();
+        })
+        .detach();
+        self.space_roles = Some(dialog);
         cx.notify();
     }
 
@@ -466,6 +482,10 @@ impl Shell {
         let (sid, sname) = (id.clone(), name.clone());
         menu = menu.child(item("sm-invite".into(), "invite to space".into(), true, None).on_click(cx.listener(move |this, _, window, cx| {
             this.open_invite_to_space(sid.clone(), sname.clone(), window, cx)
+        })));
+        let (sid, sname) = (id.clone(), name.clone());
+        menu = menu.child(item("sm-roles".into(), "roles…".into(), true, None).on_click(cx.listener(move |this, _, window, cx| {
+            this.open_space_roles(sid.clone(), sname.clone(), window, cx)
         })));
         let sid = id.clone();
         menu = menu.child(
@@ -1390,6 +1410,25 @@ impl Shell {
                                             .text_color(if status.is_some() { palette.idle } else { palette.text_tertiary })
                                             .child(caught_up),
                                     )
+                                    .when_some(open_space.clone(), |row, sp| {
+                                        row.child(
+                                            div()
+                                                .id("space-roles-btn")
+                                                .size(zpx(26.))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded_full()
+                                                .cursor_pointer()
+                                                .bg(palette.card)
+                                                .border_1()
+                                                .border_color(palette.border)
+                                                .hover(|d| d.bg(palette.raised))
+                                                .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("space roles").build(window, cx))
+                                                .child(Icon::new(IconName::Settings).size(zpx(13.)).text_color(palette.text_secondary))
+                                                .on_click(cx.listener(move |this, _, window, cx| this.open_space_roles(sp.id.clone(), sp.name.clone(), window, cx))),
+                                        )
+                                    })
                                     .child(
                                         div()
                                             .id("create-room")
@@ -1818,6 +1857,7 @@ impl Render for Shell {
             .children(self.create.clone())
             .children(self.room_settings.clone())
             .children(self.invite_to_space.clone())
+            .children(self.space_roles.clone())
             .children(self.leave_space.clone())
             .children(self.browse.clone())
             .children(self.space_menu(&palette, cx))
