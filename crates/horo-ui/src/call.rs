@@ -81,6 +81,10 @@ pub struct CallView {
     pub mixer_open: bool,
     /// User minimized the bottom-right mini call modal.
     pub pip_hidden: bool,
+    /// Custom `(right, bottom)` offset in design pixels for the draggable mini call modal.
+    pub pip_pos: Option<(f32, f32)>,
+    /// Drag anchor `((start_mouse_x, start_mouse_y), (start_right, start_bottom))` in design pixels.
+    pip_drag_anchor: Option<((f32, f32), (f32, f32))>,
     /// Identities speaking now, by the server's ear (ours is ignored: it
     /// arrives late, see `self_speaking`).
     pub speaking: Vec<String>,
@@ -172,6 +176,8 @@ impl Store {
             participant_volumes: std::collections::HashMap::new(),
             mixer_open: false,
             pip_hidden: false,
+            pip_pos: None,
+            pip_drag_anchor: None,
             speaking: Vec::new(),
             self_speaking: false,
             loud_at: None,
@@ -519,6 +525,27 @@ impl Store {
     pub fn set_call_pip_hidden(&mut self, hidden: bool, cx: &mut Context<Self>) {
         if let Some(view) = &mut self.call {
             view.pip_hidden = hidden;
+            cx.notify();
+        }
+    }
+
+    pub fn begin_call_pip_drag(&mut self, mouse: (f32, f32)) {
+        if let Some(view) = &mut self.call {
+            view.pip_drag_anchor = Some((mouse, view.pip_pos.unwrap_or((18., 18.))));
+        }
+    }
+
+    pub fn move_call_pip_drag(&mut self, mouse: (f32, f32), viewport: (f32, f32), cx: &mut Context<Self>) {
+        if let Some(view) = &mut self.call
+            && let Some((start_mouse, start_rb)) = view.pip_drag_anchor
+        {
+            let dx = mouse.0 - start_mouse.0;
+            let dy = mouse.1 - start_mouse.1;
+            let max_right = (viewport.0 - 344. - 12.).max(12.);
+            let max_bottom = (viewport.1 - 120.).max(12.);
+            let right = (start_rb.0 - dx).clamp(12., max_right);
+            let bottom = (start_rb.1 - dy).clamp(12., max_bottom);
+            view.pip_pos = Some((right, bottom));
             cx.notify();
         }
     }

@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 
 use gpui::{
-    AnyElement, App, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, StatefulInteractiveElement, Styled, div,
-    prelude::FluentBuilder,
+    AnyElement, App, AppContext, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, StatefulInteractiveElement,
+    Styled, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     Sizable,
@@ -530,11 +530,15 @@ fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, area: Option
         .into_any_element()
 }
 
-/// Floating mini call modal anchored in the bottom-right corner whenever
-/// you're in a live call (unless fullscreen or minimized). Shows video tiles
-/// when anyone is on camera/screen, or participant avatar tiles with speaking
-/// rings in voice-only calls.
-pub fn floating(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<AnyElement> {
+/// Drag payload for repositioning the floating mini call modal.
+#[derive(Clone, Copy)]
+pub struct DraggedCallPip;
+
+/// Floating mini call modal anchored in the bottom-right corner (and draggable
+/// anywhere in the window) whenever you're in a live call (unless fullscreen or
+/// minimized). Shows video tiles when anyone is on camera/screen, or participant
+/// avatar tiles with speaking rings in voice-only calls.
+pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window, cx: &mut App) -> Option<AnyElement> {
     let state = store.read(cx);
     let call = state.call.clone().filter(|c| c.is_live() && !c.fullscreen && !c.pip_hidden)?;
     let room_id = call.room_id.clone();
@@ -548,12 +552,19 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Optio
     let expand = store.clone();
     let hide = store.clone();
     let open_room = store.clone();
+    let drag_start = store.clone();
+    let zoom = crate::theme::zoom();
+    let vp = window.viewport_size();
+    let (vw, vh) = (f32::from(vp.width) / zoom, f32::from(vp.height) / zoom);
+    let (raw_right, raw_bottom) = call.pip_pos.unwrap_or((18., 18.));
+    let right = raw_right.clamp(12., (vw - 344. - 12.).max(12.));
+    let bottom = raw_bottom.clamp(12., (vh - 120.).max(12.));
     Some(
         v_flex()
             .id("call-floating")
             .absolute()
-            .bottom(space(18.))
-            .right(space(18.))
+            .bottom(zpx(bottom))
+            .right(zpx(right))
             .w(zpx(344.))
             .occlude()
             .rounded(corner(16.))
@@ -564,6 +575,7 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Optio
             .overflow_hidden()
             .child(
                 h_flex()
+                    .id("call-floating-header")
                     .items_center()
                     .justify_between()
                     .gap(space(8.))
@@ -571,6 +583,13 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Optio
                     .py(space(8.))
                     .border_b_1()
                     .border_color(palette.border_subtle)
+                    .cursor_grab()
+                    .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
+                        let z = crate::theme::zoom();
+                        let pos = (f32::from(event.position.x) / z, f32::from(event.position.y) / z);
+                        drag_start.update(cx, |s, _| s.begin_call_pip_drag(pos));
+                    })
+                    .on_drag(DraggedCallPip, |_, _, _, cx| cx.new(|_| gpui::EmptyView))
                     .child(
                         h_flex()
                             .id("call-floating-room")

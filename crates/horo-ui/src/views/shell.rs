@@ -1877,6 +1877,13 @@ impl Render for Shell {
                 this.store.update(cx, |s, cx| s.preview_prefs(|p| pane.set(p, clamp_pane(width)), cx));
             }))
             .on_drop(cx.listener(|this, _: &Pane, _, cx| this.store.update(cx, |s, cx| s.update_prefs(|_| {}, cx))))
+            .on_drag_move(cx.listener(|this, event: &gpui::DragMoveEvent<voice::DraggedCallPip>, window, cx| {
+                let zoom = crate::theme::zoom();
+                let pos = (f32::from(event.event.position.x) / zoom, f32::from(event.event.position.y) / zoom);
+                let vp = window.viewport_size();
+                let viewport = (f32::from(vp.width) / zoom, f32::from(vp.height) / zoom);
+                this.store.update(cx, |s, cx| s.move_call_pip_drag(pos, viewport, cx));
+            }))
             .child(self.rail(&palette, cx))
             .child(self.room_list(&palette, cx))
             // Cameras move: draw again next frame while one is in the call.
@@ -1892,7 +1899,7 @@ impl Render for Shell {
             .relative()
             .children(self.settings.clone())
             .children(self.quick_switcher.clone())
-            .children(voice::floating(&self.store, &palette, cx))
+            .children(voice::floating(&self.store, &palette, window, cx))
             .children(voice::fullscreen(&self.store, &palette, window, cx))
             .children(voice::mixer(&self.store, &palette, cx))
             .children(lightbox::lightbox(&self.store, &palette, window, cx))
