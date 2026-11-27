@@ -1577,11 +1577,13 @@ fn drag_strip(height: gpui::Pixels) -> impl IntoElement {
 /// app's own banner's), until it's waved away for that version.
 fn update_banner(store: &Entity<Store>, palette: &Palette, cx: &mut gpui::App) -> Option<AnyElement> {
     let state = store.read(cx);
-    let crate::store::UpdateState::Available(release) = &state.update else { return None };
-    if state.prefs.dismissed_update.as_deref() == Some(release.version.as_str()) {
+    let release = state.update.release()?;
+    // Waving it away hides an offer; one being installed stays.
+    if matches!(state.update, crate::store::UpdateState::Available(_)) && state.prefs.dismissed_update.as_deref() == Some(release.version.as_str()) {
         return None;
     }
-    let (url, dismiss) = (release.url.clone(), store.clone());
+    let (line, action) = update_offer(&state.update.clone(), store, "update-banner")?;
+    let dismiss = store.clone();
     Some(
         div()
             .absolute()
@@ -1609,9 +1611,9 @@ fn update_banner(store: &Entity<Store>, palette: &Palette, cx: &mut gpui::App) -
                             .text_size(text(13.))
                             .line_height(gpui::relative(1.45))
                             .text_color(palette.text_secondary)
-                            .child(format!("horo {} is out — this build updates from where you installed it", release.version)),
+                            .child(line),
                     )
-                    .child(Button::new("update-open").small().primary().label("open release").on_click(move |_, _, cx| cx.open_url(&url)))
+                    .child(action)
                     .child(
                         div()
                             .id("update-dismiss")
@@ -1625,6 +1627,33 @@ fn update_banner(store: &Entity<Store>, palette: &Palette, cx: &mut gpui::App) -
             )
             .into_any_element(),
     )
+}
+
+/// What to say about a release on offer, and the button that moves it
+/// along: install → installing… → restart where this install can update
+/// itself ([`crate::updater::installable`]), the release page otherwise.
+pub fn update_offer(state: &crate::store::UpdateState, store: &Entity<Store>, id: &'static str) -> Option<(String, Button)> {
+    use crate::store::UpdateState;
+    let release = state.release()?;
+    let button = Button::new(SharedString::from(format!("{id}-action"))).small().primary();
+    Some(match state {
+        UpdateState::Available(_) if crate::updater::installable() => {
+            let store = store.clone();
+            (format!("horo {} is ready to install", release.version), button.label("install").on_click(move |_, _, cx| store.update(cx, |s, cx| s.install_update(cx))))
+        }
+        UpdateState::Available(_) => {
+            let url = release.url.clone();
+            (
+                format!("horo {} is out — this build updates from where you installed it", release.version),
+                button.label("open release").on_click(move |_, _, cx| cx.open_url(&url)),
+            )
+        }
+        UpdateState::Installing(_) => (format!("installing horo {}…", release.version), gpui_component::Disableable::disabled(button.label("installing…"), true)),
+        UpdateState::Installed(_) => {
+            (format!("horo {} is installed — restart to finish", release.version), button.label("restart").on_click(|_, _, _| crate::updater::relaunch()))
+        }
+        _ => return None,
+    })
 }
 
 /// The rail's width: where the room list starts.

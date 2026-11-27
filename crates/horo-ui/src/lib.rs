@@ -24,6 +24,7 @@ pub mod screen;
 pub mod sounds;
 pub mod store;
 pub mod theme;
+pub mod updater;
 pub mod verify;
 #[cfg(target_os = "macos")]
 pub mod video;
@@ -197,8 +198,9 @@ pub fn open_window(cx: &mut App) -> anyhow::Result<()> {
         }),
         window_min_size: Some(size(px(720.), px(480.))),
         // The Wayland app id / X11 WM_CLASS: what compositors match window
-        // rules and the .desktop entry (its icon, its taskbar group) against.
-        app_id: Some("lt.uwu.horo".into()),
+        // rules and the .desktop entry (its icon, its taskbar group) against:
+        // the packages install it as `horo.desktop`.
+        app_id: Some("horo".into()),
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {

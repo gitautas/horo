@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged over the Info.plist cargo-packager writes (identifier, version,
+  icon and so on come from [package.metadata.packager] in ../Cargo.toml).
+-->
+<plist version="1.0">
+<dict>
+	<!-- Retina rendering; without it macOS draws the window at 1x and scales it. -->
+	<key>NSHighResolutionCapable</key>
+	<true/>
+
+	<!--
+	  macOS refuses the microphone outright, with no prompt, unless the app
+	  says why it wants it.
+	-->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>horo needs your microphone so people can hear you on voice calls.</string>
+
+	<key>NSCameraUsageDescription</key>
+	<string>horo needs your camera for video calls.</string>
+
+	<!-- For a LiveKit server on your own network. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>horo needs local network access to reach a voice server on your network.</string>
+</dict>
+</plist>

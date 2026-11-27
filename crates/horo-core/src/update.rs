@@ -7,7 +7,12 @@ use std::time::Duration;
 
 use crate::error::{Error, Result};
 
-const MANIFEST: &str = "https://github.com/gitautas/horo/releases/latest/download/latest.json";
+pub const MANIFEST: &str = "https://github.com/gitautas/horo/releases/latest/download/latest.json";
+
+/// The minisign public key update archives are signed with (the private
+/// half is the `TAURI_SIGNING_PRIVATE_KEY` release secret). The same key
+/// the Tauri app checks, so its installs take the gpui app as an update.
+pub const PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIwNkE2NTFBNDk4NDZDMEIKUldRTGJJUkpHbVZxSUxScldxR0hSb1FZeUVGUVVtNHdLWnkrejNnWndYYlR3a2VLd3BabmxQS00K";
 
 /// The newest published release.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -2,6 +2,61 @@
 
 Status: draft, 2026-11-18. Baseline: v0.11.0 (`9ebf79b`).
 
+## Where it stands (2026-11-27)
+
+**Decided: desktop only for now.** gpui has no phone story (D1's spike never
+ran), so the iOS and Android builds stop with the Tauri app rather than keep
+it alive. The gpui desktop app (`apps/desktop` over `crates/horo-ui`) is at
+feature parity with the WebView app as far as a code audit shows: every
+surface in §5 has a gpui view, and every Tauri command it lacks is either
+WebView-only (`webrtc_diagnosis`), phone-only (photos, haptics), served by
+the app's own streams, or unused by the React app too (pinned events, mark
+unread).
+
+**Switch-over, done (committed, not yet run in CI):**
+
+- Packaging with `cargo-packager`: `[package.metadata.packager]` in
+  `apps/desktop/Cargo.toml`, assets in `apps/desktop/packaging/`. macOS
+  `.app`/`.dmg` built and checked locally (ad hoc signed, hardened runtime,
+  entitlements, `codesign --verify --deep --strict` passes). Windows NSIS and
+  Linux deb/AppImage never built yet.
+- In-app updates: `crates/horo-ui/src/updater.rs` (cargo-packager-updater)
+  installs from the banner/settings: install → installing… → restart, on a
+  packaged `.app`, an NSIS install or an AppImage; a `.deb` or dev build
+  gets the release page. Key and feed: `horo_core::update::{PUBKEY, MANIFEST}`.
+- Takeover of the Tauri install: identifier `lt.uwu.uwum`, data directory
+  `<app data>/lt.uwu.uwum`, session secrets in the keychain (service
+  `gg.uwu.uwum`), so an updated Tauri install starts signed in. Dev builds
+  (`scripts/desktop-dev.sh`) set `HORO_DATA` to `…/lt.uwu.horo` and keep
+  secrets in a file there, never touching the installed app's.
+- `.github/workflows/release.yml` rewritten for the gpui app. `latest.json`
+  lists macOS under both `darwin-*` (Tauri's updater) and `macos-*`
+  (cargo-packager-updater's), with `format` on every entry, so Tauri
+  installs update straight into gpui. Same signing secret. See
+  `docs/releasing.md`.
+
+**Next, in order:**
+
+1. Push and run `release.yml` by hand (`workflow_dispatch`: builds all five
+   rows, uploads artifacts, publishes nothing). Proves the Windows and Linux
+   packaging, and that cargo-packager takes the Tauri-generated key (the
+   rows must produce `.sig` files). Fix what breaks.
+2. Test an update end to end before tagging: an installed Tauri build and an
+   installed gpui build each taking a newer gpui bundle. Watch Windows: the
+   Tauri NSIS install and the cargo-packager one must agree on install
+   directory and uninstall registry key, or users end up with two copies.
+3. Remove Tauri: `src/`, `index.html`, `vite.config.ts`, `vitest.config.ts`,
+   the tsconfigs, `package.json`/lock, `node_modules`, `dist/`, `src-tauri/`
+   (the workspace member too), ts-rs bindings in horo-core and the `TS_RS_*`
+   env in `.cargo/config.toml`, CI's `frontend` job and its `mkdir dist`
+   workaround and the WebKit apt packages, `scripts/android.mjs`,
+   `scripts/ios-shim`, `scripts/bindings.mjs`, `scripts/release.mjs` (or
+   reduce it to a Cargo.toml bump), README's Tauri/mobile sections. Move
+   `target-dir` off `src-tauri/target` in `.cargo/config.toml`, and with it
+   the paths in `scripts/desktop-dev.sh`, `scripts/prune-builds.sh` and the
+   dev notes.
+4. Tag a release.
+
 ## 1. Why, and what "done" means
 
 Today horo is Tauri 2 + React (~23k lines TS/TSX) over a Rust Matrix backend

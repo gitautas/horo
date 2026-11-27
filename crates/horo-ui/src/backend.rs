@@ -67,22 +67,23 @@ impl Backend {
         })
     }
 
-    /// Where the app keeps its session and stores, per platform.
-    ///
-    /// Its own directory, not the Tauri app's, while both exist: two
-    /// processes on one Matrix store is what `AppState::session_gate` warns
-    /// about, and they'd fight over it.
+    /// Where the app keeps its session and stores, per platform: the
+    /// platform's app-data directory under the bundle identifier, where
+    /// the Tauri app kept them, so an install updated from it carries on
+    /// signed in with its keys. `HORO_DATA` points elsewhere (dev builds do,
+    /// so they never share the installed app's store).
     pub fn default_data_dir() -> PathBuf {
+        const IDENTIFIER: &str = "lt.uwu.uwum";
         let base = std::env::var_os("HORO_DATA").map(PathBuf::from);
         base.unwrap_or_else(|| {
             let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_default();
             #[cfg(target_os = "macos")]
-            let dir = home.join("Library/Application Support/lt.uwu.horo");
+            let dir = home.join("Library/Application Support");
             #[cfg(target_os = "windows")]
-            let dir = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or(home).join("horo");
+            let dir = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or(home);
             #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-            let dir = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share")).join("horo");
-            dir
+            let dir = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share"));
+            dir.join(IDENTIFIER)
         })
     }
 

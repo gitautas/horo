@@ -4,7 +4,8 @@
 #
 #   scripts/desktop-dev.sh [--release] [--no-open]
 #
-# HORO_DATA points it at another data directory (its session and stores).
+# HORO_DATA points it at another data directory (its session and stores);
+# by default the dev build's own, never the installed app's.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 profile=debug
@@ -53,10 +54,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 echo "$app"
+# A dev build never runs on the installed app's data (or its keychain
+# entry): its own directory unless told otherwise.
+HORO_DATA="${HORO_DATA:-$HOME/Library/Application Support/lt.uwu.horo}"
 if [ "$open_it" = 1 ]; then
-  if [ -n "${HORO_DATA:-}" ]; then
-    open -n "$app" --env "HORO_DATA=$HORO_DATA"
-  else
-    open -n "$app"
-  fi
+  open -n "$app" --env "HORO_DATA=$HORO_DATA"
 fi

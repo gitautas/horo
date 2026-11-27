@@ -1,5 +1,10 @@
 name: Release
 
+# The gpui desktop app, packaged by cargo-packager, plus the `latest.json` that
+# installed copies poll. The manifest also serves installs of the old Tauri
+# app: same signing key, same address, and each macOS entry listed under both
+# updaters' platform names, so those installs update straight into this one.
+
 on:
   push:
     tags: ['v*']
@@ -24,33 +29,30 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The root Cargo.toml's [workspace.package] is the single source of truth for
-      # the app version:
-      # tauri.conf.json deliberately omits `version` so the bundlers read it from
-      # Cargo.toml, and scripts/release.mjs bumps Cargo.toml + package.json together.
+      # The root Cargo.toml's [workspace.package] is the single source of truth
+      # for the app version; cargo-packager reads it from there.
       - name: Check tag matches app version
         run: |
           VERSION="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n1)"
           if [ "${GITHUB_REF_NAME}" != "v${VERSION}" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${VERSION} (expected v${VERSION}). Bump with npm run release:{patch|minor|major}, or fix the tag."
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${VERSION} (expected v${VERSION}). Bump the version in Cargo.toml, or fix the tag."
             exit 1
           fi
 
-      # Without these the desktop bundlers silently skip the updater artifacts,
-      # and the manifest step at the end would fail after an hour and a half of
-      # building. Same principle as the mobile jobs: refuse early and loudly.
-      - name: Check the updater signing secrets exist
+      # Without it the packager silently skips the .sig files, and the manifest
+      # step at the end would fail after an hour of building. Refuse early.
+      - name: Check the updater signing secret exists
         env:
           SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           if [ -z "${SIGNING_KEY}" ]; then
-            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set — see 'Updates' in README.md. Without it the release cannot feed the in-app updater."
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set — see docs/releasing.md. Without it the release cannot feed the in-app updater."
             exit 1
           fi
 
-      # Idempotent: re-running a failed release run reuses the draft it already made
-      # instead of failing on the duplicate tag. Draft releases are invisible to
-      # /releases/tags/{tag}, so the lookup has to scan the release list.
+      # Idempotent: re-running a failed release run reuses the draft it already
+      # made instead of failing on the duplicate tag. Draft releases are
+      # invisible to /releases/tags/{tag}, so the lookup scans the list.
       - name: Create or reuse draft release
         id: create
         env:
@@ -74,340 +76,149 @@ jobs:
 
   build:
     needs: create-release
-    # Run when create-release succeeded (tag push) OR when it was skipped because
-    # this is a manual build-only run. Never run after a create-release failure.
+    # Run when create-release succeeded (tag push) OR when it was skipped
+    # because this is a manual build-only run. Never after a failure.
     if: ${{ !cancelled() && (needs.create-release.result == 'success' || github.event_name == 'workflow_dispatch') }}
     permissions:
-      contents: write   # tauri-action uploads release assets
+      contents: write
     strategy:
       fail-fast: false   # one platform's flake must not kill the other rows
       matrix:
         include:
           - name: macos-aarch64
             platform: macos-latest          # arm64 image
-            args: '--target aarch64-apple-darwin'
+            target: aarch64-apple-darwin
+            arch: aarch64
+            formats: app,dmg
           - name: macos-x86_64
-            platform: macos-latest          # Intel cross-compiled on arm64
-            args: '--target x86_64-apple-darwin'
+            platform: macos-latest          # Intel, cross-compiled on arm64
+            target: x86_64-apple-darwin
+            arch: x86_64
+            formats: app,dmg
           - name: linux-x86_64
             platform: ubuntu-22.04          # glibc 2.35 baseline (Ubuntu 22.04 / Debian 12+)
-            args: '--bundles deb,appimage'  # rpm skipped: tauri#11478 (pathologically slow)
+            target: x86_64-unknown-linux-gnu
+            arch: x86_64
+            formats: deb,appimage
           - name: linux-aarch64
-            platform: ubuntu-22.04-arm      # arm64 runners work in private repos since 2026-01
-            args: '--bundles deb,appimage'
+            platform: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            arch: aarch64
+            formats: deb,appimage
           - name: windows-x86_64
-            platform: windows-latest        # msi + nsis; no windows-11-arm in private repos
-            args: ''
+            platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            arch: x86_64
+            # NSIS only: it installs per user, so an update needs no elevation
+            # prompt the app can't answer (the Tauri releases' updates used it
+            # too; their MSI is gone).
+            formats: nsis
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
+        # horo-rtc builds libvpx from third_party/libvpx.
+        with:
+          submodules: true
 
+      # What gpui (a display server's keyboard maps, Vulkan, fonts), calls
+      # (ALSA, libvpx's assembly) and the keyring (D-Bus) build against.
       - name: Install Linux build dependencies
-        if: startsWith(matrix.platform, 'ubuntu')
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
-            libdbus-1-dev pkg-config patchelf xdg-utils
+            build-essential pkg-config nasm cmake file \
+            libasound2-dev libdbus-1-dev libssl-dev libzstd-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-xcb-dev libxcb1-dev libvulkan-dev \
+            libfontconfig1-dev libfreetype6-dev
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: lts/*
-          cache: npm
+      # libvpx's Windows build: configure and `make dist` under Git's bash,
+      # nasm for its assembly, then MSBuild (crates/horo-rtc/build.rs).
+      - name: Install libvpx build tools (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nasm make -y --no-progress
+          echo "C:\Program Files\NASM" >> $env:GITHUB_PATH
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          # Both Darwin targets on macOS rows (one native, one cross-compiled);
-          # every other row builds the host target only.
-          targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.target }}
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: '. -> src-tauri/target'
           key: ${{ matrix.name }}   # per-row caches; rows must never share entries
-          # Tag-ref caches can't be restored by future tags, but main-branch caches
-          # can be restored by every ref. Save only on branch runs (dispatch/main);
-          # tag runs restore-only instead of evicting useful caches.
+          # Tag-ref caches can't be restored by future tags, but main-branch
+          # caches can be restored by every ref. Save only on branch runs.
           save-if: ${{ github.ref_type == 'branch' }}
 
-      - run: npm ci   # tauri-action does not install JS deps; beforeBuildCommand needs them
-
-      - uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS: ad-hoc code signing. Embeds entitlements.plist (mic access under
-          # hardened runtime) and prevents Gatekeeper's "horo is damaged" dead end
-          # on Apple Silicon downloads. Read only by the macOS bundler.
-          APPLE_SIGNING_IDENTITY: '-'
-          # Windows x64: aws-lc-sys (matrix-sdk -> reqwest -> rustls) needs NASM,
-          # which the runner image lacks. Use AWS's prebuilt CI-verified NASM
-          # objects instead of installing NASM. Read only by aws-lc-sys on Windows.
-          AWS_LC_SYS_PREBUILT_NASM: '1'
-          # Turns `createUpdaterArtifacts` on in practice: with a key present the
-          # bundlers also emit the archive the updater downloads and a detached
-          # `.sig` beside it. The app only installs a bundle this key signed, so
-          # the pair below IS the trust root for every update anyone ever gets.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - uses: taiki-e/install-action@v2
         with:
-          # The manifest is written once, in `publish`, from the finished release.
-          # tauri-action's own version would have each of the five rows read
-          # latest.json, add its platform and write it back — five racing
-          # read-modify-writes against one asset, where the loser's platform
-          # silently vanishes from the manifest.
-          #
-          # The name matters: this defaults to true, and an unrecognised input is
-          # a *warning*, not an error, so a near-miss like `includeUpdaterJson`
-          # leaves the racing default switched on and the run still goes green.
-          uploadUpdaterJson: false
-          # Empty on workflow_dispatch (create-release skipped) -> build-only mode,
-          # nothing is uploaded anywhere. Populated on tag pushes -> assets upload
-          # into the one pre-created draft (no per-job get-or-create race).
-          releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: ${{ matrix.args }}
+          tool: cargo-packager@0.11.8
+
+      - name: Build
+        env:
+          # Windows x64: aws-lc-sys (matrix-sdk -> reqwest -> rustls) needs
+          # NASM objects; use AWS's prebuilt, CI-verified ones.
+          AWS_LC_SYS_PREBUILT_NASM: '1'
+        run: cargo build --release --locked -p horo-desktop --target ${{ matrix.target }}
+
+      - name: Package
+        env:
+          # The trust root for every update anyone ever gets: with it the
+          # packager also writes the updater's archive (.app.tar.gz on macOS)
+          # and a detached .sig beside each package, which the app checks
+          # against horo_core::update::PUBKEY before installing anything.
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # linuxdeploy is itself an AppImage; runners have no FUSE.
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          cargo packager --release -p horo-desktop \
+            --target ${{ matrix.target }} --formats ${{ matrix.formats }}
+
+      # Everything to publish, under names that can't collide across rows:
+      # the packager calls both Macs' archives `horo.app.tar.gz`.
+      - name: Collect the bundles
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n1)"
+          out="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/${{ matrix.target }}/release"
+          mkdir -p dist-release
+          shopt -s nullglob
+          for f in "$out"/*.dmg "$out"/*.deb "$out"/*.AppImage "$out"/*-setup.exe \
+                   "$out"/*.AppImage.sig "$out"/*-setup.exe.sig; do
+            cp "$f" dist-release/
+          done
+          if [ -f "$out/horo.app.tar.gz" ]; then
+            cp "$out/horo.app.tar.gz" "dist-release/horo_${version}_${{ matrix.arch }}.app.tar.gz"
+            cp "$out/horo.app.tar.gz.sig" "dist-release/horo_${version}_${{ matrix.arch }}.app.tar.gz.sig"
+          fi
+          ls -la dist-release
+          [ -n "$(ls dist-release)" ] || { echo "::error::this row packaged nothing"; exit 1; }
+
+      - name: Attach to the release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist-release/* --clobber
 
       - name: Upload bundles as run artifacts (manual runs only)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v6
         with:
           name: horo-${{ matrix.name }}
-          if-no-files-found: error   # a row that bundled nothing must fail loudly
+          if-no-files-found: error
           retention-days: 7          # private-repo artifact storage is billed
-          path: |
-            src-tauri/target/**/release/bundle/dmg/*.dmg
-            src-tauri/target/**/release/bundle/deb/*.deb
-            src-tauri/target/**/release/bundle/appimage/*.AppImage
-            src-tauri/target/**/release/bundle/msi/*.msi
-            src-tauri/target/**/release/bundle/nsis/*-setup.exe
-            src-tauri/target/**/release/bundle/macos/*.app.tar.gz
-            src-tauri/target/**/release/bundle/**/*.sig
-
-  # ---------------------------------------------------------------------------
-  # Mobile
-  #
-  # Separate jobs rather than matrix rows: tauri-action does not build mobile
-  # targets, both platforms need a toolchain nothing else does, and each signs
-  # with credentials the other has no use for.
-  #
-  # Both REQUIRE signing secrets and fail loudly without them, because an
-  # unsigned APK installs nowhere and an unsigned IPA is not an IPA anyone can
-  # use — a release that quietly attached either would be worse than one that
-  # did not build.
-  # ---------------------------------------------------------------------------
-
-  android:
-    needs: create-release
-    if: ${{ !cancelled() && (needs.create-release.result == 'success' || github.event_name == 'workflow_dispatch') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: lts/*
-          cache: npm
-
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      # The NDK version is pinned rather than "latest": a compiler bump is a
-      # change to the shipped binary and should be a commit, not whatever the
-      # runner happened to have that morning.
-      - uses: android-actions/setup-android@v3
-        with:
-          packages: 'platform-tools platforms;android-36 build-tools;36.0.0 ndk;27.3.13750724'
-
-      # arm only. x86/x86_64 Android targets exist for emulators, and doubling
-      # the build time of a release to serve emulators is a poor trade — every
-      # phone this could be installed on is one of these two.
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,armv7-linux-androideabi
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: '. -> src-tauri/target'
-          key: android
-          save-if: ${{ github.ref_type == 'branch' }}
-
-      - run: npm ci
-
-      - name: Write the release keystore
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          if [ -z "${KEYSTORE_BASE64}" ]; then
-            echo "::error::ANDROID_KEYSTORE_BASE64 is not set (also needs ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD)."
-            exit 1
-          fi
-
-          keystore="${RUNNER_TEMP}/horo-release.jks"
-          printf '%s' "${KEYSTORE_BASE64}" | base64 -d > "${keystore}"
-
-          # A Java properties file, so a backslash in a value is an escape
-          # character and would silently corrupt the password. Double them.
-          escape() { printf '%s' "$1" | sed 's/\\/\\\\/g'; }
-
-          {
-            printf 'storeFile=%s\n' "$(escape "${keystore}")"
-            printf 'storePassword=%s\n' "$(escape "${KEYSTORE_PASSWORD}")"
-            printf 'keyAlias=%s\n' "$(escape "${KEY_ALIAS}")"
-            printf 'keyPassword=%s\n' "$(escape "${KEY_PASSWORD}")"
-          } > src-tauri/gen/android/keystore.properties
-
-      # `tauri android build` regenerates everything gen/android gitignores
-      # (tauri.build.gradle.kts, the generated Kotlin, the bundled config), so a
-      # clean checkout needs no `android init` step.
-      - name: Build a signed APK
-        run: npm run android:build -- --apk --target aarch64 armv7
-
-      - name: Name the APK after the version
-        id: apk
-        run: |
-          apk="$(find src-tauri/gen/android/app/build/outputs/apk -name '*-release.apk' | head -n1)"
-          if [ -z "${apk}" ]; then
-            echo "::error::the Android build produced no signed release APK"
-            exit 1
-          fi
-          name="horo-${GITHUB_REF_NAME:-dev}-android.apk"
-          cp "${apk}" "${name}"
-          echo "path=${name}" >> "$GITHUB_OUTPUT"
-
-      - name: Attach the APK to the release
-        if: github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${GITHUB_REF_NAME}" "${{ steps.apk.outputs.path }}" --clobber
-
-      - name: Upload the APK as a run artifact (manual runs only)
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v6
-        with:
-          name: horo-android
-          if-no-files-found: error
-          retention-days: 7
-          path: ${{ steps.apk.outputs.path }}
-
-  ios:
-    needs: create-release
-    if: ${{ !cancelled() && (needs.create-release.result == 'success' || github.event_name == 'workflow_dispatch') }}
-    runs-on: macos-latest
-    timeout-minutes: 90
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: lts/*
-          cache: npm
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: '. -> src-tauri/target'
-          key: ios
-          save-if: ${{ github.ref_type == 'branch' }}
-
-      - run: npm ci
-
-      # Signing identities live in a keychain, and the runner's default one is
-      # not unlocked for non-interactive use. Build a throwaway keychain, put
-      # the certificate in it, and make it the one xcodebuild searches. The
-      # runner is destroyed afterwards, so nothing outlives the job.
-      - name: Import the signing certificate and provisioning profile
-        env:
-          CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
-          PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
-        run: |
-          if [ -z "${CERTIFICATE_BASE64}" ] || [ -z "${PROVISIONING_PROFILE_BASE64}" ]; then
-            echo "::error::iOS signing secrets are not set (IOS_CERTIFICATE_BASE64, IOS_CERTIFICATE_PASSWORD, IOS_PROVISIONING_PROFILE_BASE64)."
-            exit 1
-          fi
-
-          cert="${RUNNER_TEMP}/certificate.p12"
-          profile="${RUNNER_TEMP}/profile.mobileprovision"
-          keychain="${RUNNER_TEMP}/signing.keychain-db"
-          # Only ever unlocks this keychain, on a machine that is about to be
-          # thrown away, so it is generated rather than kept as a secret.
-          password="$(uuidgen)"
-
-          printf '%s' "${CERTIFICATE_BASE64}" | base64 -d > "${cert}"
-          printf '%s' "${PROVISIONING_PROFILE_BASE64}" | base64 -d > "${profile}"
-
-          security create-keychain -p "${password}" "${keychain}"
-          security set-keychain-settings -lut 21600 "${keychain}"
-          security unlock-keychain -p "${password}" "${keychain}"
-          security import "${cert}" -P "${CERTIFICATE_PASSWORD}" -A -t cert -f pkcs12 -k "${keychain}"
-          # Without this, codesign prompts for permission to use the key — and a
-          # prompt on a runner is a job that hangs until it times out.
-          security set-key-partition-list -S apple-tool:,apple: -k "${password}" "${keychain}" >/dev/null
-          security list-keychain -d user -s "${keychain}"
-
-          profiles=~/Library/MobileDevice/Provisioning\ Profiles
-          mkdir -p "${profiles}"
-          cp "${profile}" "${profiles}/"
-
-      # `release-testing` is ad-hoc: it installs on the devices listed in the
-      # provisioning profile. Switch to app-store-connect for TestFlight, which
-      # needs a distribution profile rather than an ad-hoc one.
-      - name: Build a signed IPA
-        run: npm run ios:build -- --export-method release-testing --ci
-
-      - name: Name the IPA after the version
-        id: ipa
-        run: |
-          ipa="$(find src-tauri/gen/apple/build -name '*.ipa' | head -n1)"
-          if [ -z "${ipa}" ]; then
-            echo "::error::the iOS build produced no IPA"
-            exit 1
-          fi
-          name="horo-${GITHUB_REF_NAME:-dev}-ios.ipa"
-          cp "${ipa}" "${name}"
-          echo "path=${name}" >> "$GITHUB_OUTPUT"
-
-      - name: Attach the IPA to the release
-        if: github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${GITHUB_REF_NAME}" "${{ steps.ipa.outputs.path }}" --clobber
-
-      - name: Upload the IPA as a run artifact (manual runs only)
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v6
-        with:
-          name: horo-ios
-          if-no-files-found: error
-          retention-days: 7
-          path: ${{ steps.ipa.outputs.path }}
+          path: dist-release/*
 
   publish:
-    # Waits on mobile so the APK and IPA get their chance to attach before the
-    # release goes public, but does not *depend* on them: the desktop bundles and
-    # the updater manifest are a complete, coherent release on their own, and a
-    # missing Android keystore has no business stranding the update chain for
-    # every Mac, Windows and AppImage user. Mobile still fails loudly in its own
-    # job — this only stops that failure from taking the desktop release with it.
-    #
-    # `!cancelled()` rather than `success()`, because a `needs` job that failed
-    # would otherwise skip this one; the guard below re-imposes the parts that
-    # genuinely are prerequisites.
-    needs: [create-release, build, android, ios]
+    needs: [create-release, build]
     if: ${{ !cancelled() && github.event_name == 'push'
             && needs.create-release.result == 'success'
             && needs.build.result == 'success' }}
@@ -425,14 +236,13 @@ jobs:
             --jq '.[].name' | sort > assets.txt
           cat assets.txt
 
-          # One regex per bundle the matrix is expected to produce. Arch spellings
-          # are alternations because Tauri names them differently per bundler
-          # (x64 vs amd64, aarch64 vs arm64) and that naming has drifted before.
+          # One regex per bundle the matrix is expected to produce.
           missing=0
-          for want in 'aarch64\.dmg$' '(x64|x86_64)\.dmg$' \
-                      '(amd64|x86_64)\.deb$' '(arm64|aarch64)\.deb$' \
-                      '(amd64|x86_64)\.AppImage$' '(arm64|aarch64)\.AppImage$' \
-                      '\.msi$' '\-setup\.exe$'; do
+          for want in '_aarch64\.dmg$' '_x64\.dmg$' \
+                      '_aarch64\.app\.tar\.gz$' '_x86_64\.app\.tar\.gz$' \
+                      '_amd64\.deb$' '_arm64\.deb$' \
+                      '_(amd64|x86_64)\.AppImage$' '_(arm64|aarch64)\.AppImage$' \
+                      '_x64-setup\.exe$'; do
             if ! grep -qiE -- "${want}" assets.txt; then
               echo "::error::No release asset matched /${want}/"
               missing=1
@@ -440,31 +250,21 @@ jobs:
           done
           [ "${missing}" -eq 0 ]
 
-          # Mobile is reported, not enforced — see this job's `if`. A notice
-          # rather than silence, so a release that shipped without a phone build
-          # says so on the run instead of being noticed weeks later.
-          for want in '\.apk$' '\.ipa$'; do
-            grep -qiE -- "${want}" assets.txt \
-              || echo "::warning::No release asset matched /${want}/ — publishing desktop only."
-          done
-
-      # ----------------------------------------------------------------------
-      # The updater manifest.
+      # ------------------------------------------------------------------------
+      # The updater manifest, built from the assets actually attached: a
+      # platform whose build flaked can't end up in it, and no entry can point
+      # at an asset that isn't there. Written once, here, rather than by each
+      # build row, because parallel read-modify-writes of one asset lose
+      # entries.
       #
-      # This is the join between the two halves of distribution: the same
-      # release that carries the installers also carries the file the running
-      # app polls, built from the assets that are actually attached rather than
-      # from what the matrix was supposed to produce. A platform whose build
-      # flaked cannot end up in the manifest, and a manifest entry can never
-      # point at an asset that isn't there.
+      # Two updaters read it. The gpui app's (cargo-packager-updater) keys
+      # platforms `macos-*`, `linux-*`, `windows-*` and needs `format`; the old
+      # Tauri app's keys macOS as `darwin-*` and ignores `format`. Linux and
+      # Windows keys are spelled alike, so only macOS is listed twice.
       #
-      # Written here rather than by each build row because five parallel
-      # read-modify-writes of one JSON asset lose entries (see the `build` job).
-      #
-      # Only these three bundle kinds can update in place. The .deb, .apk and
-      # .ipa are installed by something that isn't us, and the app knows to ask
-      # those users to update by hand — see `update.rs`.
-      # ----------------------------------------------------------------------
+      # Only these bundle kinds can update in place. A .deb is installed by
+      # something that isn't us, and the app sends those users to the release.
+      # ------------------------------------------------------------------------
       - name: Build the updater manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -475,24 +275,20 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
 
-          # id and name together: a .sig has to be fetched through the API by id,
-          # because a draft release's assets are not publicly downloadable yet.
+          # id and name together: a .sig has to be fetched through the API by
+          # id, because a draft release's assets aren't downloadable yet.
           gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets" --paginate \
             --jq '.[] | [.id, .name] | @tsv' > assets.tsv
 
           # Release notes travel with the manifest so the app can show what
-          # changed without a second request to the GitHub API.
+          # changed without a second request.
           gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq '.body' > notes.txt
 
           platforms='{}'
-
-          # Tauri's platform keys, and the asset each one is served by. Windows
-          # is the NSIS installer rather than the MSI: it installs per-user, so
-          # an update needs no elevation prompt the app cannot answer.
-          while IFS='	' read -r key pattern; do
+          while IFS='	' read -r keys format pattern; do
             name="$(grep -iE -- "${pattern}" <(cut -f2 assets.tsv) | head -n1 || true)"
             if [ -z "${name}" ]; then
-              echo "::error::No updater bundle for ${key} matched /${pattern}/"
+              echo "::error::No updater bundle for ${keys} matched /${pattern}/"
               exit 1
             fi
 
@@ -505,17 +301,18 @@ jobs:
             signature="$(gh api "repos/${GITHUB_REPOSITORY}/releases/assets/${sig_id}" \
               -H 'Accept: application/octet-stream')"
 
-            platforms="$(jq -n --argjson p "${platforms}" --arg k "${key}" \
-              --arg url "${base}/${name}" --arg sig "${signature}" \
-              '$p + { ($k): { signature: $sig, url: $url } }')"
-
-            echo "${key} -> ${name}"
+            for key in ${keys//,/ }; do
+              platforms="$(jq -n --argjson p "${platforms}" --arg k "${key}" \
+                --arg url "${base}/${name}" --arg sig "${signature}" --arg format "${format}" \
+                '$p + { ($k): { signature: $sig, url: $url, format: $format } }')"
+              echo "${key} -> ${name} (${format})"
+            done
           done <<'TARGETS'
-          darwin-aarch64	_aarch64\.app\.tar\.gz$
-          darwin-x86_64	_(x86_64|x64)\.app\.tar\.gz$
-          linux-x86_64	_(amd64|x86_64|x64)\.AppImage$
-          linux-aarch64	_(aarch64|arm64)\.AppImage$
-          windows-x86_64	_(x64|x86_64)-setup\.exe$
+          macos-aarch64,darwin-aarch64	app	_aarch64\.app\.tar\.gz$
+          macos-x86_64,darwin-x86_64	app	_x86_64\.app\.tar\.gz$
+          linux-x86_64	appimage	_(amd64|x86_64)\.AppImage$
+          linux-aarch64	appimage	_(arm64|aarch64)\.AppImage$
+          windows-x86_64	nsis	_x64-setup\.exe$
           TARGETS
 
           jq -n --arg version "${version}" --rawfile notes notes.txt \
@@ -527,17 +324,10 @@ jobs:
           cat latest.json
 
       # Uploaded before the release leaves draft, so `/releases/latest/download/
-      # latest.json` — the endpoint every installed app polls — never resolves to
-      # a release whose manifest hasn't landed yet.
-      # `--repo` is not optional here. This job never checks the repository out —
-      # it has no need of the source — and `gh release upload` infers its target
-      # from the git remote rather than from $GITHUB_REPOSITORY, so without it
-      # the command dies on "not a git repository". Every other call in this job
-      # already names the repo because it goes through `gh api repos/...`; this
-      # was the one that did not, and it is why the manifest generated correctly
-      # and then failed to attach.
-      #
-      # The mobile jobs get away with the bare form only because they check out.
+      # latest.json` — what every installed app polls — never resolves to a
+      # release whose manifest hasn't landed. `--repo` because this job never
+      # checks the repository out, and `gh release upload` otherwise infers
+      # its target from a git remote that isn't there.
       - name: Attach the manifest to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -137,8 +137,22 @@ pub enum UpdateState {
     Checking,
     /// Newer than this build.
     Available(horo_core::update::Release),
+    /// Downloading and putting it in place.
+    Installing(horo_core::update::Release),
+    /// In place; a restart runs it.
+    Installed(horo_core::update::Release),
     UpToDate,
     Failed(String),
+}
+
+impl UpdateState {
+    /// The release on offer, installing or installed.
+    pub fn release(&self) -> Option<&horo_core::update::Release> {
+        match self {
+            UpdateState::Available(r) | UpdateState::Installing(r) | UpdateState::Installed(r) => Some(r),
+            _ => None,
+        }
+    }
 }
 
 /// What we know of someone's profile.
@@ -411,7 +425,8 @@ impl Store {
     /// "check now": they hear "you're on the latest" and failures; a
     /// background look that finds nothing says nothing.
     pub fn check_for_update(&mut self, asked: bool, cx: &mut Context<Self>) {
-        if self.update == UpdateState::Checking {
+        // Mid-install or installed, a look would only forget it.
+        if matches!(self.update, UpdateState::Checking | UpdateState::Installing(_) | UpdateState::Installed(_)) {
             return;
         }
         let before = std::mem::replace(&mut self.update, UpdateState::Checking);
@@ -434,6 +449,37 @@ impl Store {
                             UpdateState::Available(r) => UpdateState::Available(r),
                             _ => UpdateState::Idle,
                         }
+                    }
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Download the version on offer and put it in place of this install
+    /// (see [`crate::updater`]). On Windows its installer takes over from
+    /// here; elsewhere it ends at [`UpdateState::Installed`] and a restart.
+    pub fn install_update(&mut self, cx: &mut Context<Self>) {
+        let UpdateState::Available(release) = &self.update else { return };
+        let release = release.clone();
+        self.update = UpdateState::Installing(release.clone());
+        cx.notify();
+        let version = release.version.clone();
+        let task = Backend::global(cx).run(async move { tokio::task::spawn_blocking(move || crate::updater::install(&version)).await });
+        cx.spawn(async move |this, cx| {
+            let done = match task.await {
+                Ok(Ok(done)) => done,
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = this.update(cx, |s, cx| {
+                s.update = match done {
+                    Ok(()) => UpdateState::Installed(release),
+                    Err(e) => {
+                        tracing::warn!("installing horo {}: {e}", release.version);
+                        s.show_banner(Tone::Error, format!("couldn't install horo {}: {e}", release.version), cx);
+                        UpdateState::Available(release)
                     }
                 };
                 cx.notify();

@@ -10,10 +10,14 @@ fn main() {
     // Before any TLS: matrix-sdk links ring too, and with two providers
     // rustls won't pick one on its own.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-    // While the Tauri app still exists, keep this one's session secrets out of
-    // the keychain entry that app reads (same service, same user id), in the
-    // data directory's 0600 file instead.
-    horo_core::matrix::session::use_file_storage();
+    // The installed app keeps its session secrets in the keychain, where the
+    // Tauri app it replaces left them. A build pointed at other data (dev
+    // builds are) keeps them in that directory's 0600 file instead, so it
+    // never reads or overwrites the installed app's entry (same service,
+    // same user id).
+    if std::env::var_os("HORO_DATA").is_some() {
+        horo_core::matrix::session::use_file_storage();
+    }
 
     let backend = horo_ui::Backend::new(horo_ui::Backend::default_data_dir()).expect("a tokio runtime");
     gpui_platform::application().with_assets(horo_ui::assets()).run(|cx| {

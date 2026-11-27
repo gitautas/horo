@@ -845,19 +845,17 @@ impl Settings {
     fn updates(&self, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         use crate::store::UpdateState;
         let state = self.store.read(cx).update.clone();
-        let (line, warn) = match &state {
-            UpdateState::Checking => ("looking for a new version…".to_owned(), false),
-            UpdateState::Available(r) => (format!("horo {} is out — this build updates from where you installed it", r.version), false),
-            UpdateState::UpToDate => ("you're on the latest version~".to_owned(), false),
-            UpdateState::Failed(e) => (format!("couldn't look for a new version: {e}"), true),
-            UpdateState::Idle => ("checked automatically every few hours".to_owned(), false),
+        let offer = crate::views::shell::update_offer(&state, &self.store, "update-settings");
+        let (line, warn) = match (&state, &offer) {
+            (_, Some((line, _))) => (line.clone(), false),
+            (UpdateState::Checking, _) => ("looking for a new version…".to_owned(), false),
+            (UpdateState::UpToDate, _) => ("you're on the latest version~".to_owned(), false),
+            (UpdateState::Failed(e), _) => (format!("couldn't look for a new version: {e}"), true),
+            _ => ("checked automatically every few hours".to_owned(), false),
         };
-        let action = match &state {
-            UpdateState::Available(r) => {
-                let url = r.url.clone();
-                Button::new("update-open").small().primary().label("open release").on_click(move |_, _, cx| cx.open_url(&url))
-            }
-            _ => {
+        let action = match offer {
+            Some((_, button)) => button,
+            None => {
                 let checking = state == UpdateState::Checking;
                 Button::new("update-check")
                     .small()

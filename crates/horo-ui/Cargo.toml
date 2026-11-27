@@ -11,6 +11,9 @@ publish = false
 imagesize = "0.14"
 image = { version = "0.25", default-features = false, features = ["png", "webp", "gif"] }
 url.workspace = true
+# Installing a release over this install (see src/updater.rs).
+cargo-packager-updater = "0.2.3"
+semver = "1"
 horo-core.workspace = true
 matrix-sdk.workspace = true
 # gpui-component 0.10 is built on `gpui-pre`, a republished Zed snapshot
