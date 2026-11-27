@@ -135,7 +135,8 @@ jobs:
             libasound2-dev libdbus-1-dev libssl-dev libzstd-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
             libx11-xcb-dev libxcb1-dev libvulkan-dev \
-            libfontconfig1-dev libfreetype6-dev
+            libfontconfig1-dev libfreetype6-dev \
+            libpipewire-0.3-dev libclang-dev
 
       # libvpx's Windows build: configure and `make dist` under MSYS2's bash +
       # make (native Win32 make rejects `/d/...` paths), nasm for its assembly,

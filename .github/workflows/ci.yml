@@ -71,7 +71,8 @@ jobs:
             libasound2-dev libdbus-1-dev libssl-dev libzstd-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
             libx11-xcb-dev libxcb1-dev libvulkan-dev \
-            libfontconfig1-dev libfreetype6-dev
+            libfontconfig1-dev libfreetype6-dev \
+            libpipewire-0.3-dev libclang-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
