@@ -91,6 +91,17 @@ pub struct Timeline {
     search: Option<Entity<InputState>>,
     search_matches: Vec<usize>,
     search_cursor: usize,
+    /// Pinned messages popover (`m.room.pinned_events`).
+    pins_open: bool,
+    pins: Option<Vec<TimelineItemDto>>,
+    /// Cached OpenGraph link previews keyed by URL.
+    link_previews: HashMap<String, LinkPreviewState>,
+}
+
+enum LinkPreviewState {
+    Loading,
+    Ready(horo_core::link_preview::LinkPreview),
+    None,
 }
 
 /// A video or a sound played inside its message: fetched to a file, then
@@ -215,6 +226,9 @@ impl Timeline {
             search: None,
             search_matches: Vec::new(),
             search_cursor: 0,
+            pins_open: false,
+            pins: None,
+            link_previews: HashMap::new(),
         };
 
         let backend = Backend::global(cx);
@@ -440,6 +454,209 @@ impl Timeline {
         self.list.scroll_to(ListOffset { item_ix: self.items.len(), offset_in_item: zpx(0.) });
         self.scrolled_up = false;
         cx.notify();
+    }
+
+    /// Toggle the Discord-style pinned messages popover at the top-right.
+    pub fn toggle_pins(&mut self, cx: &mut Context<Self>) {
+        self.pins_open = !self.pins_open;
+        if self.pins_open {
+            self.load_pins(cx);
+        }
+        cx.notify();
+    }
+
+    fn load_pins(&mut self, cx: &mut Context<Self>) {
+        self.pins = None;
+        let room_id = self.room_id.clone();
+        let backend = Backend::global(cx);
+        let state = backend.state.clone();
+        let task = backend.run(async move { timeline::pinned_events(&*state.core().await?, &room_id).await });
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.pins = Some(match outcome {
+                    Ok(Ok(items)) => items,
+                    _ => Vec::new(),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn set_pin(&mut self, event_id: String, pin: bool, cx: &mut Context<Self>) {
+        let room_id = self.room_id.clone();
+        let backend = Backend::global(cx);
+        let state = backend.state.clone();
+        let task = backend.run(async move { timeline::pin_event(&*state.core().await?, &room_id, &event_id, pin).await });
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            let _ = this.update(cx, |this, cx| match outcome {
+                Ok(Ok(_)) => {
+                    if this.pins_open {
+                        this.load_pins(cx);
+                    }
+                    this.notice = Some(if pin { "message pinned~".into() } else { "message unpinned".into() });
+                    cx.notify();
+                }
+                Ok(Err(e)) => {
+                    this.notice = Some(format!("couldn't update pins: {e}").into());
+                    cx.notify();
+                }
+                Err(e) => {
+                    this.notice = Some(format!("couldn't update pins: {e}").into());
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn pins_popover(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.pins_open {
+            return None;
+        }
+        let body: AnyElement = match &self.pins {
+            None => div().py(space(28.)).text_center().text_xs().text_color(palette.text_tertiary).child("loading pinned messages…").into_any_element(),
+            Some(items) => {
+                let events: Vec<&EventItemDto> = items.iter().filter_map(|i| i.event.as_deref()).collect();
+                if events.is_empty() {
+                    div()
+                        .py(space(28.))
+                        .px(space(16.))
+                        .text_center()
+                        .text_xs()
+                        .text_color(palette.text_tertiary)
+                        .child("no pinned messages yet — right-click a message to pin it~")
+                        .into_any_element()
+                } else {
+                    v_flex()
+                        .gap(space(8.))
+                        .p(space(10.))
+                        .children(events.into_iter().enumerate().map(|(ix, ev)| {
+                            let who = ev.sender_name.clone().unwrap_or_else(|| localpart(&ev.sender).to_owned());
+                            let (snippet, _) = body_text(&ev.content);
+                            let eid = ev.event_id.clone();
+                            let jump_id = ev.event_id.clone();
+                            v_flex()
+                                .id(("pin-card", ix))
+                                .gap(space(4.))
+                                .p(space(10.))
+                                .rounded(corner(12.))
+                                .bg(palette.app)
+                                .border_1()
+                                .border_color(palette.border_subtle)
+                                .child(
+                                    h_flex()
+                                        .justify_between()
+                                        .items_center()
+                                        .gap(space(6.))
+                                        .child(
+                                            h_flex()
+                                                .gap(space(6.))
+                                                .min_w_0()
+                                                .child(avatar(&ev.sender, &who, ev.sender_avatar.as_deref(), zpx(20.), cx))
+                                                .child(div().truncate().text_xs().font_weight(FontWeight::BOLD).text_color(accent_for(&ev.sender)).child(who))
+                                                .child(div().flex_none().font_family(palette.mono_font.clone()).text_size(text(10.)).text_color(palette.text_tertiary).child(time_label(ev.timestamp))),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .flex_none()
+                                                .gap(space(4.))
+                                                .when_some(jump_id, |d, target_id| {
+                                                    d.child(
+                                                        div()
+                                                            .id(("pin-jump", ix))
+                                                            .px(space(6.))
+                                                            .py(zpx(2.))
+                                                            .rounded(corner(6.))
+                                                            .cursor_pointer()
+                                                            .text_size(text(10.5))
+                                                            .text_color(palette.accent)
+                                                            .hover(|d| d.bg(palette.raised))
+                                                            .child("jump")
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                if let Some(pos) = this.items.iter().position(|i| i.event.as_deref().and_then(|e| e.event_id.as_deref()) == Some(target_id.as_str())) {
+                                                                    this.list.scroll_to_reveal_item(pos);
+                                                                    this.pins_open = false;
+                                                                    cx.notify();
+                                                                }
+                                                            })),
+                                                    )
+                                                })
+                                                .when_some(eid, |d, unpin_id| {
+                                                    d.child(
+                                                        div()
+                                                            .id(("pin-unpin", ix))
+                                                            .px(space(6.))
+                                                            .py(zpx(2.))
+                                                            .rounded(corner(6.))
+                                                            .cursor_pointer()
+                                                            .text_size(text(10.5))
+                                                            .text_color(palette.text_tertiary)
+                                                            .hover(|d| d.bg(palette.raised).text_color(palette.danger))
+                                                            .child("✕")
+                                                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("unpin").build(window, cx))
+                                                            .on_click(cx.listener(move |this, _, _, cx| this.set_pin(unpin_id.clone(), false, cx))),
+                                                    )
+                                                }),
+                                        ),
+                                )
+                                .child(div().text_size(text(12.5)).text_color(palette.text_secondary).child(snippet))
+                        }))
+                        .into_any_element()
+                }
+            }
+        };
+
+        Some(
+            v_flex()
+                .id("pins-popover")
+                .absolute()
+                .top(space(10.))
+                .right(space(22.))
+                .w(zpx(380.))
+                .max_w(gpui::relative(0.85))
+                .max_h(zpx(440.))
+                .rounded(corner(16.))
+                .bg(palette.card)
+                .border_1()
+                .border_color(palette.border)
+                .shadow_lg()
+                .overflow_hidden()
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.pins_open = false;
+                    cx.notify();
+                }))
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .items_center()
+                        .px(space(14.))
+                        .py(space(10.))
+                        .border_b_1()
+                        .border_color(palette.border_subtle)
+                        .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(palette.text).child("pinned messages"))
+                        .child(
+                            div()
+                                .id("pins-close")
+                                .px(space(6.))
+                                .py(zpx(2.))
+                                .rounded(corner(6.))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(palette.text_tertiary)
+                                .hover(|d| d.bg(palette.raised).text_color(palette.text))
+                                .child("✕")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.pins_open = false;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .child(div().id("pins-scroll").flex_1().min_h_0().overflow_y_scroll().child(body))
+                .into_any_element(),
+        )
     }
 
     fn search_bar(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -928,6 +1145,7 @@ impl Render for Timeline {
             )
             .child(self.footer(&palette, cx))
             .children(jump_bar)
+            .children(self.pins_popover(&palette, cx))
             .children(self.message_menu(&palette, cx))
             .children(self.picker.as_ref().map(|(_, at, picker)| {
                 gpui::deferred(
@@ -1027,6 +1245,24 @@ impl Timeline {
         list = list.child(menu::item("mm-link", "copy link", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(link.clone()));
             close(this, cx);
+        })));
+        if reactable {
+            let pin_id = id.clone();
+            list = list.child(menu::item("mm-pin", "pin message", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+                close(this, cx);
+                this.set_pin(pin_id.clone(), true, cx);
+            })));
+        }
+        list = list.child(menu::item("mm-unread", "mark as unread", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+            close(this, cx);
+            let room_id = this.room_id.clone();
+            let backend = Backend::global(cx);
+            let state = backend.state.clone();
+            drop(backend.run(async move {
+                if let Ok(core) = state.core().await {
+                    let _ = horo_core::matrix::rooms::set_marked_unread(&core, &room_id, true).await;
+                }
+            }));
         })));
         if event.is_own && reactable {
             let event_id = id.clone();
@@ -1654,6 +1890,65 @@ impl Timeline {
     /// face (or, continuing a group, the time on hover), then the sender in
     /// their accent, the time and any device warning, the reply, the body,
     /// reactions and the thread.
+    fn link_preview(&mut self, event: &EventItemDto, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.store.read(cx).prefs.link_previews {
+            return None;
+        }
+        let body = match &event.content {
+            ContentDto::Text { body, .. } => body,
+            _ => return None,
+        };
+        let url = horo_core::link_preview::first_url(body)?;
+        match self.link_previews.get(&url) {
+            Some(LinkPreviewState::Ready(preview)) => {
+                let open_url = preview.url.clone();
+                Some(
+                    v_flex()
+                        .id(SharedString::from(format!("lp/{}", event_key(event))))
+                        .mt(zpx(6.))
+                        .max_w(zpx(420.))
+                        .gap(zpx(2.))
+                        .px(space(12.))
+                        .py(space(8.))
+                        .rounded(corner(10.))
+                        .bg(palette.card)
+                        .border_1()
+                        .border_color(palette.border_subtle)
+                        .border_l_2()
+                        .cursor_pointer()
+                        .hover(|d| d.bg(palette.raised))
+                        .on_click(move |_, _, cx| cx.open_url(&open_url))
+                        .child(div().text_size(text(10.5)).text_color(palette.text_tertiary).child(preview.site.clone()))
+                        .child(div().text_size(text(13.)).font_weight(FontWeight::BOLD).text_color(palette.accent).child(preview.title.clone()))
+                        .children(preview.description.clone().map(|desc| div().text_size(text(12.)).text_color(palette.text_secondary).child(desc)))
+                        .into_any_element(),
+                )
+            }
+            Some(LinkPreviewState::Loading | LinkPreviewState::None) => None,
+            None => {
+                self.link_previews.insert(url.clone(), LinkPreviewState::Loading);
+                let fetch_url = url.clone();
+                let backend = Backend::global(cx);
+                let task = backend.run(async move { horo_core::link_preview::fetch(&fetch_url).await });
+                cx.spawn(async move |this, cx| {
+                    let result = task.await.ok().flatten();
+                    let _ = this.update(cx, |this, cx| {
+                        this.link_previews.insert(
+                            url,
+                            match result {
+                                Some(preview) => LinkPreviewState::Ready(preview),
+                                None => LinkPreviewState::None,
+                            },
+                        );
+                        cx.notify();
+                    });
+                })
+                .detach();
+                None
+            }
+        }
+    }
+
     fn message(&mut self, event: &EventItemDto, continues: bool, search_hit: bool, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let name = event.sender_name.clone().unwrap_or_else(|| event.sender.trim_start_matches('@').split(':').next().unwrap_or_default().to_owned());
 
@@ -1810,12 +2105,14 @@ impl Timeline {
                 .children(shield)
         });
 
+        let preview_card = self.link_preview(event, palette, cx);
         let content = v_flex()
             .flex_1()
             .min_w_0()
             .children(header)
             .children(reply)
             .child(body)
+            .children(preview_card)
             .children(reactions)
             .children(thread)
             .when(failed, |c| {

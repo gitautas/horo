@@ -25,7 +25,7 @@ use gpui_component::{
 use horo_core::dto::RoomSummary;
 use horo_rtc::call::screen_key;
 
-use crate::theme::zpx;
+use crate::theme::{corner, space, text, zpx};
 use crate::{
     call::{CallStatus, CallView, FocusMode, user_of},
     store::{Known, Store},
@@ -190,21 +190,86 @@ pub fn roster(room: &RoomSummary, store: &Entity<Store>, palette: &Palette, cx: 
         Some(call) => people(call, &state.profiles),
         None => room.call_participants.iter().map(|user| person(user, &state.profiles, false, false)).collect(),
     };
+    let own_identity = live.and_then(|c| c.identity.clone());
+    let volumes = live.map(|c| c.participant_volumes.clone()).unwrap_or_default();
+    let in_live_call = live.is_some();
     want(store, &people, cx);
     if people.is_empty() {
         return None;
     }
     let mut rows = Vec::new();
-    for person in people {
+    for (ix, person) in people.into_iter().enumerate() {
         let face = avatar(&person.user_id, &person.real_name, person.avatar.as_deref(), zpx(20.), cx);
+        let remote_id = if in_live_call {
+            person.identity.clone().filter(|id| own_identity.as_deref() != Some(id.as_str()))
+        } else {
+            None
+        };
+        let vol = remote_id.as_deref().and_then(|id| volumes.get(id).copied()).unwrap_or(1.0);
+        let local_muted = vol <= 0.001;
+        let controls = remote_id.map(|id| {
+            let (s_down, s_mute, s_up) = (store.clone(), store.clone(), store.clone());
+            let (id_down, id_mute, id_up) = (id.clone(), id.clone(), id);
+            let pct = (vol * 100.0).round() as u32;
+            h_flex()
+                .ml_auto()
+                .flex_none()
+                .gap(zpx(2.))
+                .items_center()
+                .when(!local_muted && pct == 100, |d| d.invisible().group_hover("voice-row", |s| s.visible()))
+                .child(
+                    div()
+                        .id(("v-down", ix))
+                        .px(zpx(4.))
+                        .rounded(corner(4.))
+                        .cursor_pointer()
+                        .text_size(text(10.))
+                        .text_color(palette.text_tertiary)
+                        .hover(|d| d.bg(palette.raised).text_color(palette.text))
+                        .child("−")
+                        .on_click(move |_, _, cx| s_down.update(cx, |s, cx| s.set_participant_volume(id_down.clone(), (vol - 0.25).max(0.0), cx))),
+                )
+                .child(
+                    div()
+                        .id(("v-mute", ix))
+                        .px(zpx(4.))
+                        .rounded(corner(4.))
+                        .cursor_pointer()
+                        .font_family(palette.mono_font.clone())
+                        .text_size(text(9.5))
+                        .text_color(if local_muted { palette.danger } else { palette.text_tertiary })
+                        .hover(|d| d.bg(palette.raised).text_color(palette.text))
+                        .tooltip(move |window, cx| {
+                            gpui_component::tooltip::Tooltip::new(if local_muted { "unmute for me" } else { "mute for me" }).build(window, cx)
+                        })
+                        .child(if local_muted { "muted".to_owned() } else { format!("{pct}%") })
+                        .on_click(move |_, _, cx| s_mute.update(cx, |s, cx| s.set_participant_volume(id_mute.clone(), if local_muted { 1.0 } else { 0.0 }, cx))),
+                )
+                .child(
+                    div()
+                        .id(("v-up", ix))
+                        .px(zpx(4.))
+                        .rounded(corner(4.))
+                        .cursor_pointer()
+                        .text_size(text(10.))
+                        .text_color(palette.text_tertiary)
+                        .hover(|d| d.bg(palette.raised).text_color(palette.text))
+                        .child("+")
+                        .on_click(move |_, _, cx| s_up.update(cx, |s, cx| s.set_participant_volume(id_up.clone(), (vol + 0.25).min(2.0), cx))),
+                )
+        });
         rows.push(
             h_flex()
+                .group("voice-row")
                 .gap_2()
                 .pl(zpx(40.))
+                .pr(space(8.))
                 .py(zpx(2.))
-                .child(speaking_ring(face, zpx(20.), person.speaking, palette))
-                .child(div().truncate().text_xs().text_color(if person.speaking { palette.text } else { palette.text_secondary }).child(person.name))
-                .when(person.muted, |row| row.child(icon("icons/mic-off.svg").size(zpx(12.)).text_color(palette.text_tertiary))),
+                .items_center()
+                .child(speaking_ring(face, zpx(20.), person.speaking && !local_muted, palette))
+                .child(div().flex_1().min_w_0().truncate().text_xs().text_color(if person.speaking && !local_muted { palette.text } else { palette.text_secondary }).child(person.name))
+                .when(person.muted, |row| row.child(icon("icons/mic-off.svg").size(zpx(12.)).text_color(palette.text_tertiary)))
+                .children(controls),
         );
     }
     Some(v_flex().pb_1().children(rows).into_any_element())

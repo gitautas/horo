@@ -23,7 +23,7 @@ use matrix_sdk::ruma::OwnedRoomId;
 use crate::theme::zpx;
 use crate::{
     backend::Backend,
-    FindInRoom, OpenQuickSwitcher, OpenSettings,
+    FindInRoom, NextRoom, NextUnreadRoom, OpenQuickSwitcher, OpenSettings, PrevRoom, PrevUnreadRoom,
     presence,
     media::Media,
     rooms::{self, Filter, View},
@@ -58,6 +58,8 @@ pub struct Shell {
     settings: Option<Entity<Settings>>,
     /// The ⌘K quick switcher, while it's open.
     quick_switcher: Option<Entity<QuickSwitcher>>,
+    /// The bottom-left status picker popover, when open.
+    status_menu: Option<gpui::Point<gpui::Pixels>>,
     /// The profile card, while one is open.
     profile: Option<Entity<ProfileCard>>,
     /// Holds the window's focus when nothing inside does, so ⌘, still
@@ -88,7 +90,7 @@ impl Shell {
         focus.focus(window, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("find or start a conversation"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, room_menu_can_delete: None, invite_to_space: None, leave_space: None, browse: None, settings: None, quick_switcher: None, profile: None, focus, search, filter: Filter::All, filters_open: false, space_hierarchy: None, joining: HashSet::new() };
+        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, room_menu_can_delete: None, invite_to_space: None, leave_space: None, browse: None, settings: None, quick_switcher: None, status_menu: None, profile: None, focus, search, filter: Filter::All, filters_open: false, space_hierarchy: None, joining: HashSet::new() };
         shell.follow_room(window, cx);
         shell.follow_space(cx);
         shell.follow_settings(window, cx);
@@ -383,6 +385,49 @@ impl Shell {
 
     /// A space's right-click menu, as SpacesRail.tsx's (after Discord's
     /// server menu).
+    /// Discord-style status picker popover above the bottom-left user bar.
+    fn status_popover(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let at = self.status_menu?;
+        let (info, current_shown) = {
+            let store = self.store.read(cx);
+            let Phase::SignedIn(info) = &store.phase else { return None };
+            (info.clone(), store.shown_own_presence().0)
+        };
+        let close = |this: &mut Shell, cx: &mut Context<Shell>| {
+            this.status_menu = None;
+            cx.notify();
+        };
+        use horo_core::matrix::presence::OwnPresence;
+        let mut list = menu::frame("status-menu", palette)
+            .on_mouse_down_out(cx.listener(move |this, _, _, cx| close(this, cx)))
+            .child(menu::caption("status", palette));
+
+        for (id, label_text, target, shown_match) in [
+            ("st-online", "online", OwnPresence::Online, presence::Shown::Online),
+            ("st-away", "away", OwnPresence::Unavailable, presence::Shown::Away),
+            ("st-offline", "invisible", OwnPresence::Offline, presence::Shown::Offline),
+        ] {
+            list = list.child(menu::item(id, label_text, true, Some(current_shown == shown_match), palette).on_click(cx.listener(move |this, _, _, cx| {
+                close(this, cx);
+                this.store.update(cx, |s, cx| s.set_manual_presence(target, cx));
+            })));
+        }
+
+        let (user_id, avatar_hint) = (info.user_id.clone(), info.avatar_url.clone());
+        list = list
+            .child(menu::separator(palette))
+            .child(menu::item("st-profile", "view profile", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+                close(this, cx);
+                this.store.update(cx, |s, cx| s.open_profile(user_id.clone(), at, avatar_hint.clone(), cx));
+            })))
+            .child(menu::item("st-edit", "edit status & profile…", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+                close(this, cx);
+                this.store.update(cx, |s, cx| s.show_settings(Some(SettingsSection::Account), cx));
+            })));
+
+        Some(menu::place(at, list))
+    }
+
     fn space_menu(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (id, name, at) = self.space_menu.clone()?;
         let (joined, hide_muted) = {
@@ -525,12 +570,17 @@ impl Shell {
             )));
         } else {
             let (rid, unread) = (id.clone(), room.has_unread);
-            list = list.child(menu::item("rm-read", "mark as read", unread, None, palette).on_click(cx.listener(move |this, _, _, cx| {
-                close(this, cx);
-                if unread {
+            if unread {
+                list = list.child(menu::item("rm-read", "mark as read", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+                    close(this, cx);
                     this.on_rooms(vec![rid.clone()], cx, |core, id| Box::pin(async move { core_rooms::mark_read(&core, &id).await }));
-                }
-            })));
+                })));
+            } else {
+                list = list.child(menu::item("rm-unread", "mark as unread", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+                    close(this, cx);
+                    this.on_rooms(vec![rid.clone()], cx, |core, id| Box::pin(async move { core_rooms::set_marked_unread(&core, &id, true).await }));
+                })));
+            }
             list = list.child(menu::separator(palette));
             let (rid, muted) = (id.clone(), room.is_muted);
             let mute_words = if room.is_direct { "mute chat" } else { "mute room" };
@@ -661,12 +711,86 @@ impl Shell {
         cx.notify();
     }
 
+    /// Discord-style channel hopping: `Alt+↑`/`↓` through the open sidebar, or
+    /// `Alt+Shift+↑`/`↓` through unread rooms across all servers and DMs.
+    fn step_room(&mut self, delta: isize, unread_only: bool, cx: &mut Context<Self>) {
+        let store = self.store.read(cx);
+        let current = store.room.clone();
+        let target: Option<(Option<String>, String)> = if unread_only {
+            let unread: Vec<&RoomSummary> = store
+                .rooms
+                .iter()
+                .filter(|r| !r.is_space && !r.is_utility && r.membership == horo_core::dto::RoomMembership::Joined && r.has_unread)
+                .collect();
+            if unread.is_empty() {
+                None
+            } else {
+                let pos = current.as_deref().and_then(|id| unread.iter().position(|r| r.id == id));
+                let next_ix = match pos {
+                    Some(i) => (i as isize + delta).rem_euclid(unread.len() as isize) as usize,
+                    None => if delta >= 0 { 0 } else { unread.len() - 1 },
+                };
+                let r = unread[next_ix];
+                let space_id = if r.is_direct { None } else { store.spaces.iter().find(|s| rooms::is_in_space(r, s)).map(|s| s.id.clone()) };
+                Some((space_id, r.id.clone()))
+            }
+        } else {
+            let open_space = store.current_space().cloned();
+            let order = open_space.as_ref().map(|s| s.children.clone()).unwrap_or_default();
+            let search = self.search.read(cx).value().to_string();
+            let hide_muted = open_space.as_ref().is_some_and(|s| store.prefs.hide_muted_in_spaces.contains(&s.id));
+            let visible = rooms::filter(&store.rooms, &View { space: open_space.as_ref(), spaces: &store.spaces, filter: self.filter, search: &search, hide_muted });
+            let flat: Vec<&RoomSummary> = rooms::group(visible, &order).into_iter().flat_map(|(_, rs)| rs).collect();
+            if flat.is_empty() {
+                None
+            } else {
+                let pos = current.as_deref().and_then(|id| flat.iter().position(|r| r.id == id));
+                let next_ix = match pos {
+                    Some(i) => (i as isize + delta).rem_euclid(flat.len() as isize) as usize,
+                    None => if delta >= 0 { 0 } else { flat.len() - 1 },
+                };
+                Some((store.space.clone(), flat[next_ix].id.clone()))
+            }
+        };
+        if let Some((space_id, room_id)) = target {
+            self.store.update(cx, |s, cx| {
+                if s.space != space_id {
+                    s.open_space(space_id, cx);
+                }
+                s.open_room(room_id, cx);
+            });
+        }
+    }
+
+    /// Reorder a dragged server before `target_id` in `prefs.space_order`.
+    fn reorder_space(&mut self, dragged_id: &str, target_id: &str, cx: &mut Context<Self>) {
+        if dragged_id == target_id {
+            return;
+        }
+        let mut order: Vec<String> = {
+            let store = self.store.read(cx);
+            let mut ids: Vec<String> = store.spaces.iter().map(|s| s.id.clone()).collect();
+            let saved = &store.prefs.space_order;
+            ids.sort_by_key(|id| saved.iter().position(|s| s == id).unwrap_or(usize::MAX));
+            ids
+        };
+        if let Some(from) = order.iter().position(|id| id == dragged_id) {
+            let moved = order.remove(from);
+            if let Some(to) = order.iter().position(|id| id == target_id) {
+                order.insert(to, moved);
+                self.store.update(cx, |s, cx| s.update_prefs(|p| p.space_order = order, cx));
+            }
+        }
+    }
+
     /// The spaces rail, as Discord's server list: the horo logo (Direct
-    /// Messages), the joined spaces, and Explore.
+    /// Messages), the joined spaces (drag-to-reorder), and Explore.
     fn rail(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
         let open = store.space.clone();
-        let spaces = store.spaces.clone();
+        let mut spaces = store.spaces.clone();
+        let saved_order = store.prefs.space_order.clone();
+        spaces.sort_by_key(|s| saved_order.iter().position(|id| id == &s.id).unwrap_or(usize::MAX));
 
         let home_badge: u64 = rooms::filter(&store.rooms, &View { spaces: &spaces, ..Default::default() })
             .into_iter()
@@ -741,7 +865,24 @@ impl Shell {
                         this.space_menu = Some((id.clone(), name.clone(), event.position));
                         cx.notify();
                     })
-                }),
+                })
+                .on_drag(DraggedSpace(space.id.clone()), {
+                    let name = space.name.clone();
+                    let bg = palette.raised;
+                    let border = palette.accent;
+                    let fg = palette.text;
+                    move |_, _, _, cx| {
+                        let name = name.clone();
+                        cx.new(move |_| DragPill { label: name, bg, border, fg })
+                    }
+                })
+                .drag_over::<DraggedSpace>(|style, _, _, _| style.opacity(0.6))
+                .on_drop(cx.listener({
+                    let target_id = space.id.clone();
+                    move |this, dragged: &DraggedSpace, _, cx| {
+                        this.reorder_space(&dragged.0, &target_id, cx);
+                    }
+                })),
             );
             tiles.push(tile);
         }
@@ -797,16 +938,14 @@ impl Shell {
     /// Discord-style bottom-left user control bar: your avatar + status, audio
     /// settings shortcut, and settings gear.
     fn user_bar(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (info, away) = {
+        let (info, shown, status_label) = {
             let store = self.store.read(cx);
             let Phase::SignedIn(info) = &store.phase else { return None };
-            (info.clone(), store.is_away())
+            let (shown, label) = store.shown_own_presence();
+            (info.clone(), shown, label)
         };
         let name = info.display_name.clone().unwrap_or_else(|| info.user_id.clone());
         let face = avatar(&info.user_id, &name, info.avatar_url.as_deref(), zpx(32.), cx);
-        let shown = if away { presence::Shown::Away } else { presence::Shown::Online };
-        let status_label = if away { "away" } else { "online" };
-        let (user_id, avatar_hint) = (info.user_id.clone(), info.avatar_url.clone());
 
         Some(
             h_flex()
@@ -830,9 +969,9 @@ impl Shell {
                         .rounded(corner(10.))
                         .cursor_pointer()
                         .hover(|d| d.bg(palette.raised))
-                        .on_click(cx.listener(move |this, click: &gpui::ClickEvent, _, cx| {
-                            let (user_id, avatar_hint) = (user_id.clone(), avatar_hint.clone());
-                            this.store.update(cx, |s, cx| s.open_profile(user_id, click.position(), avatar_hint, cx));
+                        .on_click(cx.listener(|this, click: &gpui::ClickEvent, _, cx| {
+                            this.status_menu = if this.status_menu.is_some() { None } else { Some(click.position()) };
+                            cx.notify();
                         }))
                         .child(with_presence(face, Some(shown), palette.inset, palette))
                         .child(
@@ -1357,6 +1496,20 @@ impl Shell {
                 store.update(cx, |s, cx| if in_this_call { s.leave_call(cx) } else { s.join_call(room_id, cx) })
             });
 
+        let pins_button = div()
+            .id("header-pins")
+            .p(space(9.))
+            .rounded(corner(12.))
+            .cursor_pointer()
+            .bg(palette.raised)
+            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("pinned messages").build(window, cx))
+            .child(voice::icon("icons/flag.svg").size(zpx(17.)).text_color(palette.text_secondary))
+            .on_click(cx.listener(|this, _, _, cx| {
+                if let Some((_, timeline, _)) = &this.timeline {
+                    timeline.update(cx, |t, cx| t.toggle_pins(cx));
+                }
+            }));
+
         let search_button = div()
             .id("header-search")
             .p(space(9.))
@@ -1420,6 +1573,7 @@ impl Shell {
                     .ml_auto()
                     .gap(space(8.))
                     .child(div().mr(zpx(4.)).font_family(palette.mono_font.clone()).text_size(text(11.)).text_color(palette.text_tertiary).child(room.member_count.to_string()))
+                    .child(pins_button)
                     .child(search_button)
                     .child(call_button)
                     .child(info_button),
@@ -1588,6 +1742,10 @@ impl Render for Shell {
                     timeline.update(cx, |t, cx| t.open_search(window, cx));
                 }
             }))
+            .on_action(cx.listener(|this, _: &PrevRoom, _, cx| this.step_room(-1, false, cx)))
+            .on_action(cx.listener(|this, _: &NextRoom, _, cx| this.step_room(1, false, cx)))
+            .on_action(cx.listener(|this, _: &PrevUnreadRoom, _, cx| this.step_room(-1, true, cx)))
+            .on_action(cx.listener(|this, _: &NextUnreadRoom, _, cx| this.step_room(1, true, cx)))
             .size_full()
             .bg(palette.app)
             .text_color(palette.text)
@@ -1632,6 +1790,7 @@ impl Render for Shell {
             .children(self.browse.clone())
             .children(self.space_menu(&palette, cx))
             .children(self.room_menu(&palette, cx))
+            .children(self.status_popover(&palette, cx))
             .children(self.profile.clone())
             .children(banner(&self.store, &palette, cx))
             .children(update_banner(&self.store, &palette, cx))
@@ -1872,6 +2031,32 @@ pub(crate) fn logo() -> std::sync::Arc<gpui::Image> {
 /// A tile in the rail: a space's picture, or its initials on its accent
 /// when it's the open one (on the raised surface otherwise).
 #[allow(clippy::too_many_arguments)]
+struct DraggedSpace(String);
+
+struct DragPill {
+    label: String,
+    bg: Hsla,
+    border: Hsla,
+    fg: Hsla,
+}
+
+impl Render for DragPill {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px(space(10.))
+            .py(space(6.))
+            .rounded(corner(10.))
+            .bg(self.bg)
+            .border_1()
+            .border_color(self.border)
+            .text_size(text(12.))
+            .font_weight(FontWeight::BOLD)
+            .text_color(self.fg)
+            .shadow_md()
+            .child(self.label.clone())
+    }
+}
+
 /// A rail entry wrapped with Discord's left-edge active/unread pill indicator.
 fn rail_pill(active: bool, unread: bool, palette: &Palette, child: impl IntoElement) -> impl IntoElement {
     div()

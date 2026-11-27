@@ -57,6 +57,10 @@ pub struct Prefs {
     pub recent_reactions: Vec<String>,
     /// Spaces whose muted rooms are left out of the list, by id.
     pub hide_muted_in_spaces: Vec<String>,
+    /// Custom left-rail order of space IDs (Discord-style server ordering).
+    pub space_order: Vec<String>,
+    /// Show OpenGraph link preview cards under pasted URLs.
+    pub link_previews: bool,
 }
 
 /// How many recent reactions are kept.
@@ -109,6 +113,8 @@ impl Default for Prefs {
             skin_tone: 0,
             recent_reactions: ["💜", "😹", "🥺", "✨", "👀", "🔥"].map(String::from).to_vec(),
             hide_muted_in_spaces: Vec::new(),
+            space_order: Vec::new(),
+            link_previews: true,
         }
     }
 }

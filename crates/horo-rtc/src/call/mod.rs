@@ -157,15 +157,18 @@ enum Command {
     Leave,
 }
 
-/// The remote side of the mix: one jitter buffer per subscribed track.
+/// The remote side of the mix: one jitter buffer per subscribed track, plus
+/// per-participant local gain (0.0 = locally muted, 1.0 = normal, up to 2.0).
 #[derive(Default)]
 struct Remotes {
     tracks: HashMap<Mid, Remote>,
+    volumes: HashMap<String, f32>,
 }
 
 struct Remote {
     buffer: JitterBuffer,
     last_packet: Instant,
+    identity: Option<String>,
 }
 
 /// A joined call. Dropping it leaves.
@@ -173,6 +176,7 @@ pub struct Call {
     commands: mpsc::UnboundedSender<Command>,
     muted: Arc<AtomicBool>,
     deafened: Arc<AtomicBool>,
+    remotes: Arc<Mutex<Remotes>>,
     /// The noise gate's threshold (dBFS, as f32 bits), read by the
     /// microphone each frame.
     gate: Arc<AtomicU32>,
@@ -303,8 +307,8 @@ impl Call {
             echo: None,
         };
         let deafened = Arc::new(AtomicBool::new(false));
-        let speaker = Speaker { remotes, frames: Vec::new(), echo: None, deafened: deafened.clone() };
-        Ok(Joined { call: Call { commands, muted, deafened, gate: threshold, identity, task }, microphone, speaker, events, screens, camera, screen })
+        let speaker = Speaker { remotes: remotes.clone(), frames: Vec::new(), echo: None, deafened: deafened.clone() };
+        Ok(Joined { call: Call { commands, muted, deafened, remotes, gate: threshold, identity, task }, microphone, speaker, events, screens, camera, screen })
     }
 
     /// Stop sending the microphone, and tell the room.
@@ -329,9 +333,21 @@ impl Call {
     }
 
     /// Stop playing everyone else (the microphone is the caller's to mute
-    /// too, as deafening usually does).
+    /// Stop (or start again) hearing the call (deafening).
     pub fn set_deafened(&self, deafened: bool) {
         self.deafened.store(deafened, Ordering::Relaxed);
+    }
+
+    /// Set a remote participant's local playback volume (`0.0` = local mute,
+    /// `1.0` = 100%, up to `2.0` = 200%).
+    pub fn set_participant_volume(&self, identity: &str, volume: f32) {
+        let clamped = volume.clamp(0.0, 2.0);
+        let mut remotes = self.remotes.lock().unwrap();
+        if (clamped - 1.0).abs() < 0.001 {
+            remotes.volumes.remove(identity);
+        } else {
+            remotes.volumes.insert(identity.to_owned(), clamped);
+        }
     }
 
     /// Change the noise gate's threshold mid-call (dBFS; at
@@ -996,8 +1012,13 @@ impl Engine {
         match event {
             PeerEvent::Audio { mid, rtp_time, data } => {
                 let now = Instant::now();
+                let owner = self
+                    .owners
+                    .get(&mid.to_string())
+                    .and_then(|(sid, _)| self.participants.get(sid))
+                    .map(|p| p.identity.clone());
                 let mut remotes = self.remotes.lock().unwrap();
-                let fresh = || JitterBuffer::new().map(|buffer| Remote { buffer, last_packet: now });
+                let fresh = || JitterBuffer::new().map(|buffer| Remote { buffer, last_packet: now, identity: owner.clone() });
                 let remote = match remotes.tracks.entry(mid) {
                     std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                     std::collections::hash_map::Entry::Vacant(entry) => match fresh() {
@@ -1010,6 +1031,9 @@ impl Engine {
                         Ok(fresh) => *remote = fresh,
                         Err(e) => return Err(Trouble::End(format!("decoder: {e}"))),
                     }
+                }
+                if remote.identity.is_none() {
+                    remote.identity = owner;
                 }
                 remote.last_packet = now;
                 remote.buffer.push(rtp_time, data.to_vec(), now);
@@ -1132,6 +1156,7 @@ impl Speaker {
     pub fn pull(&mut self, out: &mut [f32; FRAME]) {
         let now = Instant::now();
         let mut remotes = self.remotes.lock().unwrap();
+        let volumes = remotes.volumes.clone();
         let live = remotes.tracks.values_mut().filter(|r| now.duration_since(r.last_packet) <= IDLE);
         let mut used = 0;
         for remote in live {
@@ -1139,6 +1164,15 @@ impl Speaker {
                 self.frames.push([0.0; FRAME]);
             }
             if remote.buffer.pop(&mut self.frames[used]).is_ok() {
+                let gain = remote.identity.as_deref().and_then(|id| volumes.get(id).copied()).unwrap_or(1.0);
+                if gain <= 0.001 {
+                    continue;
+                }
+                if (gain - 1.0).abs() > 0.001 {
+                    for s in &mut self.frames[used] {
+                        *s *= gain;
+                    }
+                }
                 used += 1;
             }
         }

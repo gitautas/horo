@@ -911,6 +911,18 @@ pub async fn pinned_events(core: &MatrixCore, room_id: &RoomId) -> Result<Vec<Ti
     Ok(items.iter().map(|i| convert_timeline_item(i, &own_user)).collect())
 }
 
+/// Pin or unpin an event in a room (`m.room.pinned_events`).
+pub async fn pin_event(core: &MatrixCore, room_id: &RoomId, event_id: &str, pin: bool) -> Result<bool> {
+    let room = core.room(&room_id.to_owned())?;
+    let event_id = EventId::parse(event_id)?;
+    let changed = if pin {
+        room.pin_event(&event_id).await?
+    } else {
+        room.unpin_event(&event_id).await?
+    };
+    Ok(changed)
+}
+
 /// The plain-text body of an event, for building reply previews in the composer.
 pub async fn event_body(
     core: &MatrixCore,

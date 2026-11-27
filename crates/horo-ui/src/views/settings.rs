@@ -41,6 +41,7 @@ use crate::{
 pub struct Settings {
     store: Entity<Store>,
     focus: FocusHandle,
+    search: Entity<InputState>,
     security: Option<Entity<Security>>,
     packs: Option<Entity<PackSettings>>,
     /// Your profile as the server last said; `None` while it loads.
@@ -121,6 +122,21 @@ impl<T: Send + 'static> Preview<T> {
 
 impl Settings {
     pub fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Settings {
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("search settings…"));
+        cx.subscribe(&search, |this, input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                let q = input.read(cx).value().trim().to_lowercase();
+                if !q.is_empty() {
+                    let matched: Vec<SettingsSection> = SettingsSection::ALL.into_iter().filter(|s| section_matches(*s, &q)).collect();
+                    if matched.len() == 1 {
+                        let only = matched[0];
+                        this.store.update(cx, |s, cx| s.show_settings(Some(only), cx));
+                    }
+                }
+                cx.notify();
+            }
+        })
+        .detach();
         let status = cx.new(|cx| InputState::new(window, cx).placeholder("vibing~"));
         let bio = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx);
@@ -211,6 +227,7 @@ impl Settings {
         let mut settings = Settings {
             store,
             focus,
+            search,
             security: None,
             packs: None,
             profile: None,
@@ -1008,6 +1025,17 @@ impl Settings {
                                     this.store.update(cx, |s, cx| s.zoom(None, cx));
                                 })))
                             }),
+                    )
+                    .child(
+                        h_flex()
+                            .pt_2()
+                            .justify_between()
+                            .items_center()
+                            .child(field(palette, "link previews", Some("show title and summary cards under pasted URLs.")))
+                            .child(Switch::new("link-previews").checked(prefs.link_previews).on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                let on = *checked;
+                                this.store.update(cx, |s, cx| s.update_prefs(|p| p.link_previews = on, cx));
+                            }))),
                     ),
             )
             .into_any_element()
@@ -1073,7 +1101,12 @@ impl Render for Settings {
             self.packs = Some(cx.new(|cx| PackSettings::new(store, window, cx)));
         }
 
-        let nav_items = v_flex().px(space(10.)).gap(zpx(2.)).children(SettingsSection::ALL.into_iter().map(|entry| {
+        let query = self.search.read(cx).value().trim().to_lowercase();
+        let nav_sections: Vec<SettingsSection> = SettingsSection::ALL
+            .into_iter()
+            .filter(|entry| query.is_empty() || section_matches(*entry, &query))
+            .collect();
+        let nav_items = v_flex().px(space(10.)).gap(zpx(2.)).children(nav_sections.into_iter().map(|entry| {
             let selected = entry == section;
             h_flex()
                 .id(SharedString::from(format!("settings-{}", entry.label())))
@@ -1134,11 +1167,25 @@ impl Render for Settings {
                         div()
                             .px(space(16.))
                             .pt(space(18.))
-                            .pb(space(10.))
+                            .pb(space(8.))
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(palette.text_tertiary)
                             .child("settings"),
+                    )
+                    .child(
+                        h_flex()
+                            .mx(space(10.))
+                            .mb(space(8.))
+                            .px(space(10.))
+                            .py(space(4.))
+                            .gap(space(6.))
+                            .rounded(corner(10.))
+                            .bg(palette.inset)
+                            .border_1()
+                            .border_color(palette.border_subtle)
+                            .child(Icon::new(IconName::Search).size(zpx(13.)).text_color(palette.text_tertiary))
+                            .child(div().flex_1().min_w_0().text_size(text(12.5)).child(Input::new(&self.search).appearance(false))),
                     )
                     .child(nav_items),
             )
@@ -1240,6 +1287,22 @@ fn section_icon(section: SettingsSection) -> Icon {
         SettingsSection::Appearance => voice::icon("icons/sparkles.svg"),
         SettingsSection::About => Icon::new(IconName::Info),
     }
+}
+
+fn section_matches(section: SettingsSection, needle: &str) -> bool {
+    if section.label().contains(needle) {
+        return true;
+    }
+    let keywords: &[&str] = match section {
+        SettingsSection::Account => &["profile", "bio", "status", "avatar", "cover", "sign out", "logout", "user", "homeserver"],
+        SettingsSection::Security => &["device", "verify", "backup", "recovery", "key", "encryption", "cross-signing"],
+        SettingsSection::Voice => &["mic", "microphone", "speaker", "audio", "camera", "video", "noise", "gate", "sensitivity", "call"],
+        SettingsSection::Notifications => &["banner", "sound", "volume", "ring", "alert", "ping", "mute"],
+        SettingsSection::Packs => &["emoji", "emote", "sticker", "pack", "shortcode"],
+        SettingsSection::Appearance => &["theme", "accent", "color", "colour", "shade", "contrast", "font", "text", "size", "zoom", "link", "preview"],
+        SettingsSection::About => &["version", "update", "changelog", "gpui", "matrix"],
+    };
+    keywords.iter().any(|k| k.contains(needle))
 }
 
 fn heading(palette: &Palette, text: &str) -> gpui::Div {

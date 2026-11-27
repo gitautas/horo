@@ -41,6 +41,12 @@ gpui::actions!(
         OpenQuickSwitcher,
         /// Search messages in the open room (⌘F on macOS, Ctrl+F elsewhere).
         FindInRoom,
+        /// Step to the previous / next channel in the sidebar (Alt+↑ / Alt+↓).
+        PrevRoom,
+        NextRoom,
+        /// Jump to the previous / next unread room (Alt+Shift+↑ / Alt+Shift+↓).
+        PrevUnreadRoom,
+        NextUnreadRoom,
         Quit,
         /// Settings, at "about".
         About,
@@ -134,6 +140,10 @@ fn shortcuts() -> Vec<gpui::KeyBinding> {
         KeyBinding::new(zoom[1], ZoomIn, None),
         KeyBinding::new(zoom[2], ZoomOut, None),
         KeyBinding::new(zoom[3], ZoomReset, None),
+        KeyBinding::new("alt-up", PrevRoom, None),
+        KeyBinding::new("alt-down", NextRoom, None),
+        KeyBinding::new("alt-shift-up", PrevUnreadRoom, None),
+        KeyBinding::new("alt-shift-down", NextUnreadRoom, None),
     ];
     #[cfg(target_os = "macos")]
     keys.extend([

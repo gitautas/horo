@@ -71,6 +71,8 @@ pub struct CallView {
     pub identity: Option<String>,
     /// Everyone else.
     pub participants: Vec<Participant>,
+    /// Per-participant local playback volume (`0.0` = muted, `1.0` = 100%, up to `2.0`).
+    pub participant_volumes: std::collections::HashMap<String, f32>,
     /// Identities speaking now, by the server's ear (ours is ignored: it
     /// arrives late, see `self_speaking`).
     pub speaking: Vec<String>,
@@ -159,6 +161,7 @@ impl Store {
             sharing: false,
             identity: None,
             participants: Vec::new(),
+            participant_volumes: std::collections::HashMap::new(),
             speaking: Vec::new(),
             self_speaking: false,
             loud_at: None,
@@ -422,6 +425,22 @@ impl Store {
         }
         if deafened {
             self.set_call_muted(true, cx);
+        }
+        cx.notify();
+    }
+
+    /// Adjust a remote participant's local volume (`0.0`..=`2.0`) in the active call.
+    pub fn set_participant_volume(&mut self, identity: String, volume: f32, cx: &mut Context<Self>) {
+        let clamped = volume.clamp(0.0, 2.0);
+        if let Some(live) = &self.call_live {
+            live.call.set_participant_volume(&identity, clamped);
+        }
+        if let Some(view) = &mut self.call {
+            if (clamped - 1.0).abs() < 0.001 {
+                view.participant_volumes.remove(&identity);
+            } else {
+                view.participant_volumes.insert(identity, clamped);
+            }
         }
         cx.notify();
     }

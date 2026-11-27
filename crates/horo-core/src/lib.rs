@@ -8,6 +8,7 @@
 pub mod dto;
 pub mod error;
 pub mod events;
+pub mod link_preview;
 pub mod matrix;
 pub mod update;
 pub mod verification;

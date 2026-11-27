@@ -106,6 +106,8 @@ pub struct Store {
     last_activity: Instant,
     /// We've told the server we're away.
     away: bool,
+    /// Manual status picked from the bottom-left user bar (`None` = auto online/idle).
+    manual_presence: Option<OwnPresence>,
     /// The profile card open, and where it points.
     pub profile_card: Option<ProfileTarget>,
     /// The call we're in (or joining, or that just failed).
@@ -317,6 +319,7 @@ impl Store {
             zoom_epoch: 0,
             last_activity: Instant::now(),
             away: false,
+            manual_presence: None,
             profile_card: None,
             call: None,
             call_live: None,
@@ -930,6 +933,9 @@ impl Store {
     /// Someone touched the window: back to online if we'd gone away.
     pub fn activity(&mut self, cx: &mut Context<Self>) {
         self.last_activity = Instant::now();
+        if self.manual_presence.is_some() {
+            return;
+        }
         if self.away {
             self.away = false;
             self.publish_own(OwnPresence::Online, cx);
@@ -943,7 +949,11 @@ impl Store {
             loop {
                 cx.background_executor().timer(Duration::from_secs(30)).await;
                 let Ok(()) = this.update(cx, |store, cx| {
-                    if !store.away && matches!(store.phase, Phase::SignedIn(_)) && crate::presence::idle(store.last_activity) {
+                    if store.manual_presence.is_none()
+                        && !store.away
+                        && matches!(store.phase, Phase::SignedIn(_))
+                        && crate::presence::idle(store.last_activity)
+                    {
                         store.away = true;
                         store.publish_own(OwnPresence::Unavailable, cx);
                     }
@@ -953,6 +963,28 @@ impl Store {
             }
         })
         .detach();
+    }
+
+    /// Manually pick Online, Away, or Invisible from the bottom-left user bar.
+    pub fn set_manual_presence(&mut self, presence: OwnPresence, cx: &mut Context<Self>) {
+        self.manual_presence = match presence {
+            OwnPresence::Online => None,
+            other => Some(other),
+        };
+        self.away = matches!(presence, OwnPresence::Unavailable);
+        self.publish_own(presence, cx);
+        cx.notify();
+    }
+
+    /// Effective status shown in the bottom-left user bar.
+    pub fn shown_own_presence(&self) -> (crate::presence::Shown, &'static str) {
+        match self.manual_presence {
+            Some(OwnPresence::Offline) => (crate::presence::Shown::Offline, "invisible"),
+            Some(OwnPresence::Unavailable) => (crate::presence::Shown::Away, "away"),
+            Some(OwnPresence::Online) => (crate::presence::Shown::Online, "online"),
+            None if self.away => (crate::presence::Shown::Away, "away"),
+            None => (crate::presence::Shown::Online, "online"),
+        }
     }
 
     fn publish_own(&mut self, presence: OwnPresence, cx: &mut Context<Self>) {
