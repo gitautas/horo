@@ -54,7 +54,65 @@ fn build_client(timeout_secs: u64) -> Option<reqwest::Client> {
         .ok()
 }
 
-/// Fetch OpenGraph metadata (or direct image info) for an `https://` URL.
+#[derive(serde::Deserialize)]
+struct OEmbedResponse {
+    title: Option<String>,
+    author_name: Option<String>,
+    provider_name: Option<String>,
+    thumbnail_url: Option<String>,
+}
+
+/// Known oEmbed endpoints for heavy sites whose HTML puts `<meta og:*>` far
+/// down the document or behind consent walls (matching how Discord embeds them).
+fn oembed_endpoint(parsed: &url::Url) -> Option<(url::Url, Option<u32>)> {
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    let (base, color): (&str, Option<u32>) = match host {
+        "youtube.com" | "m.youtube.com" | "music.youtube.com" | "youtu.be" => {
+            ("https://www.youtube.com/oembed", Some(0xFF0000))
+        }
+        "vimeo.com" => ("https://vimeo.com/api/oembed.json", Some(0x1AB7EA)),
+        "open.spotify.com" => ("https://open.spotify.com/oembed", Some(0x1DB954)),
+        "soundcloud.com" => ("https://soundcloud.com/oembed", Some(0xFF5500)),
+        "tiktok.com" | "vm.tiktok.com" => ("https://www.tiktok.com/oembed", None),
+        "reddit.com" | "old.reddit.com" => ("https://www.reddit.com/oembed", Some(0xFF4500)),
+        _ => return None,
+    };
+    let mut endpoint = url::Url::parse(base).ok()?;
+    endpoint.query_pairs_mut().append_pair("url", parsed.as_str()).append_pair("format", "json");
+    Some((endpoint, color))
+}
+
+async fn fetch_oembed(client: &reqwest::Client, original_url: &str, parsed: &url::Url, host: &str) -> Option<LinkPreview> {
+    let (endpoint, color) = oembed_endpoint(parsed)?;
+    let resp = client.get(endpoint).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let data: OEmbedResponse = resp.json().await.ok()?;
+    let title = data.title.map(|s| truncate(s.trim(), 140)).filter(|s| !s.is_empty())?;
+    let site = data
+        .provider_name
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| host.strip_prefix("www.").unwrap_or(host).to_owned());
+    let description = data.author_name.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
+    let image = data
+        .thumbnail_url
+        .and_then(|raw| url::Url::parse(raw.trim()).ok())
+        .filter(is_safe_url)
+        .map(|u| u.to_string());
+    Some(LinkPreview {
+        url: original_url.to_owned(),
+        site,
+        title,
+        description,
+        image,
+        color,
+        is_direct_image: false,
+    })
+}
+
+/// Fetch OpenGraph metadata (or oEmbed / direct image info) for an `https://` URL.
 pub async fn fetch(url: &str) -> Option<LinkPreview> {
     let parsed = url::Url::parse(url).ok()?;
     if !is_safe_url(&parsed) {
@@ -62,6 +120,11 @@ pub async fn fetch(url: &str) -> Option<LinkPreview> {
     }
     let host = parsed.host_str()?.to_owned();
     let client = build_client(6)?;
+
+    if let Some(preview) = fetch_oembed(&client, url, &parsed, &host).await {
+        return Some(preview);
+    }
+
     let mut resp = client
         .get(parsed.clone())
         .header(reqwest::header::ACCEPT, "text/html,application/xhtml+xml,image/*;q=0.9,*/*;q=0.8")
@@ -99,7 +162,7 @@ pub async fn fetch(url: &str) -> Option<LinkPreview> {
         return None;
     }
 
-    const MAX_BYTES: usize = 256 * 1024;
+    const MAX_BYTES: usize = 1024 * 1024;
     let mut buf = Vec::with_capacity(32 * 1024);
     while let Ok(Some(chunk)) = resp.chunk().await {
         let take = (MAX_BYTES - buf.len()).min(chunk.len());
@@ -312,5 +375,22 @@ mod tests {
         assert_eq!(preview.image.as_deref(), Some("https://github.com/assets/preview.png"));
         assert_eq!(preview.color, Some(0x5865F2));
         assert!(!preview.is_direct_image);
+    }
+
+    #[test]
+    fn builds_oembed_endpoint_for_youtube_and_spotify() {
+        let yt = url::Url::parse("https://www.youtube.com/watch?v=9j4HJp-AsOo").unwrap();
+        let (ep, color) = oembed_endpoint(&yt).unwrap();
+        assert_eq!(ep.host_str(), Some("www.youtube.com"));
+        assert_eq!(ep.path(), "/oembed");
+        assert_eq!(color, Some(0xFF0000));
+
+        let sp = url::Url::parse("https://open.spotify.com/track/123").unwrap();
+        let (ep, color) = oembed_endpoint(&sp).unwrap();
+        assert_eq!(ep.host_str(), Some("open.spotify.com"));
+        assert_eq!(color, Some(0x1DB954));
+
+        let other = url::Url::parse("https://example.com/page").unwrap();
+        assert!(oembed_endpoint(&other).is_none());
     }
 }
