@@ -951,7 +951,7 @@ impl Shell {
                             .border_dashed()
                             .border_color(palette.border)
                             .hover(|d| d.rounded(corner(14.)).bg(palette.raised))
-                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("explore servers").build(window, cx))
+                            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("explore spaces").build(window, cx))
                             .child(voice::icon("icons/compass.svg").size(zpx(20.)).text_color(palette.text_tertiary))
                             .on_click(cx.listener(|this, _, window, cx| this.open_explore(window, cx))),
                     ),
@@ -1289,7 +1289,7 @@ impl Shell {
             } else if rooms.is_empty() {
                 "loading rooms…".to_owned()
             } else if open_space.is_some() {
-                "nothing here yet — this server has no channels you've joined".to_owned()
+                "nothing here yet — this space has no rooms you've joined".to_owned()
             } else {
                 "no direct messages yet~".to_owned()
             };

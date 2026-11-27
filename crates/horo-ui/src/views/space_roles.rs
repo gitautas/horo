@@ -258,7 +258,7 @@ impl Render for SpaceRoles {
                 .text_size(text(12.))
                 .text_color(palette.text_tertiary)
                 .child(if can_manage {
-                    "no roles yet — create one above to color names, group member lists, and mention @RoleName across every channel in this space~"
+                    "no roles yet — create one above to color names, group member lists, and mention @RoleName across every room in this space~"
                 } else {
                     "no roles have been set up for this space yet."
                 })

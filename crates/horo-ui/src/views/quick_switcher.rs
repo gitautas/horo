@@ -230,7 +230,7 @@ impl Render for QuickSwitcher {
                     }
                     Entry::Space { id, name, avatar_url, unread } => {
                         let leading = avatar(id, name, avatar_url.as_deref(), zpx(24.), cx).into_any_element();
-                        (leading, name.clone(), "server".to_owned(), *unread)
+                        (leading, name.clone(), "space".to_owned(), *unread)
                     }
                 };
 
@@ -342,7 +342,7 @@ impl Render for QuickSwitcher {
                                         .text_center()
                                         .text_size(text(13.))
                                         .text_color(palette.text_tertiary)
-                                        .child("no matching conversations or channels~"),
+                                        .child("no matching rooms or spaces~"),
                                 )
                             })
                             .children(rows),

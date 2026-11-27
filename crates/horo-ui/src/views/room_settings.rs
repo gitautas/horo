@@ -60,11 +60,11 @@ impl RoomSettings {
     pub fn new(store: Entity<Store>, room_id: String, window: &mut Window, cx: &mut Context<Self>) -> RoomSettings {
         let room = store.read(cx).rooms.iter().find(|r| r.id == room_id).cloned();
         let (name_now, topic_now) = room.map(|r| (r.name, r.topic.unwrap_or_default())).unwrap_or_default();
-        let name = cx.new(|cx| InputState::new(window, cx).placeholder("channel-name").default_value(name_now));
+        let name = cx.new(|cx| InputState::new(window, cx).placeholder("room name").default_value(name_now));
         let topic = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx);
             state.set_auto_grow(2, 5, cx);
-            state.set_placeholder("let everyone know how to use this channel~", window, cx);
+            state.set_placeholder("what's this room for?", window, cx);
             state.set_value(topic_now, window, cx);
             state
         });
@@ -369,7 +369,7 @@ impl RoomSettings {
                         .text_size(text(12.))
                         .line_height(gpui::relative(1.5))
                         .text_color(palette.text_tertiary)
-                        .child("only admins can rename or edit the topic for this channel."),
+                        .child("only admins can rename or edit the topic for this room."),
                 )
                 .into_any_element();
         }
@@ -380,7 +380,7 @@ impl RoomSettings {
                 d.child(
                     v_flex()
                         .gap(zpx(6.))
-                        .child(section_label(if room.is_direct { "chat name" } else { "channel name" }, palette))
+                        .child(section_label(if room.is_direct { "chat name" } else { "room name" }, palette))
                         .child(
                             well(palette)
                                 .when(!room.is_direct, |w| {
@@ -402,7 +402,7 @@ impl RoomSettings {
                 d.child(
                     v_flex()
                         .gap(zpx(6.))
-                        .child(section_label("channel topic", palette))
+                        .child(section_label("room topic", palette))
                         .child(well(palette).child(div().flex_1().child(Textarea::new(&self.topic).appearance(false)))),
                 )
             })
@@ -502,7 +502,7 @@ impl RoomSettings {
         } else if room.is_direct {
             "leave chat"
         } else {
-            "leave channel"
+            "leave room"
         };
         let can_delete = !invited && !room.is_direct && self.permissions.as_ref().is_some_and(|p| p.can_delete);
         let body = match self.asked {
@@ -552,7 +552,7 @@ impl RoomSettings {
                                 Button::new("delete-go")
                                     .danger()
                                     .small()
-                                    .label(if self.acting { "deleting…" } else { "delete channel" })
+                                    .label(if self.acting { "deleting…" } else { "delete room" })
                                     .disabled(self.acting)
                                     .on_click(cx.listener(|this, _, _, cx| this.delete(cx))),
                             ),
@@ -571,7 +571,7 @@ impl RoomSettings {
                 )
                 .when(can_delete, |row| {
                     row.child(
-                        Button::new("delete-ask").danger().small().label("delete channel").on_click(cx.listener(|this, _, _, cx| {
+                        Button::new("delete-ask").danger().small().label("delete room").on_click(cx.listener(|this, _, _, cx| {
                             this.asked = Some(Confirm::Delete);
                             cx.notify();
                         })),
@@ -626,7 +626,7 @@ impl Render for RoomSettings {
         let this = cx.weak_entity();
         modal(
             "room-settings",
-            if room.is_direct { "chat settings".into() } else { "channel settings".into() },
+            if room.is_direct { "chat settings".into() } else { "room settings".into() },
             520.,
             &self.focus,
             &palette,

@@ -479,7 +479,7 @@ impl Render for RoomInfo {
                     .hover(|d| d.bg(palette.raised))
                     .border_1()
                     .border_color(palette.border_subtle)
-                    .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("channel settings").build(window, cx))
+                    .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("room settings").build(window, cx))
                     .child(gpui_component::Icon::new(gpui_component::IconName::Settings).size(zpx(15.)).text_color(palette.text_secondary))
                     .child(
                         div()

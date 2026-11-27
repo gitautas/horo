@@ -142,9 +142,9 @@ impl Section {
         match (self, in_space) {
             (Section::Invites, _) => "invites",
             (Section::DirectMessages, _) => "direct messages",
-            (Section::Rooms, true) => "text channels",
+            (Section::Rooms, true) => "rooms",
             (Section::Rooms, false) => "group chats",
-            (Section::Voice, true) => "voice channels",
+            (Section::Voice, true) => "voice rooms",
             (Section::Voice, false) => "voice",
         }
     }
