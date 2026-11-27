@@ -1,24 +1,24 @@
 ## What's new
 
-### Pick your font, and your text size
+### Native desktop app (GPUI)
 
-*Settings → appearance* now has a font picker: Nunito (the default), the system
-font, Baloo, a monospace option, or the name of any font installed on your
-machine. A misspelt or missing font falls back to Nunito rather than Times.
+horo is now a native Rust desktop app built with GPUI — no WebView, lower memory
+use, faster startup, and the same Matrix E2EE and UwU design system. Existing
+installs upgrade in place and keep their session, encryption keys, and settings.
 
-There's also a slider for message text size, from 12 to 22px. It resizes
-messages and the composer, and leaves the rest of the app alone.
+### Native voice & video calls everywhere
 
-### Transparent images look like stickers
+Voice and video calls now run on horo's own native MatrixRTC + LiveKit media
+engine (`str0m`, Opus, `sonora` echo cancellation/noise suppression, VP8),
+including on Linux where WebKitGTK previously couldn't place calls at all.
 
-A PNG, WebP or GIF that's mostly see-through, like a character cut out of its
-background, now sits on the timeline without a card, a border or a dark
-background behind it. This works whichever app it was sent from.
+### Polish
 
-### Changed
-
-- The *send with enter* toggle is gone. Enter always sends, and Shift+Enter
-  starts a new line.
+- Floating modal settings window with sidebar navigation.
+- Collapsible right-hand room info sidebar (click `✕` to close, or click the
+  room/DM avatar in the top bar to reopen).
+- Cleaner attachment previews, video thumbnails, and auto-dismissing call
+  notices.
 
 <!-- Prepend the changelog for this release above this line before publishing. -->
 
@@ -29,8 +29,7 @@ and offer the new version in-app. A `.deb` is owned by your package manager
 rather than by horo, so those builds tell you a release is out and send you back
 here instead.
 
-This release is **desktop only** — the Android and iOS builds are not signed
-yet, so no `.apk` or `.ipa` is attached.
+This release is **desktop only** (macOS, Windows, Linux).
 
 ## Installing
 
@@ -46,17 +45,17 @@ open it ("Apple could not verify…"). Either:
    **Open Anyway** (macOS 15+ removed the old right-click → Open shortcut), or
 2. clear the quarantine flag in a terminal: `xattr -cr /Applications/horo.app`
 
-### Windows — `.msi` / `-setup.exe` (x64)
+### Windows — `-setup.exe` (x64)
 
 SmartScreen will show "Windows protected your PC". Click **More info → Run anyway**.
-The `-setup.exe` (NSIS) installer installs per-user and needs no admin rights; the
-`.msi` installs per-machine. On Windows-on-ARM devices, use the x64 build — it runs
-under emulation.
+The `-setup.exe` (NSIS) installer installs per-user into `%LOCALAPPDATA%\horo`
+and needs no admin rights. On Windows-on-ARM devices, use the x64 build — it
+runs under emulation.
 
 ### Linux — `.deb` / `.AppImage` (x86_64 `amd64` and arm64 `aarch64`)
 
 - **AppImage:** `chmod +x horo_*.AppImage`, then run it. No installation needed.
-- **deb:** requires Ubuntu 22.04+ / Debian 12+ (WebKitGTK 4.1):
+- **deb:** requires Ubuntu 22.04+ / Debian 12+:
   `sudo apt install ./horo_*.deb`
 - Known gap: **voice calls do not work on Linux yet** (WebKitGTK's WebRTC support
   is not enabled by the app). Everything else, including E2EE messaging, works.

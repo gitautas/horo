@@ -35,12 +35,16 @@ unread).
   installs update straight into gpui. Same signing secret. See
   `docs/releasing.md`.
 
+- Tauri removed: `src/`, `src-tauri/`, `package.json`/lock, `node_modules`,
+  `dist/`, `ts-rs` bindings, `.cargo/config.toml`, old mobile/release scripts,
+  and CI's `frontend` job and WebKit apt packages are gone. `target/` is back
+  at the workspace root, and `[profile.release]` uses `lto = "thin"`.
+
 **Next, in order:**
 
-1. Push and run `release.yml` by hand (`workflow_dispatch`: builds all five
-   rows, uploads artifacts, publishes nothing). Proves the Windows and Linux
-   packaging, and that cargo-packager takes the Tauri-generated key (the
-   rows must produce `.sig` files). Fix what breaks.
+1. Confirm all five `release.yml` `workflow_dispatch` rows pass and produce
+   `.sig` files (macOS and Linux already pass with signed bundles; Windows
+   `libvpx` MSYS2 + `/p:WholeProgramOptimization=false` fix is running in CI).
 2. Test an update end to end before tagging: an installed Tauri build and an
    installed gpui build each taking a newer gpui bundle. Watch Windows: the
    Tauri NSIS install and the cargo-packager one must agree on install
@@ -66,19 +70,10 @@ unread).
      one bad entry fails the whole manifest for every gpui install.
    - Signatures: both sides use base64-wrapped minisign boxes from the same
      key format, so the Tauri secret signs for both updaters.
-   - CI: the Intel Mac row cross-builds libvpx with `--as=nasm`; the runner
-     had no nasm. `release.yml` now installs it for that row.
-3. Remove Tauri: `src/`, `index.html`, `vite.config.ts`, `vitest.config.ts`,
-   the tsconfigs, `package.json`/lock, `node_modules`, `dist/`, `src-tauri/`
-   (the workspace member too), ts-rs bindings in horo-core and the `TS_RS_*`
-   env in `.cargo/config.toml`, CI's `frontend` job and its `mkdir dist`
-   workaround and the WebKit apt packages, `scripts/android.mjs`,
-   `scripts/ios-shim`, `scripts/bindings.mjs`, `scripts/release.mjs` (or
-   reduce it to a Cargo.toml bump), README's Tauri/mobile sections. Move
-   `target-dir` off `src-tauri/target` in `.cargo/config.toml`, and with it
-   the paths in `scripts/desktop-dev.sh`, `scripts/prune-builds.sh` and the
-   dev notes.
-4. Tag a release.
+   - CI: the Intel Mac row cross-builds libvpx with `--as=nasm` (now installed
+     via Homebrew), and Windows builds libvpx via MSYS2 `bash`/`make` + MSBuild
+     with `/p:WholeProgramOptimization=false`.
+3. Tag a release (bump `version` in `Cargo.toml`, commit, push `v*`).
 
 ## 1. Why, and what "done" means
 
