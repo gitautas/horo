@@ -55,7 +55,7 @@ jobs:
       - run: cargo build -p horo-rtc --bin horo-call
 
   rust:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7

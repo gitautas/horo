@@ -96,12 +96,12 @@ jobs:
             arch: x86_64
             formats: app,dmg
           - name: linux-x86_64
-            platform: ubuntu-22.04          # glibc 2.35 baseline (Ubuntu 22.04 / Debian 12+)
+            platform: ubuntu-24.04          # PipeWire 1.0 + glibc 2.39 baseline (Ubuntu 24.04+)
             target: x86_64-unknown-linux-gnu
             arch: x86_64
             formats: deb,appimage
           - name: linux-aarch64
-            platform: ubuntu-22.04-arm
+            platform: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             arch: aarch64
             formats: deb,appimage
