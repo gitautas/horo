@@ -483,8 +483,7 @@ fn draw(tile: &Tile, size: Size, focused: bool, store: &Entity<Store>, palette: 
 /// taking what room there is).
 /// `area` is the room the tiles have, in design pixels, when the call
 /// fills the window: everyone alike then shares it in one grid.
-fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, area: Option<(f32, f32)>, cx: &mut App) -> AnyElement {
-    let full = area.is_some();
+fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, full: bool, area: (f32, f32), cx: &mut App) -> AnyElement {
     let mut tiles = tiles(call, store, cx);
     // In the mini PiP modal: when someone has video on, focus on video tiles
     // so they stay large; when it's voice-only, show everyone's avatar tile
@@ -499,7 +498,7 @@ fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, area: Option
         FocusMode::Grid => None,
     };
     let Some(focused) = focused else {
-        let fitted = area.map(|(w, h)| fit(tiles.len(), w, h)).unwrap_or_else(|| fit(tiles.len(), 320., 184.));
+        let fitted = fit(tiles.len(), area.0, area.1);
         let drawn: Vec<AnyElement> = tiles
             .iter()
             .map(|t| draw(t, Size::Fixed(fitted.0, fitted.1), false, store, palette, cx))
@@ -525,7 +524,7 @@ fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, area: Option
     v_flex()
         .gap_2()
         .when(full, |d| d.flex_1().min_h_0())
-        .child(div().w_full().map(|d| if full { d.flex_1().min_h_0() } else { d.h(zpx(184.)) }).child(big))
+        .child(div().w_full().map(|d| if full { d.flex_1().min_h_0() } else { d.h(zpx(area.1)) }).child(big))
         .when(!others.is_empty(), |d| d.child(h_flex().flex_wrap().gap_2().when(full, |d| d.justify_center()).children(others)))
         .into_any_element()
 }
@@ -534,10 +533,14 @@ fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, area: Option
 #[derive(Clone, Copy)]
 pub struct DraggedCallPip;
 
-/// Floating mini call modal anchored in the bottom-right corner (and draggable
-/// anywhere in the window) whenever you're in a live call (unless fullscreen or
-/// minimized). Shows video tiles when anyone is on camera/screen, or participant
-/// avatar tiles with speaking rings in voice-only calls.
+/// Drag payload for resizing the floating mini call modal from a corner.
+#[derive(Clone, Copy)]
+pub struct ResizedCallPip(pub crate::call::PipResizeCorner);
+
+/// Floating mini call modal anchored in the bottom-right corner (draggable and
+/// resizable) whenever you're in a live call (unless fullscreen or minimized).
+/// Shows video tiles when anyone is on camera/screen, or participant avatar
+/// tiles with speaking rings in voice-only calls.
 pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window, cx: &mut App) -> Option<AnyElement> {
     let state = store.read(cx);
     let call = state.call.clone().filter(|c| c.is_live() && !c.fullscreen && !c.pip_hidden)?;
@@ -556,16 +559,50 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window,
     let zoom = crate::theme::zoom();
     let vp = window.viewport_size();
     let (vw, vh) = (f32::from(vp.width) / zoom, f32::from(vp.height) / zoom);
+    let (raw_w, raw_h) = call.pip_size.unwrap_or(crate::call::PIP_DEFAULT_SIZE);
+    let pip_w = raw_w.clamp(crate::call::PIP_MIN_SIZE.0, (vw - 24.).min(960.).max(crate::call::PIP_MIN_SIZE.0));
+    let pip_h = raw_h.clamp(crate::call::PIP_MIN_SIZE.1, (vh - 140.).min(640.).max(crate::call::PIP_MIN_SIZE.1));
     let (raw_right, raw_bottom) = call.pip_pos.unwrap_or((18., 18.));
-    let right = raw_right.clamp(12., (vw - 344. - 12.).max(12.));
-    let bottom = raw_bottom.clamp(12., (vh - 120.).max(12.));
+    let right = raw_right.clamp(12., (vw - pip_w - 12.).max(12.));
+    let bottom = raw_bottom.clamp(12., (vh - pip_h - 110.).max(12.));
+
+    let resize_handle = |id: &'static str, corner: crate::call::PipResizeCorner, cursor: gpui::CursorStyle, store: Entity<Store>| {
+        div()
+            .id(id)
+            .absolute()
+            .size(zpx(16.))
+            .cursor(cursor)
+            .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
+                cx.stop_propagation();
+                let z = crate::theme::zoom();
+                let pos = (f32::from(event.position.x) / z, f32::from(event.position.y) / z);
+                store.update(cx, |s, _| s.begin_call_pip_resize(pos));
+            })
+            .on_drag(ResizedCallPip(corner), |_, _, _, cx| cx.new(|_| gpui::EmptyView))
+    };
+
+    let tl_handle = resize_handle("call-pip-resize-tl", crate::call::PipResizeCorner::TopLeft, gpui::CursorStyle::ResizeUpLeftDownRight, store.clone())
+        .top_0()
+        .left_0();
+    let bl_handle = resize_handle("call-pip-resize-bl", crate::call::PipResizeCorner::BottomLeft, gpui::CursorStyle::ResizeUpRightDownLeft, store.clone())
+        .bottom_0()
+        .left_0();
+    let br_handle = resize_handle("call-pip-resize-br", crate::call::PipResizeCorner::BottomRight, gpui::CursorStyle::ResizeUpLeftDownRight, store.clone())
+        .bottom_0()
+        .right_0()
+        .flex()
+        .items_end()
+        .justify_end()
+        .p(zpx(4.))
+        .child(div().size(zpx(6.)).rounded_br(corner(2.)).border_r_2().border_b_2().border_color(palette.text_tertiary).opacity(0.55));
+
     Some(
         v_flex()
             .id("call-floating")
             .absolute()
             .bottom(zpx(bottom))
             .right(zpx(right))
-            .w(zpx(344.))
+            .w(zpx(pip_w))
             .occlude()
             .rounded(corner(16.))
             .bg(palette.card)
@@ -638,9 +675,12 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window,
                     .p(space(10.))
                     .gap(space(8.))
                     .when(connecting, |col| col.child(div().text_xs().text_color(palette.text_tertiary).child("joining the call…")))
-                    .child(stage(&call, store, palette, None, cx))
+                    .child(stage(&call, store, palette, false, (pip_w - 20., pip_h), cx))
                     .child(h_flex().justify_center().child(controls(store, &call, "float"))),
             )
+            .child(tl_handle)
+            .child(bl_handle)
+            .child(br_handle)
             .into_any_element(),
     )
 }
@@ -680,7 +720,7 @@ pub fn fullscreen(store: &Entity<Store>, palette: &Palette, window: &gpui::Windo
                             .on_click(move |_, _, cx| back.update(cx, |s, cx| s.set_call_fullscreen(false, cx))),
                     ),
             )
-            .child(stage(&call, store, palette, Some(area), cx))
+            .child(stage(&call, store, palette, true, area, cx))
             .child(h_flex().justify_center().child(controls(store, &call, "full")))
             .into_any_element(),
     )

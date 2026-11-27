@@ -1900,6 +1900,14 @@ impl Render for Shell {
                 let viewport = (f32::from(vp.width) / zoom, f32::from(vp.height) / zoom);
                 this.store.update(cx, |s, cx| s.move_call_pip_drag(pos, viewport, cx));
             }))
+            .on_drag_move(cx.listener(|this, event: &gpui::DragMoveEvent<voice::ResizedCallPip>, window, cx| {
+                let corner = event.drag(cx).0;
+                let zoom = crate::theme::zoom();
+                let pos = (f32::from(event.event.position.x) / zoom, f32::from(event.event.position.y) / zoom);
+                let vp = window.viewport_size();
+                let viewport = (f32::from(vp.width) / zoom, f32::from(vp.height) / zoom);
+                this.store.update(cx, |s, cx| s.move_call_pip_resize(corner, pos, viewport, cx));
+            }))
             .child(self.rail(&palette, cx))
             .child(self.room_list(&palette, cx))
             // Cameras move: draw again next frame while one is in the call.

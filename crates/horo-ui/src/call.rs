@@ -55,6 +55,18 @@ pub enum FocusMode {
     Grid,
 }
 
+/// Which corner of the floating mini call modal is being dragged to resize it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipResizeCorner {
+    TopLeft,
+    BottomLeft,
+    BottomRight,
+}
+
+/// Default width and video-stage height of the floating mini call modal (design px).
+pub const PIP_DEFAULT_SIZE: (f32, f32) = (344., 184.);
+pub const PIP_MIN_SIZE: (f32, f32) = (260., 140.);
+
 /// The call, as the UI draws it.
 #[derive(Debug, Clone)]
 pub struct CallView {
@@ -83,8 +95,12 @@ pub struct CallView {
     pub pip_hidden: bool,
     /// Custom `(right, bottom)` offset in design pixels for the draggable mini call modal.
     pub pip_pos: Option<(f32, f32)>,
+    /// Custom `(width, stage_height)` in design pixels for the resizable mini call modal.
+    pub pip_size: Option<(f32, f32)>,
     /// Drag anchor `((start_mouse_x, start_mouse_y), (start_right, start_bottom))` in design pixels.
     pip_drag_anchor: Option<((f32, f32), (f32, f32))>,
+    /// Resize anchor `(start_mouse, start_rb, start_size)` in design pixels.
+    pip_resize_anchor: Option<((f32, f32), (f32, f32), (f32, f32))>,
     /// Identities speaking now, by the server's ear (ours is ignored: it
     /// arrives late, see `self_speaking`).
     pub speaking: Vec<String>,
@@ -177,7 +193,9 @@ impl Store {
             mixer_open: false,
             pip_hidden: false,
             pip_pos: None,
+            pip_size: None,
             pip_drag_anchor: None,
+            pip_resize_anchor: None,
             speaking: Vec::new(),
             self_speaking: false,
             loud_at: None,
@@ -539,13 +557,63 @@ impl Store {
         if let Some(view) = &mut self.call
             && let Some((start_mouse, start_rb)) = view.pip_drag_anchor
         {
+            let (pip_w, pip_h) = view.pip_size.unwrap_or(PIP_DEFAULT_SIZE);
             let dx = mouse.0 - start_mouse.0;
             let dy = mouse.1 - start_mouse.1;
-            let max_right = (viewport.0 - 344. - 12.).max(12.);
-            let max_bottom = (viewport.1 - 120.).max(12.);
+            let max_right = (viewport.0 - pip_w - 12.).max(12.);
+            let max_bottom = (viewport.1 - pip_h - 110.).max(12.);
             let right = (start_rb.0 - dx).clamp(12., max_right);
             let bottom = (start_rb.1 - dy).clamp(12., max_bottom);
             view.pip_pos = Some((right, bottom));
+            cx.notify();
+        }
+    }
+
+    pub fn begin_call_pip_resize(&mut self, mouse: (f32, f32)) {
+        if let Some(view) = &mut self.call {
+            let rb = view.pip_pos.unwrap_or((18., 18.));
+            let size = view.pip_size.unwrap_or(PIP_DEFAULT_SIZE);
+            view.pip_resize_anchor = Some((mouse, rb, size));
+        }
+    }
+
+    pub fn move_call_pip_resize(&mut self, corner: PipResizeCorner, mouse: (f32, f32), viewport: (f32, f32), cx: &mut Context<Self>) {
+        if let Some(view) = &mut self.call
+            && let Some((start_mouse, start_rb, start_size)) = view.pip_resize_anchor
+        {
+            let dx = mouse.0 - start_mouse.0;
+            let dy = mouse.1 - start_mouse.1;
+            let max_w = (viewport.0 - 24.).min(960.).max(PIP_MIN_SIZE.0);
+            let max_h = (viewport.1 - 140.).min(640.).max(PIP_MIN_SIZE.1);
+
+            let (new_w, new_right) = match corner {
+                PipResizeCorner::TopLeft | PipResizeCorner::BottomLeft => {
+                    let w = (start_size.0 - dx).clamp(PIP_MIN_SIZE.0, (viewport.0 - start_rb.0 - 12.).min(max_w).max(PIP_MIN_SIZE.0));
+                    (w, start_rb.0)
+                }
+                PipResizeCorner::BottomRight => {
+                    let w = (start_size.0 + dx).clamp(PIP_MIN_SIZE.0, max_w);
+                    let dw = w - start_size.0;
+                    let r = (start_rb.0 - dw).clamp(12., (viewport.0 - w - 12.).max(12.));
+                    (w, r)
+                }
+            };
+
+            let (new_h, new_bottom) = match corner {
+                PipResizeCorner::TopLeft => {
+                    let h = (start_size.1 - dy).clamp(PIP_MIN_SIZE.1, (viewport.1 - start_rb.1 - 110.).min(max_h).max(PIP_MIN_SIZE.1));
+                    (h, start_rb.1)
+                }
+                PipResizeCorner::BottomLeft | PipResizeCorner::BottomRight => {
+                    let h = (start_size.1 + dy).clamp(PIP_MIN_SIZE.1, max_h);
+                    let dh = h - start_size.1;
+                    let b = (start_rb.1 - dh).clamp(12., (viewport.1 - h - 110.).max(12.));
+                    (h, b)
+                }
+            };
+
+            view.pip_size = Some((new_w, new_h));
+            view.pip_pos = Some((new_right, new_bottom));
             cx.notify();
         }
     }
