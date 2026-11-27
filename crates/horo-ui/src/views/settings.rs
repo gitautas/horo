@@ -444,7 +444,8 @@ impl Settings {
             .items_center()
             .justify_center()
             .map(|d| match preview {
-                Some(image) => d.child(img(image).size_full().object_fit(gpui::ObjectFit::Cover)),
+                // Rounded itself: gpui clips children to a rectangle.
+                Some(image) => d.child(img(image).size_full().rounded(zpx(13.)).object_fit(gpui::ObjectFit::Cover)),
                 None => d.child(div().text_xs().text_color(palette.text_tertiary).child(if self.cover.is_empty() { "no cover yet" } else { "loading…" })),
             });
         let dirty = self.changes(cx).is_some();

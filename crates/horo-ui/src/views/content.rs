@@ -315,7 +315,9 @@ pub fn picture(id: &str, body: &str, media: &MediaInfoDto, sticker: bool, store:
         .when(image.is_none() && !frameless, |d| d.bg(palette.inset))
         .cursor_pointer();
     let frame = match image {
-        Some(image) => frame.child(img(image).size_full().object_fit(gpui::ObjectFit::Contain)),
+        // Rounded itself: gpui clips children to a rectangle, whatever the
+        // frame's corners.
+        Some(image) => frame.child(img(image).size_full().when(!frameless, |i| i.rounded(zpx(10.))).object_fit(gpui::ObjectFit::Contain)),
         None => frame.flex().items_center().justify_center().child(div().text_xs().text_color(palette.text_tertiary).child("loading…")),
     };
     let lightbox = Lightbox { mxc: media.mxc.clone(), thumbnail: source, width: media.width, height: media.height, name: body.to_owned() };
@@ -364,7 +366,8 @@ pub fn card(id: &str, glyph: &str, body: &str, media: &MediaInfoDto, open: Open,
         .cursor_pointer()
         .hover(|d| d.border_color(palette.border_strong))
         .children(poster.map(|(image, w, h)| {
-            div().relative().w(zpx(w)).h(zpx(h)).child(img(image).size_full().object_fit(gpui::ObjectFit::Cover)).child(
+            // The card's top corners, inside its border.
+            div().relative().w(zpx(w)).h(zpx(h)).child(img(image).size_full().rounded_t(zpx(11.)).object_fit(gpui::ObjectFit::Cover)).child(
                 div().absolute().inset_0().flex().items_center().justify_center().child(
                     div().size(zpx(44.)).rounded_full().bg(Hsla { a: 0.7, ..palette.app }).flex().items_center().justify_center().child("▶"),
                 ),

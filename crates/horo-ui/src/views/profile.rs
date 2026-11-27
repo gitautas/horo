@@ -33,6 +33,8 @@ use crate::{
 const WIDTH: f32 = 320.;
 const COVER: f32 = 88.;
 const FACE: f32 = 66.;
+/// The card's corner radius.
+const CORNER: f32 = 20.;
 
 pub struct ProfileCard {
     store: Entity<Store>,
@@ -140,8 +142,11 @@ impl ProfileCard {
         let user = self.target.user_id.clone();
         let profile = self.profile.clone();
         let cover = profile.as_ref().and_then(|p| p.cover_url.clone()).and_then(|mxc| Media::image(&mxc, Some(((WIDTH * 2.) as u32, (COVER * 2.) as u32)), cx));
-        let cover = div().h(zpx(COVER)).w_full().bg(palette.raised).map(|d| match cover {
-            Some(image) => d.child(img(image).size_full().object_fit(gpui::ObjectFit::Cover)),
+        // The card's top corners, inside its border: its scroll clips to a
+        // rectangle, so the cover rounds itself.
+        let top = zpx(CORNER - 1.);
+        let cover = div().h(zpx(COVER)).w_full().rounded_t(top).bg(palette.raised).map(|d| match cover {
+            Some(image) => d.child(img(image).size_full().rounded_t(top).object_fit(gpui::ObjectFit::Cover)),
             None => d,
         });
 
@@ -273,7 +278,7 @@ impl Render for ProfileCard {
             .w(zpx(WIDTH))
             .max_h(zpx(560.))
             .overflow_y_scroll()
-            .rounded(zpx(20.))
+            .rounded(zpx(CORNER))
             .bg(palette.card)
             .border_1()
             .border_color(palette.border_strong)

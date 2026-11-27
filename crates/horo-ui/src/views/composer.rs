@@ -752,7 +752,9 @@ impl Composer {
         }
         let tiles = self.staged.iter().enumerate().map(|(i, staged)| {
             let face: AnyElement = match &staged.preview {
-                Some(source) => img(source.clone()).size_full().object_fit(gpui::ObjectFit::Cover).into_any_element(),
+                // Rounded itself, inside the tile's border: gpui clips
+                // children to a rectangle.
+                Some(source) => img(source.clone()).size_full().rounded(corner(14.) - zpx(1.)).object_fit(gpui::ObjectFit::Cover).into_any_element(),
                 None => v_flex()
                     .size_full()
                     .p(zpx(6.))

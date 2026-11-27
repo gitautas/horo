@@ -77,8 +77,9 @@ pub fn avatar(id: &str, name: &str, mxc: Option<&str>, size: Pixels, cx: &mut Ap
             .border_2()
             .border_color(palette.app)
             .bg(palette.card)
-            .overflow_hidden()
-            .child(img(image).size_full().object_fit(gpui::ObjectFit::Cover))
+            // gpui clips children to a rectangle, whatever the corners: the
+            // picture rounds itself, inside the border.
+            .child(img(image).size_full().rounded(corner(size) - gpui::px(2.)).object_fit(gpui::ObjectFit::Cover))
             .into_any_element(),
         None => monogram(id, name, size, palette.text_on_accent, palette.app).into_any_element(),
     }
