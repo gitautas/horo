@@ -110,7 +110,16 @@ fn build_msvc(source: &Path, out: &Path, target: &str) {
             .to_command()
             .current_dir(out)
             .arg("vpx.vcxproj")
-            .args(["/m", "/nologo", "/p:Configuration=Release", &format!("/p:Platform={platform}")])
+            .args([
+                "/m",
+                "/nologo",
+                "/p:Configuration=Release",
+                &format!("/p:Platform={platform}"),
+                // vpx.vcxproj enables /GL (WholeProgramOptimization) in Release,
+                // which writes MSVC LTCG bitcode instead of COFF objects; rustc
+                // can't bundle those symbols into an rlib.
+                "/p:WholeProgramOptimization=false",
+            ])
             // The project puts its output under $(SolutionDir), which only a
             // solution build sets: it's this directory.
             .arg(format!("/p:SolutionDir={}\\", out.display())),
