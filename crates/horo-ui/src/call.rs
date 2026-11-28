@@ -24,7 +24,7 @@ use crate::{backend::Backend, store::Store};
 const MEMBERSHIP_REFRESH: Duration = Duration::from_secs(60 * 60);
 
 /// What our own camera's picture is kept under, among the call's images.
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "macos"))]
 pub const OWN_CAMERA: &str = "own-camera";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -284,7 +284,7 @@ pub struct Live {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub screen: Option<crate::screen::ScreenShare>,
     /// Our camera, while it's on (and its picture, for our own tile).
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     pub camera: Option<crate::camera::Camera>,
 }
 
@@ -416,7 +416,7 @@ impl Store {
                             screen_feed: Arc::new(Mutex::new(screen_feed)),
                             ringing,
                             ringback: None,
-                            #[cfg(any(target_os = "macos", target_os = "linux"))]
+                            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
                             camera: None,
                             #[cfg(any(target_os = "macos", target_os = "linux"))]
                             screen: None,
@@ -437,7 +437,7 @@ impl Store {
                                 screen_feed: Arc::new(Mutex::new(screen_feed)),
                                 ringing: false,
                                 ringback: None,
-                                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                                #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
                                 camera: None,
                                 #[cfg(any(target_os = "macos", target_os = "linux"))]
                                 screen: None,
@@ -556,7 +556,7 @@ impl Store {
     /// other clients stop showing us in the call.
     fn hang_up(&mut self, live: Live, cx: &mut Context<Self>) {
         // The call's pictures go with it.
-        #[cfg(target_os = "linux")]
+        #[cfg(not(target_os = "macos"))]
         crate::picture::forget_all(cx);
         let task = Self::hang_up_task(live, cx);
         cx.background_spawn(task).detach();
@@ -865,14 +865,14 @@ impl Store {
         if self.prefs.video_input == before {
             return;
         }
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         if self.call_live.is_some() && self.call.as_ref().is_some_and(|c| c.camera) {
             if let Some(live) = &mut self.call_live {
                 live.camera = None;
             }
             self.set_call_camera(true, cx);
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         let _ = cx;
     }
 
@@ -1018,10 +1018,9 @@ impl Store {
         cx.notify();
     }
 
-    /// Turn our camera on or off in the call, on Linux: a PipeWire camera,
-    /// opened off the UI thread; each picture goes to the encoder from the
-    /// capture's own thread.
-    #[cfg(target_os = "linux")]
+    /// Turn our camera on or off in the call, on Linux and Windows: opened off
+    /// the UI thread; each picture goes to the encoder from the capture's own thread.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn set_call_camera(&mut self, on: bool, cx: &mut Context<Self>) {
         tracing::info!("camera {} (call live: {})", if on { "on" } else { "off" }, self.call_live.is_some());
         let Some(live) = &mut self.call_live else { return };

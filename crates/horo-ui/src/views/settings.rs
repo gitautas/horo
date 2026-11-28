@@ -67,12 +67,12 @@ pub struct Settings {
     /// The chosen microphone, listened to while the voice section is open.
     meter: Option<Preview<horo_rtc::voice::Meter>>,
     /// The chosen camera, likewise; and the cameras there are.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     camera: Option<Preview<crate::camera::Camera>>,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     cameras: Option<Vec<DeviceInfo>>,
     /// We've asked for the camera (the system asks the user once).
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     camera_asked: bool,
 }
 
@@ -245,11 +245,11 @@ impl Settings {
             devices: None,
             meter: None,
             sensitivity,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             camera: None,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             cameras: None,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             camera_asked: false,
         };
         settings.list_devices(cx);
@@ -601,7 +601,7 @@ impl Settings {
                 cx,
             ));
         }
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         {
             if self.cameras.is_none() {
                 self.cameras = Some(Vec::new());
@@ -633,7 +633,7 @@ impl Settings {
 
     fn stop_previews(&mut self) {
         self.meter = None;
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         {
             self.camera = None;
         }
@@ -823,7 +823,7 @@ impl Settings {
     }
 
     /// The camera picker, with what the chosen camera sees.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     fn camera_card(&mut self, prefs: &Prefs, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
         let cameras = self.cameras.clone().unwrap_or_default();
         let picture: AnyElement = match crate::camera::allowed() {
@@ -884,7 +884,7 @@ impl Settings {
         )
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     fn camera_card(&mut self, _prefs: &Prefs, _palette: &Palette, _cx: &mut Context<Self>) -> Option<AnyElement> {
         None
     }
@@ -1106,7 +1106,7 @@ fn preview_picture(camera: &mut crate::camera::Camera, _cx: &mut gpui::App) -> O
 }
 
 /// What the camera sees, as a mirror shows it, filling the preview.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn preview_picture(camera: &mut crate::camera::Camera, cx: &mut gpui::App) -> Option<AnyElement> {
     use gpui::StyledImage as _;
     let image = camera.mirrored_image("settings-camera", cx)?;

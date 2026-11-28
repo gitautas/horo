@@ -12,6 +12,9 @@ pub mod camera;
 #[cfg(target_os = "linux")]
 #[path = "camera_linux.rs"]
 pub mod camera;
+#[cfg(target_os = "windows")]
+#[path = "camera_windows.rs"]
+pub mod camera;
 pub mod call;
 pub mod emoji;
 pub mod media;
@@ -22,7 +25,7 @@ pub mod registration;
 pub mod presence;
 pub mod rich;
 pub mod rooms;
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "macos"))]
 pub mod picture;
 #[cfg(target_os = "linux")]
 pub mod pw_video;

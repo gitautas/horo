@@ -1307,7 +1307,6 @@ fn controls(store: &Entity<Store>, call: &CallView, prefix: &'static str) -> gpu
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     let row = {
         let (share, sharing) = (store.clone(), call.sharing);
-        let (camera, camera_on) = (store.clone(), call.camera);
         row.child(
             Button::new(SharedString::from(format!("{prefix}-call-screen")))
                 .ghost()
@@ -1316,7 +1315,11 @@ fn controls(store: &Entity<Store>, call: &CallView, prefix: &'static str) -> gpu
                 .when(sharing, |b| b.primary())
                 .on_click(move |_, _, cx| share.update(cx, |s, cx| s.set_call_screen(!sharing, cx))),
         )
-        .child(
+    };
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    let row = {
+        let (camera, camera_on) = (store.clone(), call.camera);
+        row.child(
             Button::new(SharedString::from(format!("{prefix}-call-camera")))
                 .ghost()
                 .icon(icon(if camera_on { "icons/video.svg" } else { "icons/video-off.svg" }))
@@ -1391,9 +1394,9 @@ fn own_camera(store: &Entity<Store>, fit: gpui::ObjectFit, cx: &mut App) -> Opti
     Some(gpui::surface(buffer).size_full().object_fit(fit).into_any_element())
 }
 
-/// Someone's camera (or screen, under its key) on Linux: a gpui image of
-/// the newest picture, made once per picture.
-#[cfg(target_os = "linux")]
+/// Someone's camera (or screen, under its key) on Linux & Windows: a gpui
+/// image of the newest picture, made once per picture.
+#[cfg(not(target_os = "macos"))]
 fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str, fit: gpui::ObjectFit, cx: &mut App) -> Option<AnyElement> {
     use gpui::StyledImage as _;
     let Some(picture) = screens.get(identity) else {
@@ -1404,23 +1407,13 @@ fn camera_picture(screens: &horo_rtc::call::Screens, identity: &str, fit: gpui::
     Some(gpui::img(image).size_full().object_fit(fit).into_any_element())
 }
 
-/// What our camera sees now, on Linux.
-#[cfg(target_os = "linux")]
+/// What our camera sees now, on Linux & Windows.
+#[cfg(not(target_os = "macos"))]
 fn own_camera(store: &Entity<Store>, fit: gpui::ObjectFit, cx: &mut App) -> Option<AnyElement> {
     use gpui::StyledImage as _;
     let (seq, frame) = store.read(cx).call_live.as_ref()?.camera.as_ref()?.latest()?;
     let image = crate::picture::image(crate::call::OWN_CAMERA, seq, &frame, true, cx)?;
     Some(gpui::img(image).size_full().object_fit(fit).into_any_element())
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn own_camera(_store: &Entity<Store>, _fit: gpui::ObjectFit, _cx: &mut App) -> Option<AnyElement> {
-    None
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn camera_picture(_screens: &horo_rtc::call::Screens, _identity: &str, _fit: gpui::ObjectFit, _cx: &mut App) -> Option<AnyElement> {
-    None
 }
 
 /// Whether the call has anything to look at: a camera or a shared screen,

@@ -66,3 +66,7 @@ pipewire = "0.8"
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "screencast"] }
 # Closing a portal session when sharing stops, from wherever that happens.
 futures-lite = "2"
+
+# Webcam capture on Windows via Media Foundation (pure Rust bindings).
+[target.'cfg(target_os = "windows")'.dependencies]
+nokhwa = { version = "0.10", features = ["input-msmf"] }
