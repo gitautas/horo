@@ -80,16 +80,45 @@ fn block(id: &str, block: &Block, colour: Hsla, emote: f32, rich_ctx: &RichConte
             .border_color(palette.border_strong)
             .child(rich_sized(id, inner, palette.text_secondary, emote, rich_ctx, palette, cx))
             .into_any_element(),
-        Block::Code(code) => div()
-            .w_full()
-            .p_2()
-            .rounded(palette.radius_md)
-            .bg(palette.inset)
-            .font_family(palette.mono_font.clone())
-            .text_sm()
-            .text_color(colour)
-            .child(code.clone())
-            .into_any_element(),
+        Block::Code(code) => {
+            let copy_code = code.clone();
+            div()
+                .relative()
+                .w_full()
+                .p_2()
+                .pr(zpx(56.))
+                .rounded(palette.radius_md)
+                .bg(palette.inset)
+                .font_family(palette.mono_font.clone())
+                .text_sm()
+                .text_color(colour)
+                .child(plain(format!("select/{id}"), code.clone(), palette))
+                .child(
+                    div()
+                        .id(SharedString::from(format!("copy-code-{id}")))
+                        .absolute()
+                        .top(zpx(6.))
+                        .right(zpx(6.))
+                        .px(zpx(7.))
+                        .py(zpx(2.))
+                        .rounded(zpx(6.))
+                        .bg(palette.card)
+                        .border_1()
+                        .border_color(palette.border)
+                        .font_family(palette.body_font.clone())
+                        .text_xs()
+                        .text_color(palette.text_secondary)
+                        .opacity(0.75)
+                        .cursor_pointer()
+                        .hover(|d| d.opacity(1.0).bg(palette.raised).text_color(palette.text))
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_code.clone()));
+                        })
+                        .child("copy"),
+                )
+                .into_any_element()
+        }
         Block::List { ordered, start, items } => {
             let mut list = v_flex().gap(zpx(2.));
             for (n, item) in items.iter().enumerate() {

@@ -220,7 +220,15 @@ enum Target {
 
 /// What a camera is asked for, best first: the 4:2:0 ones need no
 /// conversion but the range.
-const CAMERA_FORMATS: &[VideoFormat] = &[VideoFormat::NV12, VideoFormat::I420, VideoFormat::YUY2, VideoFormat::BGRx, VideoFormat::RGBx];
+const CAMERA_FORMATS: &[VideoFormat] = &[
+    VideoFormat::NV12,
+    VideoFormat::I420,
+    VideoFormat::YUY2,
+    VideoFormat::BGRx,
+    VideoFormat::RGBx,
+    VideoFormat::BGRA,
+    VideoFormat::RGBA,
+];
 
 /// What a screen is asked for: compositors hand out RGB.
 const SCREEN_FORMATS: &[VideoFormat] = &[

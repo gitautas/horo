@@ -71,6 +71,12 @@ depends = [
   "xdg-desktop-portal",
 ]
 
+# Don't bundle Ubuntu's libpipewire into the AppImage: it clashes with the
+# host's PipeWire daemon and SPA plugins on newer distros (e.g. Arch),
+# breaking audio, cameras, and screen sharing.
+[package.metadata.packager.appimage]
+excluded-libraries = ["libpipewire-0.3.so.0"]
+
 [dependencies]
 horo-ui = { path = "../../crates/horo-ui" }
 horo-core.workspace = true
