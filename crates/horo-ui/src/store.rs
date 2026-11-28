@@ -114,6 +114,11 @@ pub struct Store {
     pub call: Option<CallView>,
     /// The engine behind `call`, once connected.
     pub(crate) call_live: Option<crate::call::Live>,
+    /// Per-participant volume slider states (`0.0..=2.0`), shared by the
+    /// participant right-click context menu and the full volume mixer.
+    pub(crate) call_volume_sliders: HashMap<String, gpui::Entity<gpui_component::slider::SliderState>>,
+    /// Open right-click volume/actions context menu for a call participant.
+    pub call_participant_menu: Option<crate::call::ParticipantMenu>,
     /// A DM calling us, ringing until answered, declined or given up.
     pub incoming: Option<Incoming>,
     /// Who's typing in each open room, as the server last said (never us).
@@ -364,6 +369,8 @@ impl Store {
             profile_card: None,
             call: None,
             call_live: None,
+            call_volume_sliders: HashMap::new(),
+            call_participant_menu: None,
             incoming: None,
             roles: HashMap::new(),
             roles_asked: HashSet::new(),

@@ -1896,7 +1896,19 @@ impl Timeline {
             Some(_) => crate::media::fit(media.width, media.height, MAX, 120.),
             None => (MAX.0, (MAX.0 * 9. / 16.).round()),
         };
-        let poster = media.thumbnail_mxc.as_deref().and_then(|mxc| Media::image(mxc, Some(((w * 2.) as u32, (h * 2.) as u32)), cx));
+        let poster = media
+            .thumbnail_mxc
+            .as_deref()
+            .and_then(|mxc| Media::image(mxc, Some(((w * 2.) as u32, (h * 2.) as u32)), cx))
+            .or_else(|| {
+                // Videos uploaded without a Matrix thumbnail: extract a local
+                // preview frame once (skipping huge >50 MB files).
+                if media.thumbnail_mxc.is_none() && media.size.is_none_or(|s| s <= 50 * 1024 * 1024) {
+                    media.mxc.as_deref().and_then(|mxc| Media::video_poster(mxc, media.mimetype.as_deref(), cx))
+                } else {
+                    None
+                }
+            });
         let (w, h) = match (&poster, media.width.zip(media.height)) {
             (Some(poster), None) => imagesize::blob_size(poster.bytes())
                 .ok()

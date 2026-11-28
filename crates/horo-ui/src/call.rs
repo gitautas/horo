@@ -55,6 +55,16 @@ pub enum FocusMode {
     Grid,
 }
 
+/// Right-click context menu target for a remote call participant.
+#[derive(Debug, Clone)]
+pub struct ParticipantMenu {
+    pub identity: String,
+    pub user_id: String,
+    pub name: String,
+    pub avatar: Option<String>,
+    pub at: gpui::Point<gpui::Pixels>,
+}
+
 /// Which of the four viewport corners the floating mini call window docks into.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PipCorner {
@@ -514,6 +524,8 @@ impl Store {
     /// Leave the call, if there is one.
     pub fn leave_call(&mut self, cx: &mut Context<Self>) {
         self.call = None;
+        self.call_volume_sliders.clear();
+        self.call_participant_menu = None;
         if let Some(live) = self.call_live.take() {
             self.hang_up(live, cx);
         }
@@ -651,7 +663,51 @@ impl Store {
         }
     }
 
+    /// Get or create the draggable volume slider state (`0.0..=2.0`) for a remote participant.
+    pub fn call_volume_slider(&mut self, identity: &str, cx: &mut Context<Self>) -> gpui::Entity<gpui_component::slider::SliderState> {
+        if let Some(existing) = self.call_volume_sliders.get(identity) {
+            return existing.clone();
+        }
+        let vol = self
+            .call
+            .as_ref()
+            .and_then(|c| c.participant_volumes.get(identity).copied())
+            .unwrap_or(1.0);
+        let slider = cx.new(|_| gpui_component::slider::SliderState::new().min(0.0).max(2.0).step(0.01).default_value(vol));
+        let id = identity.to_owned();
+        cx.subscribe(&slider, move |store, _, event: &gpui_component::slider::SliderEvent, cx| {
+            let val = match event {
+                gpui_component::slider::SliderEvent::Change(v) | gpui_component::slider::SliderEvent::Release(v) => v.start(),
+            };
+            store.set_participant_volume(id.clone(), val, cx);
+        })
+        .detach();
+        self.call_volume_sliders.insert(identity.to_owned(), slider.clone());
+        slider
+    }
+
+    pub fn open_participant_menu(&mut self, menu: ParticipantMenu, cx: &mut Context<Self>) {
+        let _ = self.call_volume_slider(&menu.identity, cx);
+        self.call_participant_menu = Some(menu);
+        cx.notify();
+    }
+
+    pub fn close_participant_menu(&mut self, cx: &mut Context<Self>) {
+        if self.call_participant_menu.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    pub fn open_call_mixer(&mut self, cx: &mut Context<Self>) {
+        self.call_participant_menu = None;
+        if let Some(view) = &mut self.call {
+            view.mixer_open = true;
+            cx.notify();
+        }
+    }
+
     pub fn toggle_call_mixer(&mut self, cx: &mut Context<Self>) {
+        self.call_participant_menu = None;
         if let Some(view) = &mut self.call {
             view.mixer_open = !view.mixer_open;
             cx.notify();

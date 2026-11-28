@@ -476,4 +476,167 @@ mod tests {
         assert_eq!(sniff_mime(b"<svg xmlns=\"http://www.w3.org/2000/svg\">"), None);
         assert_eq!(sniff_mime(b"whatever this is"), None);
     }
+
+    #[test]
+    fn parses_png_and_jpeg_thumbnail_dimensions() {
+        // Minimal PNG header + IHDR (320x180).
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R'];
+        png.extend_from_slice(&320u32.to_be_bytes());
+        png.extend_from_slice(&180u32.to_be_bytes());
+        assert_eq!(png_dimensions(&png), Some((320, 180)));
+
+        // Minimal JPEG SOI + SOF0 (640x360).
+        let jpg = [0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x08, 0x08, 0x01, 0x68, 0x02, 0x80, 0x03];
+        assert_eq!(jpeg_dimensions(&jpg), Some((640, 360)));
+    }
+}
+
+/// A preview thumbnail extracted from a video file.
+pub struct VideoThumbnail {
+    pub bytes: Vec<u8>,
+    pub mime: &'static str,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Parse `(width, height)` from a PNG's IHDR chunk.
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 24 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+/// Parse `(width, height)` from a JPEG's SOF marker.
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
+        return None;
+    }
+    let mut i = 2;
+    while i + 3 < bytes.len() {
+        while i < bytes.len() && bytes[i] != 0xFF {
+            i += 1;
+        }
+        while i < bytes.len() && bytes[i] == 0xFF {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let marker = bytes[i];
+        i += 1;
+        // Standalone markers without length.
+        if marker == 0xD8 || marker == 0xD9 || (0xD0..=0xD7).contains(&marker) || marker == 0x01 {
+            continue;
+        }
+        if i + 1 >= bytes.len() {
+            break;
+        }
+        let seg_len = u16::from_be_bytes([bytes[i], bytes[i + 1]]) as usize;
+        if seg_len < 2 || i + seg_len > bytes.len() {
+            break;
+        }
+        if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) && seg_len >= 7 {
+            let h = u16::from_be_bytes([bytes[i + 3], bytes[i + 4]]) as u32;
+            let w = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]) as u32;
+            return (w > 0 && h > 0).then_some((w, h));
+        }
+        i += seg_len;
+    }
+    None
+}
+
+fn try_ffmpeg_thumbnail(path: &std::path::Path) -> Option<VideoThumbnail> {
+    use std::process::{Command, Stdio};
+
+    #[cfg(target_os = "macos")]
+    let candidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg"];
+    #[cfg(not(target_os = "macos"))]
+    let candidates = ["ffmpeg"];
+
+    for bin in candidates {
+        if bin.starts_with('/') && !std::path::Path::new(bin).is_file() {
+            continue;
+        }
+        let mut found_bin = false;
+        for seek in [Some("0.5"), None] {
+            let mut cmd = Command::new(bin);
+            cmd.arg("-v").arg("error");
+            if let Some(t) = seek {
+                cmd.arg("-ss").arg(t);
+            }
+            let Ok(out) = cmd
+                .arg("-i")
+                .arg(path)
+                .args(["-frames:v", "1", "-vf", "scale=min(640\\,iw):-2", "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "4", "pipe:1"])
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+            else {
+                break;
+            };
+            found_bin = true;
+            if out.status.success()
+                && let Some((width, height)) = jpeg_dimensions(&out.stdout)
+            {
+                return Some(VideoThumbnail { bytes: out.stdout, mime: "image/jpeg", width, height });
+            }
+        }
+        if found_bin {
+            break;
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn try_qlmanage_thumbnail(path: &std::path::Path) -> Option<VideoThumbnail> {
+    use std::process::{Command, Stdio};
+
+    let filename = path.file_name()?.to_string_lossy();
+    let dir = std::env::temp_dir().join(format!("horo-vthumb-{}-{:x}", std::process::id(), rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).ok()?;
+    let out = Command::new("/usr/bin/qlmanage")
+        .args(["-t", "-s", "640", "-o"])
+        .arg(&dir)
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let png_path = dir.join(format!("{filename}.png"));
+    let bytes = if out.is_ok_and(|s| s.success()) { std::fs::read(&png_path).ok() } else { None };
+    let _ = std::fs::remove_dir_all(&dir);
+    let bytes = bytes?;
+    let (width, height) = png_dimensions(&bytes)?;
+    Some(VideoThumbnail { bytes, mime: "image/png", width, height })
+}
+
+/// Extract a preview thumbnail from a local video file (runs synchronously;
+/// call on a blocking thread). Uses `ffmpeg` when available, with macOS
+/// QuickLook (`qlmanage`) as a built-in fallback.
+pub fn extract_video_thumbnail(path: &std::path::Path) -> Option<VideoThumbnail> {
+    if let Some(thumb) = try_ffmpeg_thumbnail(path) {
+        return Some(thumb);
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(thumb) = try_qlmanage_thumbnail(path) {
+        return Some(thumb);
+    }
+    None
+}
+
+/// Extract a preview thumbnail from in-memory video bytes by writing them to a
+/// temporary file with `extension` (e.g. `"mp4"`), extracting a frame, and
+/// cleaning up immediately.
+pub fn extract_video_thumbnail_bytes(bytes: &[u8], extension: &str) -> Option<VideoThumbnail> {
+    let ext = extension.trim_start_matches('.').chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>();
+    let ext = if ext.is_empty() { "mp4" } else { ext.as_str() };
+    let tmp = std::env::temp_dir().join(format!("horo-vid-{}-{:x}.{ext}", std::process::id(), rand::random::<u64>()));
+    std::fs::write(&tmp, bytes).ok()?;
+    let thumb = extract_video_thumbnail(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+    thumb
 }

@@ -647,6 +647,20 @@ pub async fn send_read_receipt(
     Ok(())
 }
 
+/// Build a Matrix `Thumbnail` from a `VideoThumbnail` when available.
+fn to_matrix_thumbnail(thumb: super::media::VideoThumbnail) -> Option<matrix_sdk::attachment::Thumbnail> {
+    use matrix_sdk::ruma::UInt;
+    let content_type = thumb.mime.parse::<mime::Mime>().ok()?;
+    let size = UInt::try_from(thumb.bytes.len()).ok()?;
+    Some(matrix_sdk::attachment::Thumbnail {
+        data: thumb.bytes,
+        content_type,
+        height: UInt::from(thumb.height),
+        width: UInt::from(thumb.width),
+        size,
+    })
+}
+
 /// Upload and send a file. `body` becomes the filename shown in the timeline.
 pub async fn send_attachment(
     core: &MatrixCore,
@@ -661,8 +675,19 @@ pub async fn send_attachment(
     let path = std::path::PathBuf::from(path);
 
     let mime = mime_guess::from_path(&path).first_or_octet_stream();
+    let thumbnail = if mime.type_() == mime::VIDEO {
+        let thumb_path = path.clone();
+        tokio::task::spawn_blocking(move || super::media::extract_video_thumbnail(&thumb_path))
+            .await
+            .ok()
+            .flatten()
+            .and_then(to_matrix_thumbnail)
+    } else {
+        None
+    };
     let config = AttachmentConfig {
         caption: caption.map(TextMessageEventContent::plain),
+        thumbnail,
         ..Default::default()
     };
 
@@ -704,8 +729,20 @@ pub async fn send_attachment_data(
         .unwrap_or_else(|| mime_guess::from_path(&filename).first_or_octet_stream());
 
     let timeline = get(core, room_id, thread_root).await?;
+    let thumbnail = if mime.type_() == mime::VIDEO {
+        let ext = std::path::Path::new(&filename).extension().and_then(|e| e.to_str()).unwrap_or("mp4").to_owned();
+        let data = bytes.clone();
+        tokio::task::spawn_blocking(move || super::media::extract_video_thumbnail_bytes(&data, &ext))
+            .await
+            .ok()
+            .flatten()
+            .and_then(to_matrix_thumbnail)
+    } else {
+        None
+    };
     let config = AttachmentConfig {
         caption: caption.map(TextMessageEventContent::plain),
+        thumbnail,
         ..Default::default()
     };
 

@@ -1357,9 +1357,11 @@ impl SpaceSettings {
         let can_edit_profile = details.as_ref().is_some_and(|d| d.can_edit_profile);
         let current = details.as_ref().map(|d| d.join_rule.as_str()).unwrap_or("invite");
         let domain = details.as_ref().map(|d| d.homeserver_domain.clone()).unwrap_or_default();
+        let space_host = details.as_ref().map(|d| d.space_homeserver.clone()).unwrap_or_default();
         let address = details.as_ref().and_then(|d| d.canonical_alias.clone()).unwrap_or_else(|| self.space_id.clone());
         let live_base = self.link_base_input.read(cx).value().trim().to_owned();
-        let link = spaces::space_invite_url((!live_base.is_empty()).then_some(live_base.as_str()), &address);
+        let fallback_host = (!space_host.is_empty()).then_some(space_host.as_str()).or((!domain.is_empty()).then_some(domain.as_str()));
+        let link = spaces::space_invite_url((!live_base.is_empty()).then_some(live_base.as_str()), &address, fallback_host);
         let copy_link = link.clone();
 
         let rules = [
@@ -1441,7 +1443,7 @@ impl SpaceSettings {
                             .text_color(palette.text_tertiary)
                             .child(format!(
                                 "leave blank to infer https://{}/#/ from this space, or set a custom base URL (e.g. https://matrix.to/#/)",
-                                spaces::space_server_name(&address).unwrap_or(if domain.is_empty() { "your.homeserver" } else { &domain })
+                                spaces::space_server_name(&address).or(fallback_host).unwrap_or("your.homeserver")
                             )),
                     ),
             )

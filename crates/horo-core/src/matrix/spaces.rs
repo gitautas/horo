@@ -62,13 +62,14 @@ pub fn space_server_name(address: &str) -> Option<&str> {
 }
 
 /// Build the shareable invite URL for a Space. Uses `link_base` when set;
-/// otherwise infers `https://<homeserver>/#/` directly from the Space's
-/// alias or room ID (falling back to `https://matrix.to/#/`).
-pub fn space_invite_url(link_base: Option<&str>, address: &str) -> String {
+/// otherwise infers `https://<homeserver>/#/` from the Space's alias/room ID,
+/// or from `fallback_host` (the Space's creator/homeserver domain for Matrix
+/// v12+ room IDs that omit `:domain`), falling back to `https://matrix.to/#/`.
+pub fn space_invite_url(link_base: Option<&str>, address: &str, fallback_host: Option<&str>) -> String {
     let inferred;
     let base = match link_base.map(str::trim).filter(|s| !s.is_empty()) {
         Some(custom) => custom,
-        None => match space_server_name(address) {
+        None => match space_server_name(address).or_else(|| fallback_host.map(str::trim).filter(|s| !s.is_empty())) {
             Some(host) => {
                 inferred = format!("https://{host}/#/");
                 inferred.as_str()
@@ -90,7 +91,11 @@ pub struct SpaceDetailsDto {
     pub topic: String,
     pub avatar_url: Option<String>,
     pub canonical_alias: Option<String>,
+    /// The signed-in user's homeserver domain (used when creating aliases).
     pub homeserver_domain: String,
+    /// The homeserver domain this Space belongs to (from its alias, room ID,
+    /// or `m.room.create` sender for v12+ rooms without `:domain`).
+    pub space_homeserver: String,
     pub member_count: u64,
     pub join_rule: String,
     pub profile: SpaceProfileDto,
@@ -176,6 +181,29 @@ pub async fn details(core: &MatrixCore, space_id: &RoomId) -> Result<SpaceDetail
         Err(_) => (false, false, false, false, false, false, false, false, false, false),
     };
 
+    let creator_domain = room
+        .get_state_event(StateEventType::RoomCreate, "")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|event| {
+            let val = match &event {
+                RawAnySyncOrStrippedState::Sync(raw) => raw.deserialize_as_unchecked::<serde_json::Value>().ok()?,
+                RawAnySyncOrStrippedState::Stripped(raw) => raw.deserialize_as_unchecked::<serde_json::Value>().ok()?,
+            };
+            val.get("sender")
+                .and_then(|v| v.as_str())
+                .and_then(space_server_name)
+                .map(str::to_owned)
+        });
+    let space_homeserver = canonical_alias
+        .as_deref()
+        .and_then(space_server_name)
+        .or_else(|| space_server_name(space_id.as_str()))
+        .map(str::to_owned)
+        .or(creator_domain)
+        .unwrap_or_else(|| own.server_name().to_string());
+
     Ok(SpaceDetailsDto {
         id: space_id.to_string(),
         name,
@@ -183,6 +211,7 @@ pub async fn details(core: &MatrixCore, space_id: &RoomId) -> Result<SpaceDetail
         avatar_url,
         canonical_alias,
         homeserver_domain: own.server_name().to_string(),
+        space_homeserver,
         member_count,
         join_rule,
         profile,
@@ -342,9 +371,17 @@ mod tests {
 
     #[test]
     fn builds_space_invite_url_with_default_or_custom_domain() {
-        assert_eq!(space_invite_url(None, "#uwu:m.uwu.lt"), "https://m.uwu.lt/#/#uwu:m.uwu.lt");
-        assert_eq!(space_invite_url(Some(""), "!abc:m.uwu.lt"), "https://m.uwu.lt/#/!abc:m.uwu.lt");
-        assert_eq!(space_invite_url(Some("https://matrix.to/#/"), "#uwu:m.uwu.lt"), "https://matrix.to/#/#uwu:m.uwu.lt");
-        assert_eq!(space_invite_url(Some("https://uwu.lt/join"), "#uwu:m.uwu.lt"), "https://uwu.lt/join/#uwu:m.uwu.lt");
+        assert_eq!(space_invite_url(None, "#uwu:m.uwu.lt", None), "https://m.uwu.lt/#/#uwu:m.uwu.lt");
+        assert_eq!(space_invite_url(Some(""), "!abc:m.uwu.lt", None), "https://m.uwu.lt/#/!abc:m.uwu.lt");
+        assert_eq!(
+            space_invite_url(None, "!tHiLP8bmfunepCDWy17dZ13wLUCLONkyQB6zvHBwsY4", Some("m.uwu.lt")),
+            "https://m.uwu.lt/#/!tHiLP8bmfunepCDWy17dZ13wLUCLONkyQB6zvHBwsY4"
+        );
+        assert_eq!(
+            space_invite_url(None, "!tHiLP8bmfunepCDWy17dZ13wLUCLONkyQB6zvHBwsY4", None),
+            "https://matrix.to/#/!tHiLP8bmfunepCDWy17dZ13wLUCLONkyQB6zvHBwsY4"
+        );
+        assert_eq!(space_invite_url(Some("https://matrix.to/#/"), "#uwu:m.uwu.lt", Some("m.uwu.lt")), "https://matrix.to/#/#uwu:m.uwu.lt");
+        assert_eq!(space_invite_url(Some("https://uwu.lt/join"), "#uwu:m.uwu.lt", None), "https://uwu.lt/join/#uwu:m.uwu.lt");
     }
 }

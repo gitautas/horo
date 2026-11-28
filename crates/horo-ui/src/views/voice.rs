@@ -20,18 +20,21 @@ use gpui_component::{
     Sizable,
     Icon,
     button::{Button, ButtonVariants},
-    h_flex, v_flex,
+    h_flex,
+    slider::Slider,
+    v_flex,
 };
 use horo_core::dto::RoomSummary;
 use horo_rtc::call::screen_key;
 
 use crate::theme::{corner, space, text, zpx};
 use crate::{
-    call::{CallStatus, CallView, FocusMode, user_of},
+    call::{CallStatus, CallView, FocusMode, ParticipantMenu, user_of},
     store::{Known, Store},
     theme::Palette,
     views::{
         avatar::{avatar, speaking_ring},
+        menu,
         verification::scrim,
     },
 };
@@ -223,70 +226,70 @@ pub fn roster(room: &RoomSummary, store: &Entity<Store>, palette: &Palette, cx: 
         };
         let vol = remote_id.as_deref().and_then(|id| volumes.get(id).copied()).unwrap_or(1.0);
         let local_muted = vol <= 0.001;
-        let controls = remote_id.map(|id| {
-            let (s_down, s_mute, s_up) = (store.clone(), store.clone(), store.clone());
-            let (id_down, id_mute, id_up) = (id.clone(), id.clone(), id);
-            let pct = (vol * 100.0).round() as u32;
-            h_flex()
+        let pct = (vol * 100.0).round() as u32;
+        let menu_info = remote_id.map(|id| (id, person.user_id.clone(), person.real_name.clone(), person.avatar.clone()));
+        let badge = menu_info.as_ref().filter(|_| local_muted || pct != 100).map(|(id, uid, name, av)| {
+            let s_badge = store.clone();
+            let (id, uid, name, av) = (id.clone(), uid.clone(), name.clone(), av.clone());
+            div()
+                .id(("v-badge", ix))
                 .ml_auto()
                 .flex_none()
-                .gap(zpx(2.))
-                .items_center()
-                .when(!local_muted && pct == 100, |d| d.invisible().group_hover("voice-row", |s| s.visible()))
-                .child(
-                    div()
-                        .id(("v-down", ix))
-                        .px(zpx(4.))
-                        .rounded(corner(4.))
-                        .cursor_pointer()
-                        .text_size(text(10.))
-                        .text_color(palette.text_tertiary)
-                        .hover(|d| d.bg(palette.raised).text_color(palette.text))
-                        .child("−")
-                        .on_click(move |_, _, cx| s_down.update(cx, |s, cx| s.set_participant_volume(id_down.clone(), (vol - 0.25).max(0.0), cx))),
-                )
-                .child(
-                    div()
-                        .id(("v-mute", ix))
-                        .px(zpx(4.))
-                        .rounded(corner(4.))
-                        .cursor_pointer()
-                        .font_family(palette.mono_font.clone())
-                        .text_size(text(9.5))
-                        .text_color(if local_muted { palette.danger } else { palette.text_tertiary })
-                        .hover(|d| d.bg(palette.raised).text_color(palette.text))
-                        .tooltip(move |window, cx| {
-                            gpui_component::tooltip::Tooltip::new(if local_muted { "unmute for me" } else { "mute for me" }).build(window, cx)
-                        })
-                        .child(if local_muted { "muted".to_owned() } else { format!("{pct}%") })
-                        .on_click(move |_, _, cx| s_mute.update(cx, |s, cx| s.set_participant_volume(id_mute.clone(), if local_muted { 1.0 } else { 0.0 }, cx))),
-                )
-                .child(
-                    div()
-                        .id(("v-up", ix))
-                        .px(zpx(4.))
-                        .rounded(corner(4.))
-                        .cursor_pointer()
-                        .text_size(text(10.))
-                        .text_color(palette.text_tertiary)
-                        .hover(|d| d.bg(palette.raised).text_color(palette.text))
-                        .child("+")
-                        .on_click(move |_, _, cx| s_up.update(cx, |s, cx| s.set_participant_volume(id_up.clone(), (vol + 0.25).min(2.0), cx))),
-                )
+                .px(zpx(5.))
+                .py(zpx(1.))
+                .rounded(corner(4.))
+                .cursor_pointer()
+                .font_family(palette.mono_font.clone())
+                .text_size(text(9.5))
+                .text_color(if local_muted {
+                    palette.danger
+                } else if pct > 100 {
+                    palette.idle
+                } else {
+                    palette.text_tertiary
+                })
+                .hover(|d| d.bg(palette.raised).text_color(palette.text))
+                .child(if local_muted { "muted".to_owned() } else { format!("{pct}%") })
+                .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
+                    cx.stop_propagation();
+                    let target = ParticipantMenu {
+                        identity: id.clone(),
+                        user_id: uid.clone(),
+                        name: name.clone(),
+                        avatar: av.clone(),
+                        at: event.position,
+                    };
+                    s_badge.update(cx, |s, cx| s.open_participant_menu(target, cx));
+                })
         });
-        rows.push(
-            h_flex()
-                .group("voice-row")
-                .gap_2()
-                .pl(zpx(40.))
-                .pr(space(8.))
-                .py(zpx(2.))
-                .items_center()
-                .child(speaking_ring(face, zpx(20.), person.speaking && !local_muted, palette))
-                .child(div().flex_1().min_w_0().truncate().text_xs().text_color(if person.speaking && !local_muted { palette.text } else { palette.text_secondary }).child(person.name))
-                .when(person.muted, |row| row.child(icon("icons/mic-off.svg").size(zpx(12.)).text_color(palette.text_tertiary)))
-                .children(controls),
-        );
+        let row = h_flex()
+            .id(("voice-roster-row", ix))
+            .gap_2()
+            .pl(zpx(40.))
+            .pr(space(8.))
+            .py(zpx(2.))
+            .rounded(corner(6.))
+            .items_center()
+            .when(menu_info.is_some(), |d| d.hover(|d| d.bg(palette.raised)))
+            .when_some(menu_info, |d, (id, uid, name, av)| {
+                let s_ctx = store.clone();
+                d.on_mouse_down(gpui::MouseButton::Right, move |event, _, cx| {
+                    cx.stop_propagation();
+                    let target = ParticipantMenu {
+                        identity: id.clone(),
+                        user_id: uid.clone(),
+                        name: name.clone(),
+                        avatar: av.clone(),
+                        at: event.position,
+                    };
+                    s_ctx.update(cx, |s, cx| s.open_participant_menu(target, cx));
+                })
+            })
+            .child(speaking_ring(face, zpx(20.), person.speaking && !local_muted, palette))
+            .child(div().flex_1().min_w_0().truncate().text_xs().text_color(if person.speaking && !local_muted { palette.text } else { palette.text_secondary }).child(person.name))
+            .when(person.muted, |row| row.child(icon("icons/mic-off.svg").size(zpx(12.)).text_color(palette.text_tertiary)))
+            .children(badge);
+        rows.push(row);
     }
     Some(v_flex().pb_1().children(rows).into_any_element())
 }
@@ -397,7 +400,10 @@ const FILM: (f32, f32) = (176., 99.);
 /// One tile, drawn at `size`. Clicking it focuses it; clicking the focused
 /// one goes back to everyone alike.
 fn draw(tile: &Tile, size: Size, focused: bool, store: &Entity<Store>, palette: &Palette, cx: &mut App) -> AnyElement {
-    let screens = store.read(cx).call_live.as_ref().map(|l| l.screens.clone());
+    let (screens, own_identity) = {
+        let s = store.read(cx);
+        (s.call_live.as_ref().map(|l| l.screens.clone()), s.call.as_ref().and_then(|c| c.identity.clone()))
+    };
     // A face can be cropped to fill a small tile; a screen, or anything
     // shown big, is shown whole.
     let fit = if matches!(size, Size::Fill) || matches!(tile.shows, Shows::Screen { .. }) { gpui::ObjectFit::Contain } else { gpui::ObjectFit::Cover };
@@ -412,6 +418,11 @@ fn draw(tile: &Tile, size: Size, focused: bool, store: &Entity<Store>, palette: 
     let label = if screen { format!("{}'s screen", person.real_name) } else { person.name.clone() };
     let key = tile.key.clone();
     let click = store.clone();
+    let remote_menu = person
+        .identity
+        .clone()
+        .filter(|id| own_identity.as_deref() != Some(id.as_str()))
+        .map(|id| (id, person.user_id.clone(), person.real_name.clone(), person.avatar.clone()));
     let base = div()
         .id(gpui::SharedString::from(format!("tile-{key}")))
         .relative()
@@ -427,6 +438,20 @@ fn draw(tile: &Tile, size: Size, focused: bool, store: &Entity<Store>, palette: 
         .on_click(move |_, _, cx| {
             let next = if focused { FocusMode::Grid } else { FocusMode::Pinned(key.clone()) };
             click.update(cx, |s, cx| s.set_call_focus(next, cx));
+        })
+        .when_some(remote_menu, |d, (id, uid, name, av)| {
+            let s_ctx = store.clone();
+            d.on_mouse_down(gpui::MouseButton::Right, move |event, _, cx| {
+                cx.stop_propagation();
+                let target = ParticipantMenu {
+                    identity: id.clone(),
+                    user_id: uid.clone(),
+                    name: name.clone(),
+                    avatar: av.clone(),
+                    at: event.position,
+                };
+                s_ctx.update(cx, |s, cx| s.open_participant_menu(target, cx));
+            })
         });
     let small = matches!(size, Size::Fixed(_, h) if h < 120.);
 
@@ -885,13 +910,120 @@ pub fn fullscreen(store: &Entity<Store>, palette: &Palette, window: &gpui::Windo
     )
 }
 
-/// Floating per-user volume mixer popover (`0%–200%` + local mute per speaker),
-/// accessible from the call controls in the voice panel, PiP modal, or fullscreen.
-pub fn mixer(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<AnyElement> {
-    let state = store.read(cx);
-    let call = state.call.clone().filter(|c| c.is_live() && c.mixer_open)?;
+/// Right-click context menu for a remote call participant: smooth draggable
+/// volume slider (`0%–200%`), local mute, reset, full mixer shortcut, and profile.
+pub fn participant_menu(store: &Entity<Store>, palette: &Palette, window: &mut gpui::Window, cx: &mut App) -> Option<AnyElement> {
+    let target = store.read(cx).call_participant_menu.clone()?;
+    let call = store.read(cx).call.clone().filter(|c| c.is_live())?;
+    let vol = call.participant_volumes.get(&target.identity).copied().unwrap_or(1.0);
+    let pct = (vol * 100.0).round() as u32;
+    let muted = vol <= 0.001;
+    let slider = store.update(cx, |s, cx| s.call_volume_slider(&target.identity, cx));
+    if (slider.read(cx).value().start() - vol).abs() > 0.005 {
+        slider.update(cx, |s, cx| s.set_value(vol, window, cx));
+    }
+
+    let face = avatar(&target.user_id, &target.name, target.avatar.as_deref(), zpx(22.), cx);
+    let (close_out, s_mute, s_reset, s_mixer, s_profile) = (store.clone(), store.clone(), store.clone(), store.clone(), store.clone());
+    let (id_mute, id_reset, uid_profile) = (target.identity.clone(), target.identity.clone(), target.user_id.clone());
+    let at = target.at;
+
+    let card = menu::frame("call-participant-menu", palette)
+        .w(zpx(248.))
+        .on_mouse_down_out(move |_, _, cx| close_out.update(cx, |s, cx| s.close_participant_menu(cx)))
+        .child(
+            v_flex()
+                .gap(zpx(8.))
+                .px(space(10.))
+                .pt(space(8.))
+                .pb(space(6.))
+                .child(
+                    h_flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(space(8.))
+                        .child(
+                            h_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .items_center()
+                                .gap(space(7.))
+                                .child(face)
+                                .child(div().truncate().text_xs().font_weight(FontWeight::BOLD).text_color(palette.text).child(target.name)),
+                        )
+                        .child(
+                            div()
+                                .font_family(palette.mono_font.clone())
+                                .text_size(text(11.))
+                                .text_color(if muted {
+                                    palette.danger
+                                } else if pct > 100 {
+                                    palette.idle
+                                } else {
+                                    palette.text_secondary
+                                })
+                                .child(if muted { "muted".to_owned() } else { format!("{pct}%") }),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .gap(zpx(2.))
+                        .child(Slider::new(&slider))
+                        .child(
+                            h_flex()
+                                .justify_between()
+                                .text_size(text(9.5))
+                                .text_color(palette.text_tertiary)
+                                .child("0%")
+                                .child("100%")
+                                .child("200%"),
+                        ),
+                ),
+        )
+        .child(menu::separator(palette))
+        .child(
+            menu::item("pmenu-mute", "mute for me", true, Some(muted), palette).on_click(move |_, _, cx| {
+                let id = id_mute.clone();
+                s_mute.update(cx, |s, cx| s.set_participant_volume(id, if muted { 1.0 } else { 0.0 }, cx));
+            }),
+        )
+        .when(pct != 100, |d| {
+            d.child(
+                menu::item("pmenu-reset", "reset volume to 100%", true, Some(false), palette).on_click(move |_, _, cx| {
+                    let id = id_reset.clone();
+                    s_reset.update(cx, |s, cx| s.set_participant_volume(id, 1.0, cx));
+                }),
+            )
+        })
+        .child(menu::separator(palette))
+        .child(
+            menu::item("pmenu-mixer", "open volume mixer…", true, None, palette).on_click(move |_, _, cx| {
+                s_mixer.update(cx, |s, cx| s.open_call_mixer(cx));
+            }),
+        )
+        .child(
+            menu::item("pmenu-profile", "view profile", true, None, palette).on_click(move |_, _, cx| {
+                let uid = uid_profile.clone();
+                s_profile.update(cx, |s, cx| {
+                    s.close_participant_menu(cx);
+                    s.open_profile(uid, at, None, cx);
+                });
+            }),
+        );
+
+    Some(menu::place(at, card))
+}
+
+/// Floating per-user volume mixer popover (`0%–200%` draggable slider + local mute per speaker),
+/// accessible from the call controls or any participant's right-click context menu.
+pub fn mixer(store: &Entity<Store>, palette: &Palette, window: &mut gpui::Window, cx: &mut App) -> Option<AnyElement> {
+    let (call, profiles) = {
+        let state = store.read(cx);
+        let call = state.call.clone().filter(|c| c.is_live() && c.mixer_open)?;
+        (call, state.profiles.clone())
+    };
     let own_identity = call.identity.clone();
-    let list = people(&call, &state.profiles);
+    let list = people(&call, &profiles);
     let remotes: Vec<Person> = list
         .into_iter()
         .filter(|p| p.identity.as_deref() != own_identity.as_deref())
@@ -917,40 +1049,13 @@ pub fn mixer(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<A
                 let vol = call.participant_volumes.get(&id).copied().unwrap_or(1.0);
                 let pct = (vol * 100.0).round() as u32;
                 let muted = vol <= 0.001;
+                let slider = store.update(cx, |s, cx| s.call_volume_slider(&id, cx));
+                if (slider.read(cx).value().start() - vol).abs() > 0.005 {
+                    slider.update(cx, |s, cx| s.set_value(vol, window, cx));
+                }
                 let face = avatar(&p.user_id, &p.real_name, p.avatar.as_deref(), zpx(26.), cx);
-                let (s_mute, s_down, s_up) = (store.clone(), store.clone(), store.clone());
-                let (id_mute, id_down, id_up) = (id.clone(), id.clone(), id.clone());
-
-                // 20 clickable segments from 10% to 200% (segment 10 = 100%).
-                let bar = h_flex()
-                    .flex_1()
-                    .h(zpx(18.))
-                    .items_center()
-                    .gap(zpx(2.))
-                    .children((1u32..=20u32).map(|step| {
-                        let target_vol = step as f32 * 0.1;
-                        let lit = !muted && vol + 0.001 >= target_vol;
-                        let boost = step > 10;
-                        let is_unity = step == 10;
-                        let s_seg = store.clone();
-                        let id_seg = id.clone();
-                        div()
-                            .id(SharedString::from(format!("mix-seg-{ix}-{step}")))
-                            .flex_1()
-                            .h(zpx(if is_unity { 12. } else { 7. }))
-                            .rounded(corner(2.))
-                            .cursor_pointer()
-                            .bg(if lit {
-                                if boost { palette.idle } else { palette.accent }
-                            } else {
-                                palette.inset
-                            })
-                            .hover(|d| d.bg(if boost { palette.idle } else { palette.accent }))
-                            .on_click(move |_, _, cx| {
-                                let id = id_seg.clone();
-                                s_seg.update(cx, |s, cx| s.set_participant_volume(id, target_vol, cx));
-                            })
-                    }));
+                let s_mute = store.clone();
+                let id_mute = id.clone();
 
                 v_flex()
                     .gap(zpx(6.))
@@ -1000,47 +1105,17 @@ pub fn mixer(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<A
                             ),
                     )
                     .child(
-                        h_flex()
-                            .items_center()
-                            .gap(space(6.))
+                        v_flex()
+                            .gap(zpx(2.))
+                            .child(Slider::new(&slider))
                             .child(
-                                div()
-                                    .id(("mix-down", ix))
-                                    .size(zpx(20.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(corner(6.))
-                                    .cursor_pointer()
-                                    .bg(palette.card)
-                                    .hover(|d| d.bg(palette.raised))
-                                    .text_xs()
-                                    .text_color(palette.text_secondary)
-                                    .child("−")
-                                    .on_click(move |_, _, cx| {
-                                        let id = id_down.clone();
-                                        s_down.update(cx, |s, cx| s.set_participant_volume(id, (vol - 0.1).max(0.0), cx));
-                                    }),
-                            )
-                            .child(bar)
-                            .child(
-                                div()
-                                    .id(("mix-up", ix))
-                                    .size(zpx(20.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(corner(6.))
-                                    .cursor_pointer()
-                                    .bg(palette.card)
-                                    .hover(|d| d.bg(palette.raised))
-                                    .text_xs()
-                                    .text_color(palette.text_secondary)
-                                    .child("+")
-                                    .on_click(move |_, _, cx| {
-                                        let id = id_up.clone();
-                                        s_up.update(cx, |s, cx| s.set_participant_volume(id, (vol + 0.1).min(2.0), cx));
-                                    }),
+                                h_flex()
+                                    .justify_between()
+                                    .text_size(text(9.5))
+                                    .text_color(palette.text_tertiary)
+                                    .child("0%")
+                                    .child("100%")
+                                    .child("200%"),
                             ),
                     )
             }))

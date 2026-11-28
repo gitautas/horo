@@ -93,6 +93,66 @@ impl Media {
         None
     }
 
+    /// A locally extracted preview poster for a video that was uploaded without
+    /// a Matrix thumbnail. Fetches the video (decrypted if encrypted) once and
+    /// extracts a single preview frame off the UI thread.
+    pub fn video_poster(mxc: &str, mimetype: Option<&str>, cx: &mut App) -> Option<Arc<Image>> {
+        if !mxc.starts_with("mxc://") {
+            return None;
+        }
+        let key = Key { mxc: format!("poster:{mxc}"), size: None };
+        let media = cx.default_global::<Media>();
+        media.clock += 1;
+        let now = media.clock;
+        if let Some((entry, used)) = media.entries.get_mut(&key) {
+            *used = now;
+            match entry {
+                Entry::Ready { image, .. } => return Some(image.clone()),
+                Entry::Loading => return None,
+                Entry::Failed(at) if at.elapsed() < RETRY_AFTER => return None,
+                Entry::Failed(_) => {}
+            }
+        }
+        media.insert(key.clone(), Entry::Loading);
+
+        let raw_mxc = mxc.to_owned();
+        let ext = match mimetype.and_then(|m| m.split(';').next()).map(str::trim) {
+            Some("video/quicktime") => "mov",
+            Some("video/webm") => "webm",
+            Some("video/x-matroska") => "mkv",
+            _ => "mp4",
+        }
+        .to_owned();
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let state = backend.state.clone();
+            async move {
+                let core = state.core().await?;
+                let fetched = media::fetch(&core.client, &raw_mxc, None, None).await?;
+                let thumb = tokio::task::spawn_blocking(move || media::extract_video_thumbnail_bytes(&fetched.bytes, &ext))
+                    .await
+                    .ok()
+                    .flatten();
+                Ok::<_, horo_core::Error>(thumb)
+            }
+        });
+        cx.spawn(async move |cx| {
+            let entry = match task.await {
+                Ok(Ok(Some(thumb))) => match format(thumb.mime) {
+                    Some(fmt) => Entry::Ready { image: Arc::new(Image::from_bytes(fmt, thumb.bytes)), cutout: false },
+                    None => Entry::Failed(Instant::now()),
+                },
+                _ => Entry::Failed(Instant::now()),
+            };
+            cx.update(|cx| {
+                cx.default_global::<Media>().insert(key, entry);
+                cx.refresh_windows();
+            });
+        })
+        .detach();
+        None
+    }
+
     /// The picture at `mxc` (a server thumbnail at `size`, when given), if
     /// it's here yet. Starts fetching it otherwise.
     pub fn image(mxc: &str, size: Option<(u32, u32)>, cx: &mut App) -> Option<Arc<Image>> {

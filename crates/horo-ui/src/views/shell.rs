@@ -1851,11 +1851,22 @@ impl Render for Shell {
                     cx.stop_propagation();
                 }
             }))
-            // Escape closes a space's menu, as a click elsewhere does.
+            // Escape closes open menus / call mixer, as a click elsewhere does.
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" && (this.space_menu.take().is_some() | this.room_menu.take().is_some()) {
-                    cx.stop_propagation();
-                    cx.notify();
+                if event.keystroke.key == "escape" {
+                    let closed_local = this.space_menu.take().is_some() | this.room_menu.take().is_some();
+                    let closed_call = this.store.read(cx).call_participant_menu.is_some()
+                        || this.store.read(cx).call.as_ref().is_some_and(|c| c.mixer_open);
+                    if closed_call {
+                        this.store.update(cx, |s, cx| {
+                            s.close_participant_menu(cx);
+                            s.close_call_mixer(cx);
+                        });
+                    }
+                    if closed_local || closed_call {
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
                 }
             }))
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
@@ -1934,7 +1945,8 @@ impl Render for Shell {
             .children(self.quick_switcher.clone())
             .children(voice::floating(&self.store, &palette, window, cx))
             .children(voice::fullscreen(&self.store, &palette, window, cx))
-            .children(voice::mixer(&self.store, &palette, cx))
+            .children(voice::mixer(&self.store, &palette, window, cx))
+            .children(voice::participant_menu(&self.store, &palette, window, cx))
             .children(lightbox::lightbox(&self.store, &palette, window, cx))
             .children(voice::ringing(&self.store, &palette, cx))
             .children(self.explore.clone())
