@@ -53,6 +53,8 @@ struct Person {
     camera: bool,
     /// They're sharing their screen.
     screen: bool,
+    /// They're sharing screen audio.
+    screen_audio: bool,
     /// Their name, or "you".
     name: String,
     /// Their own name, for the monogram, and their picture.
@@ -71,7 +73,7 @@ fn localpart(user_id: &str) -> &str {
 /// devices of one person are one person).
 fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
     let mut out: Vec<Person> = Vec::new();
-    let mut add = |identity: &str, name: &str, muted: bool, me: bool, camera: bool, screen: bool| {
+    let mut add = |identity: &str, name: &str, muted: bool, me: bool, camera: bool, screen: bool, screen_audio: bool| {
         let user = user_of(identity).to_owned();
         // A person's devices are one tile, except a device showing its
         // camera: that picture needs a tile of its own (your phone's, say,
@@ -83,6 +85,7 @@ fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
         person.identity = Some(identity.to_owned());
         person.camera = camera;
         person.screen = screen;
+        person.screen_audio = screen_audio;
         if me {
             person.name = "you".into();
         } else if !profiles.get(&user).is_some_and(|k| k.name.is_some()) && !name.is_empty() && name != identity {
@@ -93,10 +96,10 @@ fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
         out.push(person);
     };
     if let Some(me) = &call.identity {
-        add(me, "", call.muted, true, false, false);
+        add(me, "", call.muted, true, false, false, false);
     }
     for p in &call.participants {
-        add(&p.identity, &p.name, p.muted, false, p.camera, p.screen);
+        add(&p.identity, &p.name, p.muted, false, p.camera, p.screen, p.screen_audio);
     }
     out
 }
@@ -105,7 +108,7 @@ fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
 fn person(user: &str, profiles: &HashMap<String, Known>, speaking: bool, muted: bool) -> Person {
     let known = profiles.get(user);
     let name = known.and_then(|k| k.name.clone()).unwrap_or_else(|| localpart(user).to_owned());
-    Person { user_id: user.to_owned(), identity: None, camera: false, screen: false, real_name: name.clone(), name, avatar: known.and_then(|k| k.avatar.clone()), speaking, muted }
+    Person { user_id: user.to_owned(), identity: None, camera: false, screen: false, screen_audio: false, real_name: name.clone(), name, avatar: known.and_then(|k| k.avatar.clone()), speaking, muted }
 }
 
 /// Ask for the profiles of the people shown that we don't know yet.
@@ -1026,7 +1029,8 @@ pub fn fullscreen(store: &Entity<Store>, palette: &Palette, window: &gpui::Windo
 }
 
 /// Right-click context menu for a remote call participant: smooth draggable
-/// volume slider (`0%–200%`), local mute, reset, full mixer shortcut, and profile.
+/// volume slider (`0%–200%`), optional separate screen-share audio slider,
+/// local mute, reset, full mixer shortcut, and profile.
 pub fn participant_menu(store: &Entity<Store>, palette: &Palette, window: &mut gpui::Window, cx: &mut App) -> Option<AnyElement> {
     let target = store.read(cx).call_participant_menu.clone()?;
     let call = store.read(cx).call.clone().filter(|c| c.is_live())?;
@@ -1038,9 +1042,37 @@ pub fn participant_menu(store: &Entity<Store>, palette: &Palette, window: &mut g
         slider.update(cx, |s, cx| s.set_value(vol, window, cx));
     }
 
+    let has_screen = call
+        .participants
+        .iter()
+        .any(|p| p.identity == target.identity && (p.screen || p.screen_audio))
+        || call.screen_audio_volumes.contains_key(&target.identity);
+    let screen_vol = call.screen_audio_volumes.get(&target.identity).copied().unwrap_or(1.0);
+    let screen_pct = (screen_vol * 100.0).round() as u32;
+    let screen_muted = screen_vol <= 0.001;
+    let screen_slider = has_screen.then(|| {
+        let s = store.update(cx, |st, cx| st.call_screen_volume_slider(&target.identity, cx));
+        if (s.read(cx).value().start() - screen_vol).abs() > 0.005 {
+            s.update(cx, |st, cx| st.set_value(screen_vol, window, cx));
+        }
+        s
+    });
+
     let face = avatar(&target.user_id, &target.name, target.avatar.as_deref(), zpx(22.), cx);
-    let (close_out, s_mute, s_reset, s_mixer, s_profile) = (store.clone(), store.clone(), store.clone(), store.clone(), store.clone());
-    let (id_mute, id_reset, uid_profile) = (target.identity.clone(), target.identity.clone(), target.user_id.clone());
+    let (close_out, s_mute, s_screen_mute, s_reset, s_mixer, s_profile) = (
+        store.clone(),
+        store.clone(),
+        store.clone(),
+        store.clone(),
+        store.clone(),
+        store.clone(),
+    );
+    let (id_mute, id_screen_mute, id_reset, uid_profile) = (
+        target.identity.clone(),
+        target.identity.clone(),
+        target.identity.clone(),
+        target.user_id.clone(),
+    );
     let at = target.at;
 
     let card = menu::frame("call-participant-menu", palette)
@@ -1093,7 +1125,66 @@ pub fn participant_menu(store: &Entity<Store>, palette: &Palette, window: &mut g
                                 .child("100%")
                                 .child("200%"),
                         ),
-                ),
+                )
+                .when_some(screen_slider, |col, screen_slider| {
+                    col.child(
+                        v_flex()
+                            .gap(zpx(4.))
+                            .pt(zpx(4.))
+                            .border_t_1()
+                            .border_color(palette.border_subtle)
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap(space(8.))
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap(zpx(5.))
+                                            .child(icon("icons/screen-share.svg").size(zpx(12.)).text_color(palette.text_tertiary))
+                                            .child(div().text_xs().text_color(palette.text_secondary).child("screen audio")),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("pmenu-screen-mute-pill")
+                                            .px(space(6.))
+                                            .py(zpx(1.))
+                                            .rounded(corner(5.))
+                                            .cursor_pointer()
+                                            .hover(|d| d.bg(palette.raised))
+                                            .font_family(palette.mono_font.clone())
+                                            .text_size(text(11.))
+                                            .text_color(if screen_muted {
+                                                palette.danger
+                                            } else if screen_pct > 100 {
+                                                palette.idle
+                                            } else {
+                                                palette.text_secondary
+                                            })
+                                            .child(if screen_muted { "muted".to_owned() } else { format!("{screen_pct}%") })
+                                            .on_click(move |_, _, cx| {
+                                                let id = id_screen_mute.clone();
+                                                s_screen_mute.update(cx, |s, cx| s.set_screen_audio_volume(id, if screen_muted { 1.0 } else { 0.0 }, cx));
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap(zpx(2.))
+                                    .child(Slider::new(&screen_slider))
+                                    .child(
+                                        h_flex()
+                                            .justify_between()
+                                            .text_size(text(9.5))
+                                            .text_color(palette.text_tertiary)
+                                            .child("0%")
+                                            .child("100%")
+                                            .child("200%"),
+                                    ),
+                            ),
+                    )
+                }),
         )
         .child(menu::separator(palette))
         .child(
@@ -1102,11 +1193,14 @@ pub fn participant_menu(store: &Entity<Store>, palette: &Palette, window: &mut g
                 s_mute.update(cx, |s, cx| s.set_participant_volume(id, if muted { 1.0 } else { 0.0 }, cx));
             }),
         )
-        .when(pct != 100, |d| {
+        .when(pct != 100 || (has_screen && screen_pct != 100), |d| {
             d.child(
                 menu::item("pmenu-reset", "reset volume to 100%", true, Some(false), palette).on_click(move |_, _, cx| {
                     let id = id_reset.clone();
-                    s_reset.update(cx, |s, cx| s.set_participant_volume(id, 1.0, cx));
+                    s_reset.update(cx, |s, cx| {
+                        s.set_participant_volume(id.clone(), 1.0, cx);
+                        s.set_screen_audio_volume(id, 1.0, cx);
+                    });
                 }),
             )
         })
@@ -1129,7 +1223,8 @@ pub fn participant_menu(store: &Entity<Store>, palette: &Palette, window: &mut g
     Some(menu::place(at, card))
 }
 
-/// Floating per-user volume mixer popover (`0%–200%` draggable slider + local mute per speaker),
+/// Floating per-user volume mixer popover (`0%–200%` draggable slider + local mute per speaker,
+/// plus a separate screen-share audio slider when someone is sharing their screen),
 /// accessible from the call controls or any participant's right-click context menu.
 pub fn mixer(store: &Entity<Store>, palette: &Palette, window: &mut gpui::Window, cx: &mut App) -> Option<AnyElement> {
     let (call, profiles) = {
@@ -1143,7 +1238,8 @@ pub fn mixer(store: &Entity<Store>, palette: &Palette, window: &mut gpui::Window
         .into_iter()
         .filter(|p| p.identity.as_deref() != own_identity.as_deref())
         .collect();
-    let any_custom = call.participant_volumes.values().any(|&v| (v - 1.0).abs() > 0.01);
+    let any_custom = call.participant_volumes.values().any(|&v| (v - 1.0).abs() > 0.01)
+        || call.screen_audio_volumes.values().any(|&v| (v - 1.0).abs() > 0.01);
     let close_out = store.clone();
     let close_btn = store.clone();
     let reset_store = store.clone();
@@ -1168,9 +1264,22 @@ pub fn mixer(store: &Entity<Store>, palette: &Palette, window: &mut gpui::Window
                 if (slider.read(cx).value().start() - vol).abs() > 0.005 {
                     slider.update(cx, |s, cx| s.set_value(vol, window, cx));
                 }
+                let has_screen = p.screen || p.screen_audio || call.screen_audio_volumes.contains_key(&id);
+                let screen_vol = call.screen_audio_volumes.get(&id).copied().unwrap_or(1.0);
+                let screen_pct = (screen_vol * 100.0).round() as u32;
+                let screen_muted = screen_vol <= 0.001;
+                let screen_slider = has_screen.then(|| {
+                    let s = store.update(cx, |st, cx| st.call_screen_volume_slider(&id, cx));
+                    if (s.read(cx).value().start() - screen_vol).abs() > 0.005 {
+                        s.update(cx, |st, cx| st.set_value(screen_vol, window, cx));
+                    }
+                    s
+                });
                 let face = avatar(&p.user_id, &p.real_name, p.avatar.as_deref(), zpx(26.), cx);
                 let s_mute = store.clone();
+                let s_screen_mute = store.clone();
                 let id_mute = id.clone();
+                let id_screen_mute = id.clone();
 
                 v_flex()
                     .gap(zpx(6.))
@@ -1211,7 +1320,7 @@ pub fn mixer(store: &Entity<Store>, palette: &Palette, window: &mut gpui::Window
                                     } else {
                                         palette.text_secondary
                                     })
-                                    .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("click to mute / unmute locally").build(window, cx))
+                                    .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("click to mute / unmute voice locally").build(window, cx))
                                     .child(if muted { "muted".to_owned() } else { format!("{pct}%") })
                                     .on_click(move |_, _, cx| {
                                         let id = id_mute.clone();
@@ -1233,6 +1342,67 @@ pub fn mixer(store: &Entity<Store>, palette: &Palette, window: &mut gpui::Window
                                     .child("200%"),
                             ),
                     )
+                    .when_some(screen_slider, |card, screen_slider| {
+                        card.child(
+                            v_flex()
+                                .gap(zpx(4.))
+                                .pt(zpx(6.))
+                                .border_t_1()
+                                .border_color(palette.border_subtle)
+                                .child(
+                                    h_flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .gap(space(8.))
+                                        .child(
+                                            h_flex()
+                                                .items_center()
+                                                .gap(zpx(5.))
+                                                .child(icon("icons/screen-share.svg").size(zpx(12.)).text_color(palette.text_tertiary))
+                                                .child(div().text_xs().text_color(palette.text_secondary).child("screen audio")),
+                                        )
+                                        .child(
+                                            div()
+                                                .id(("mix-screen-mute", ix))
+                                                .px(space(7.))
+                                                .py(zpx(2.))
+                                                .rounded(corner(6.))
+                                                .cursor_pointer()
+                                                .bg(if screen_muted { Hsla { a: 0.16, ..palette.danger } } else { palette.card })
+                                                .hover(|d| d.bg(palette.raised))
+                                                .font_family(palette.mono_font.clone())
+                                                .text_size(text(10.5))
+                                                .text_color(if screen_muted {
+                                                    palette.danger
+                                                } else if screen_pct > 100 {
+                                                    palette.idle
+                                                } else {
+                                                    palette.text_secondary
+                                                })
+                                                .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("click to mute / unmute screen audio locally").build(window, cx))
+                                                .child(if screen_muted { "muted".to_owned() } else { format!("{screen_pct}%") })
+                                                .on_click(move |_, _, cx| {
+                                                    let id = id_screen_mute.clone();
+                                                    s_screen_mute.update(cx, |s, cx| s.set_screen_audio_volume(id, if screen_muted { 1.0 } else { 0.0 }, cx));
+                                                }),
+                                        ),
+                                )
+                                .child(
+                                    v_flex()
+                                        .gap(zpx(2.))
+                                        .child(Slider::new(&screen_slider))
+                                        .child(
+                                            h_flex()
+                                                .justify_between()
+                                                .text_size(text(9.5))
+                                                .text_color(palette.text_tertiary)
+                                                .child("0%")
+                                                .child("100%")
+                                                .child("200%"),
+                                        ),
+                                ),
+                        )
+                    })
             }))
             .into_any_element()
     };

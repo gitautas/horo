@@ -125,6 +125,9 @@ pub struct Participant {
     /// They're sharing their screen, and the server's id for that track.
     pub screen: bool,
     pub screen_sid: Option<String>,
+    /// They're sharing screen audio, and the server's id for that track.
+    pub screen_audio: bool,
+    pub screen_audio_sid: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -158,17 +161,21 @@ enum Command {
 }
 
 /// The remote side of the mix: one jitter buffer per subscribed track, plus
-/// per-participant local gain (0.0 = locally muted, 1.0 = normal, up to 2.0).
+/// per-participant local gain (0.0 = locally muted, 1.0 = normal, up to 2.0)
+/// for voice and separately for screen-share audio.
 #[derive(Default)]
 struct Remotes {
     tracks: HashMap<Mid, Remote>,
     volumes: HashMap<String, f32>,
+    screen_volumes: HashMap<String, f32>,
 }
 
 struct Remote {
     buffer: JitterBuffer,
     last_packet: Instant,
     identity: Option<String>,
+    /// True when this track is screen-share audio rather than a microphone.
+    screen_audio: bool,
     /// When this remote track last sounded like speech (for immediate local
     /// speaking-ring detection independent of server `SpeakersChanged`).
     loud_at: Option<Instant>,
@@ -374,6 +381,18 @@ impl Call {
         }
     }
 
+    /// Set a remote participant's screen-share audio local playback volume
+    /// (`0.0` = local mute, `1.0` = 100%, up to `2.0` = 200%).
+    pub fn set_screen_audio_volume(&self, identity: &str, volume: f32) {
+        let clamped = volume.clamp(0.0, 2.0);
+        let mut remotes = self.remotes.lock().unwrap();
+        if (clamped - 1.0).abs() < 0.001 {
+            remotes.screen_volumes.remove(identity);
+        } else {
+            remotes.screen_volumes.insert(identity.to_owned(), clamped);
+        }
+    }
+
     /// Change the noise gate's threshold mid-call (dBFS; at
     /// [`GATE_OFF_DB`] or below nothing is cut).
     pub fn set_gate_threshold(&self, db: f32) {
@@ -431,8 +450,16 @@ fn participant(p: &proto::ParticipantInfo) -> Participant {
         let of = || p.tracks.iter().filter(move |t| t.r#type == proto::TrackType::Video as i32 && t.source == source as i32);
         of().find(|t| !t.muted).or_else(|| of().next())
     };
+    let screen_audio = {
+        let of = || p.tracks.iter().filter(|t| t.r#type == proto::TrackType::Audio as i32 && t.source == proto::TrackSource::ScreenShareAudio as i32);
+        of().find(|t| !t.muted).or_else(|| of().next())
+    };
     let (camera, screen) = (find(proto::TrackSource::Camera), find(proto::TrackSource::ScreenShare));
-    let muted = !p.tracks.iter().any(|t| t.r#type == proto::TrackType::Audio as i32 && !t.muted);
+    let muted = !p.tracks.iter().any(|t| {
+        t.r#type == proto::TrackType::Audio as i32
+            && t.source != proto::TrackSource::ScreenShareAudio as i32
+            && !t.muted
+    });
     Participant {
         sid: p.sid.clone(),
         identity: p.identity.clone(),
@@ -442,6 +469,8 @@ fn participant(p: &proto::ParticipantInfo) -> Participant {
         camera_sid: camera.map(|t| t.sid.clone()),
         screen: screen.is_some_and(|t| !t.muted),
         screen_sid: screen.map(|t| t.sid.clone()),
+        screen_audio: screen_audio.is_some_and(|t| !t.muted),
+        screen_audio_sid: screen_audio.map(|t| t.sid.clone()),
     }
 }
 
@@ -1052,13 +1081,25 @@ impl Engine {
         match event {
             PeerEvent::Audio { mid, rtp_time, data } => {
                 let now = Instant::now();
-                let owner = self
+                let (owner, is_screen_audio) = self
                     .owners
                     .get(&mid.to_string())
-                    .and_then(|(sid, _)| self.participants.get(sid))
-                    .map(|p| p.identity.clone());
+                    .and_then(|(sid, track_sid)| {
+                        let p = self.participants.get(sid)?;
+                        let screen_audio = p.screen_audio_sid.as_deref() == Some(track_sid.as_str());
+                        Some((Some(p.identity.clone()), screen_audio))
+                    })
+                    .unwrap_or((None, false));
                 let mut remotes = self.remotes.lock().unwrap();
-                let fresh = || JitterBuffer::new().map(|buffer| Remote { buffer, last_packet: now, identity: owner.clone(), loud_at: None });
+                let fresh = || {
+                    JitterBuffer::new().map(|buffer| Remote {
+                        buffer,
+                        last_packet: now,
+                        identity: owner.clone(),
+                        screen_audio: is_screen_audio,
+                        loud_at: None,
+                    })
+                };
                 let remote = match remotes.tracks.entry(mid) {
                     std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                     std::collections::hash_map::Entry::Vacant(entry) => match fresh() {
@@ -1074,6 +1115,9 @@ impl Engine {
                 }
                 if remote.identity.is_none() {
                     remote.identity = owner;
+                }
+                if is_screen_audio {
+                    remote.screen_audio = true;
                 }
                 remote.last_packet = now;
                 remote.buffer.push(rtp_time, data.to_vec(), now);
@@ -1203,6 +1247,7 @@ impl Speaker {
         let now = Instant::now();
         let mut remotes = self.remotes.lock().unwrap();
         let volumes = remotes.volumes.clone();
+        let screen_volumes = remotes.screen_volumes.clone();
         let live = remotes.tracks.values_mut().filter(|r| now.duration_since(r.last_packet) <= IDLE);
         let mut used = 0;
         let mut speaking_now = Vec::new();
@@ -1211,16 +1256,19 @@ impl Speaker {
                 self.frames.push([0.0; FRAME]);
             }
             if remote.buffer.pop(&mut self.frames[used]).is_ok() {
-                if frame_dbfs(&self.frames[used]) > SPEAKING_DB {
-                    remote.loud_at = Some(now);
+                if !remote.screen_audio {
+                    if frame_dbfs(&self.frames[used]) > SPEAKING_DB {
+                        remote.loud_at = Some(now);
+                    }
+                    if remote.loud_at.is_some_and(|at| now.duration_since(at) < SPEAKING_HOLD)
+                        && let Some(id) = &remote.identity
+                        && !speaking_now.contains(id)
+                    {
+                        speaking_now.push(id.clone());
+                    }
                 }
-                if remote.loud_at.is_some_and(|at| now.duration_since(at) < SPEAKING_HOLD)
-                    && let Some(id) = &remote.identity
-                    && !speaking_now.contains(id)
-                {
-                    speaking_now.push(id.clone());
-                }
-                let gain = remote.identity.as_deref().and_then(|id| volumes.get(id).copied()).unwrap_or(1.0);
+                let table = if remote.screen_audio { &screen_volumes } else { &volumes };
+                let gain = remote.identity.as_deref().and_then(|id| table.get(id).copied()).unwrap_or(1.0);
                 if gain <= 0.001 {
                     continue;
                 }

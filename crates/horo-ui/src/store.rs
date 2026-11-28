@@ -244,11 +244,21 @@ pub struct LightboxItem {
 pub struct Lightbox {
     pub items: Vec<LightboxItem>,
     pub index: usize,
+    /// Zoom factor (`1.0` = fitted to viewport, up to `5.0`).
+    pub zoom: f32,
+    /// Pan offset in logical pixels from center while zoomed.
+    pub pan: (f32, f32),
+    /// Active drag while panning: `(start_mouse, start_pan, moved)`.
+    pub drag: Option<((f32, f32), (f32, f32), bool)>,
 }
 
 impl Lightbox {
+    pub fn new(items: Vec<LightboxItem>, index: usize) -> Self {
+        Self { items, index, zoom: 1.0, pan: (0.0, 0.0), drag: None }
+    }
+
     pub fn single(item: LightboxItem) -> Self {
-        Self { items: vec![item], index: 0 }
+        Self::new(vec![item], 0)
     }
 
     pub fn current(&self) -> Option<&LightboxItem> {
@@ -263,10 +273,17 @@ impl Lightbox {
         self.index + 1 < self.items.len()
     }
 
+    pub fn reset_zoom(&mut self) {
+        self.zoom = 1.0;
+        self.pan = (0.0, 0.0);
+        self.drag = None;
+    }
+
     pub fn step(&mut self, delta: isize) -> bool {
         let next = self.index as isize + delta;
         if next >= 0 && (next as usize) < self.items.len() {
             self.index = next as usize;
+            self.reset_zoom();
             true
         } else {
             false
@@ -1263,6 +1280,13 @@ impl Store {
     pub fn close_lightbox(&mut self, cx: &mut Context<Self>) {
         self.lightbox = None;
         cx.notify();
+    }
+
+    pub fn update_lightbox(&mut self, f: impl FnOnce(&mut Lightbox), cx: &mut Context<Self>) {
+        if let Some(lb) = &mut self.lightbox {
+            f(lb);
+            cx.notify();
+        }
     }
 
     /// Open settings at `section`, or close them with `None`.

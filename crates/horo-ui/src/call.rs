@@ -209,6 +209,8 @@ pub struct CallView {
     pub participants: Vec<Participant>,
     /// Per-participant local playback volume (`0.0` = muted, `1.0` = 100%, up to `2.0`).
     pub participant_volumes: std::collections::HashMap<String, f32>,
+    /// Per-participant local playback volume for screen-share audio (`0.0` = muted, `1.0` = 100%, up to `2.0`).
+    pub screen_audio_volumes: std::collections::HashMap<String, f32>,
     /// Whether the per-user call volume mixer popover is open.
     pub mixer_open: bool,
     /// User minimized the bottom-right mini call modal.
@@ -319,6 +321,7 @@ impl Store {
             identity: None,
             participants: Vec::new(),
             participant_volumes: std::collections::HashMap::new(),
+            screen_audio_volumes: std::collections::HashMap::new(),
             mixer_open: false,
             pip_hidden: false,
             popped_out: false,
@@ -647,6 +650,22 @@ impl Store {
         cx.notify();
     }
 
+    /// Adjust a remote participant's screen-share audio local volume (`0.0`..=`2.0`) in the active call.
+    pub fn set_screen_audio_volume(&mut self, identity: String, volume: f32, cx: &mut Context<Self>) {
+        let clamped = volume.clamp(0.0, 2.0);
+        if let Some(live) = &self.call_live {
+            live.call.set_screen_audio_volume(&identity, clamped);
+        }
+        if let Some(view) = &mut self.call {
+            if (clamped - 1.0).abs() < 0.001 {
+                view.screen_audio_volumes.remove(&identity);
+            } else {
+                view.screen_audio_volumes.insert(identity, clamped);
+            }
+        }
+        cx.notify();
+    }
+
     /// Move the call to a microphone or speaker just chosen (`before` is
     /// what prefs said until now). One that won't open leaves the call on
     /// the old one, and says so.
@@ -735,8 +754,33 @@ impl Store {
         slider
     }
 
+    /// Get or create the draggable screen-share audio volume slider state (`0.0..=2.0`) for a remote participant.
+    pub fn call_screen_volume_slider(&mut self, identity: &str, cx: &mut Context<Self>) -> gpui::Entity<gpui_component::slider::SliderState> {
+        let key = horo_rtc::call::screen_key(identity);
+        if let Some(existing) = self.call_volume_sliders.get(&key) {
+            return existing.clone();
+        }
+        let vol = self
+            .call
+            .as_ref()
+            .and_then(|c| c.screen_audio_volumes.get(identity).copied())
+            .unwrap_or(1.0);
+        let slider = cx.new(|_| gpui_component::slider::SliderState::new().min(0.0).max(2.0).step(0.01).default_value(vol));
+        let id = identity.to_owned();
+        cx.subscribe(&slider, move |store, _, event: &gpui_component::slider::SliderEvent, cx| {
+            let val = match event {
+                gpui_component::slider::SliderEvent::Change(v) | gpui_component::slider::SliderEvent::Release(v) => v.start(),
+            };
+            store.set_screen_audio_volume(id.clone(), val, cx);
+        })
+        .detach();
+        self.call_volume_sliders.insert(key, slider.clone());
+        slider
+    }
+
     pub fn open_participant_menu(&mut self, menu: ParticipantMenu, cx: &mut Context<Self>) {
         let _ = self.call_volume_slider(&menu.identity, cx);
+        let _ = self.call_screen_volume_slider(&menu.identity, cx);
         self.call_participant_menu = Some(menu);
         cx.notify();
     }
@@ -842,18 +886,27 @@ impl Store {
     }
 
     pub fn reset_participant_volumes(&mut self, cx: &mut Context<Self>) {
-        let ids: Vec<String> = self
+        let (ids, screen_ids): (Vec<String>, Vec<String>) = self
             .call
             .as_ref()
-            .map(|v| v.participant_volumes.keys().cloned().collect())
+            .map(|v| {
+                (
+                    v.participant_volumes.keys().cloned().collect(),
+                    v.screen_audio_volumes.keys().cloned().collect(),
+                )
+            })
             .unwrap_or_default();
         if let Some(live) = &self.call_live {
             for id in &ids {
                 live.call.set_participant_volume(id, 1.0);
             }
+            for id in &screen_ids {
+                live.call.set_screen_audio_volume(id, 1.0);
+            }
         }
         if let Some(view) = &mut self.call {
             view.participant_volumes.clear();
+            view.screen_audio_volumes.clear();
         }
         cx.notify();
     }

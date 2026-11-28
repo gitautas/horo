@@ -2319,7 +2319,7 @@ impl Timeline {
             }
         }
         match index {
-            Some(index) => Lightbox { items, index },
+            Some(index) => Lightbox::new(items, index),
             None => Lightbox::single(fallback),
         }
     }
