@@ -55,17 +55,127 @@ pub enum FocusMode {
     Grid,
 }
 
-/// Which corner of the floating mini call modal is being dragged to resize it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PipResizeCorner {
+/// Which of the four viewport corners the floating mini call window docks into.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PipCorner {
     TopLeft,
+    TopRight,
+    BottomLeft,
+    #[default]
+    BottomRight,
+}
+
+/// Which edge or corner of the floating mini call window is being dragged to resize it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipResizeEdge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+    TopLeft,
+    TopRight,
     BottomLeft,
     BottomRight,
 }
 
-/// Default width and video-stage height of the floating mini call modal (design px).
-pub const PIP_DEFAULT_SIZE: (f32, f32) = (344., 184.);
-pub const PIP_MIN_SIZE: (f32, f32) = (260., 140.);
+/// Default, minimum, and maximum outer `(width, height)` of the floating mini call window (design px).
+pub const PIP_DEFAULT_SIZE: (f32, f32) = (360., 296.);
+pub const PIP_MIN_SIZE: (f32, f32) = (260., 210.);
+pub const PIP_MAX_SIZE: (f32, f32) = (960., 760.);
+/// Inset from the viewport's left, right, and bottom edges when docked in a corner (design px).
+pub const PIP_CORNER_INSET: f32 = 18.;
+/// Inset from the top edge when docked in a top corner (clears macOS traffic lights).
+#[cfg(target_os = "macos")]
+pub const PIP_TOP_INSET: f32 = 44.;
+#[cfg(not(target_os = "macos"))]
+pub const PIP_TOP_INSET: f32 = 18.;
+/// Minimum margin keeping the floating call window inside the viewport (design px).
+pub const PIP_MARGIN: f32 = 12.;
+
+/// The `(right, bottom)` inset for docking a call window of `size` into `corner`.
+pub fn pip_corner_pos(corner: PipCorner, size: (f32, f32), viewport: (f32, f32)) -> (f32, f32) {
+    let right = match corner {
+        PipCorner::TopRight | PipCorner::BottomRight => PIP_CORNER_INSET,
+        PipCorner::TopLeft | PipCorner::BottomLeft => (viewport.0 - size.0 - PIP_CORNER_INSET).max(PIP_MARGIN),
+    };
+    let bottom = match corner {
+        PipCorner::BottomLeft | PipCorner::BottomRight => PIP_CORNER_INSET,
+        PipCorner::TopLeft | PipCorner::TopRight => (viewport.1 - size.1 - PIP_TOP_INSET).max(PIP_MARGIN),
+    };
+    (right, bottom)
+}
+
+/// Which of the four corners is closest to the floating window's current center.
+pub fn nearest_pip_corner(rb: (f32, f32), size: (f32, f32), viewport: (f32, f32)) -> PipCorner {
+    let center_x = viewport.0 - rb.0 - size.0 * 0.5;
+    let center_y = viewport.1 - rb.1 - size.1 * 0.5;
+    match (center_x < viewport.0 * 0.5, center_y < viewport.1 * 0.5) {
+        (true, true) => PipCorner::TopLeft,
+        (false, true) => PipCorner::TopRight,
+        (true, false) => PipCorner::BottomLeft,
+        (false, false) => PipCorner::BottomRight,
+    }
+}
+
+/// Clamp the floating call window's `(right, bottom)` position and outer `(width, height)`
+/// so it always stays within the viewport bounds.
+pub fn clamp_pip_rect(pos: (f32, f32), size: (f32, f32), viewport: (f32, f32)) -> ((f32, f32), (f32, f32)) {
+    let max_w = (viewport.0 - PIP_MARGIN * 2.).min(PIP_MAX_SIZE.0).max(PIP_MIN_SIZE.0);
+    let max_h = (viewport.1 - PIP_MARGIN * 2.).min(PIP_MAX_SIZE.1).max(PIP_MIN_SIZE.1);
+    let w = size.0.clamp(PIP_MIN_SIZE.0, max_w);
+    let h = size.1.clamp(PIP_MIN_SIZE.1, max_h);
+    let right = pos.0.clamp(PIP_MARGIN, (viewport.0 - w - PIP_MARGIN).max(PIP_MARGIN));
+    let bottom = pos.1.clamp(PIP_MARGIN, (viewport.1 - h - PIP_MARGIN).max(PIP_MARGIN));
+    ((right, bottom), (w, h))
+}
+
+/// Compute the new `((right, bottom), (width, height))` while dragging `edge` from
+/// `start_mouse` to `mouse`, keeping the opposite edge(s) anchored in place.
+pub fn resize_pip_rect(
+    edge: PipResizeEdge,
+    start_mouse: (f32, f32),
+    start_rb: (f32, f32),
+    start_size: (f32, f32),
+    mouse: (f32, f32),
+    viewport: (f32, f32),
+) -> ((f32, f32), (f32, f32)) {
+    let dx = mouse.0 - start_mouse.0;
+    let dy = mouse.1 - start_mouse.1;
+    let max_w = (viewport.0 - PIP_MARGIN * 2.).min(PIP_MAX_SIZE.0).max(PIP_MIN_SIZE.0);
+    let max_h = (viewport.1 - PIP_MARGIN * 2.).min(PIP_MAX_SIZE.1).max(PIP_MIN_SIZE.1);
+
+    let (new_w, new_right) = match edge {
+        PipResizeEdge::Left | PipResizeEdge::TopLeft | PipResizeEdge::BottomLeft => {
+            let avail_w = (viewport.0 - start_rb.0 - PIP_MARGIN).min(max_w).max(PIP_MIN_SIZE.0);
+            let w = (start_size.0 - dx).clamp(PIP_MIN_SIZE.0, avail_w);
+            (w, start_rb.0)
+        }
+        PipResizeEdge::Right | PipResizeEdge::TopRight | PipResizeEdge::BottomRight => {
+            let avail_w = (start_size.0 + start_rb.0 - PIP_MARGIN).min(max_w).max(PIP_MIN_SIZE.0);
+            let w = (start_size.0 + dx).clamp(PIP_MIN_SIZE.0, avail_w);
+            let dw = w - start_size.0;
+            (w, (start_rb.0 - dw).max(PIP_MARGIN))
+        }
+        PipResizeEdge::Top | PipResizeEdge::Bottom => (start_size.0, start_rb.0),
+    };
+
+    let (new_h, new_bottom) = match edge {
+        PipResizeEdge::Top | PipResizeEdge::TopLeft | PipResizeEdge::TopRight => {
+            let avail_h = (viewport.1 - start_rb.1 - PIP_MARGIN).min(max_h).max(PIP_MIN_SIZE.1);
+            let h = (start_size.1 - dy).clamp(PIP_MIN_SIZE.1, avail_h);
+            (h, start_rb.1)
+        }
+        PipResizeEdge::Bottom | PipResizeEdge::BottomLeft | PipResizeEdge::BottomRight => {
+            let avail_h = (start_size.1 + start_rb.1 - PIP_MARGIN).min(max_h).max(PIP_MIN_SIZE.1);
+            let h = (start_size.1 + dy).clamp(PIP_MIN_SIZE.1, avail_h);
+            let dh = h - start_size.1;
+            (h, (start_rb.1 - dh).max(PIP_MARGIN))
+        }
+        PipResizeEdge::Left | PipResizeEdge::Right => (start_size.1, start_rb.1),
+    };
+
+    ((new_right, new_bottom), (new_w, new_h))
+}
 
 /// The call, as the UI draws it.
 #[derive(Debug, Clone)]
@@ -93,9 +203,11 @@ pub struct CallView {
     pub mixer_open: bool,
     /// User minimized the bottom-right mini call modal.
     pub pip_hidden: bool,
-    /// Custom `(right, bottom)` offset in design pixels for the draggable mini call modal.
+    /// Which of the four viewport corners the floating mini call window rests in.
+    pub pip_corner: PipCorner,
+    /// Live `(right, bottom)` offset in design pixels while dragging or resizing.
     pub pip_pos: Option<(f32, f32)>,
-    /// Custom `(width, stage_height)` in design pixels for the resizable mini call modal.
+    /// Custom outer `(width, height)` in design pixels for the resizable mini call window.
     pub pip_size: Option<(f32, f32)>,
     /// Drag anchor `((start_mouse_x, start_mouse_y), (start_right, start_bottom))` in design pixels.
     pip_drag_anchor: Option<((f32, f32), (f32, f32))>,
@@ -117,6 +229,11 @@ pub struct CallView {
 impl CallView {
     pub fn is_live(&self) -> bool {
         !matches!(self.status, CallStatus::Failed(_))
+    }
+
+    /// True while the user is actively dragging the floating call window to another corner.
+    pub fn is_pip_dragging(&self) -> bool {
+        self.pip_drag_anchor.is_some() && self.pip_pos.is_some()
     }
 
     /// Whether `user_id` is talking (any of their devices).
@@ -192,6 +309,7 @@ impl Store {
             participant_volumes: std::collections::HashMap::new(),
             mixer_open: false,
             pip_hidden: false,
+            pip_corner: PipCorner::default(),
             pip_pos: None,
             pip_size: None,
             pip_drag_anchor: None,
@@ -547,9 +665,12 @@ impl Store {
         }
     }
 
-    pub fn begin_call_pip_drag(&mut self, mouse: (f32, f32)) {
+    pub fn begin_call_pip_drag(&mut self, mouse: (f32, f32), viewport: (f32, f32)) {
         if let Some(view) = &mut self.call {
-            view.pip_drag_anchor = Some((mouse, view.pip_pos.unwrap_or((18., 18.))));
+            let size = view.pip_size.unwrap_or(PIP_DEFAULT_SIZE);
+            let raw_pos = view.pip_pos.unwrap_or_else(|| pip_corner_pos(view.pip_corner, size, viewport));
+            let (rb, _) = clamp_pip_rect(raw_pos, size, viewport);
+            view.pip_drag_anchor = Some((mouse, rb));
         }
     }
 
@@ -557,63 +678,51 @@ impl Store {
         if let Some(view) = &mut self.call
             && let Some((start_mouse, start_rb)) = view.pip_drag_anchor
         {
-            let (pip_w, pip_h) = view.pip_size.unwrap_or(PIP_DEFAULT_SIZE);
+            let size = view.pip_size.unwrap_or(PIP_DEFAULT_SIZE);
             let dx = mouse.0 - start_mouse.0;
             let dy = mouse.1 - start_mouse.1;
-            let max_right = (viewport.0 - pip_w - 12.).max(12.);
-            let max_bottom = (viewport.1 - pip_h - 110.).max(12.);
-            let right = (start_rb.0 - dx).clamp(12., max_right);
-            let bottom = (start_rb.1 - dy).clamp(12., max_bottom);
-            view.pip_pos = Some((right, bottom));
+            let (rb, _) = clamp_pip_rect((start_rb.0 - dx, start_rb.1 - dy), size, viewport);
+            view.pip_pos = Some(rb);
             cx.notify();
         }
     }
 
-    pub fn begin_call_pip_resize(&mut self, mouse: (f32, f32)) {
+    /// Snap the floating call window into whichever of the four corners is closest.
+    pub fn end_call_pip_drag(&mut self, viewport: (f32, f32), cx: &mut Context<Self>) {
         if let Some(view) = &mut self.call {
-            let rb = view.pip_pos.unwrap_or((18., 18.));
+            if let Some(pos) = view.pip_pos.take() {
+                let (_, size) = clamp_pip_rect(pos, view.pip_size.unwrap_or(PIP_DEFAULT_SIZE), viewport);
+                view.pip_corner = nearest_pip_corner(pos, size, viewport);
+            }
+            view.pip_drag_anchor = None;
+            cx.notify();
+        }
+    }
+
+    pub fn begin_call_pip_resize(&mut self, mouse: (f32, f32), viewport: (f32, f32)) {
+        if let Some(view) = &mut self.call {
             let size = view.pip_size.unwrap_or(PIP_DEFAULT_SIZE);
+            let raw_pos = view.pip_pos.unwrap_or_else(|| pip_corner_pos(view.pip_corner, size, viewport));
+            let (rb, size) = clamp_pip_rect(raw_pos, size, viewport);
             view.pip_resize_anchor = Some((mouse, rb, size));
         }
     }
 
-    pub fn move_call_pip_resize(&mut self, corner: PipResizeCorner, mouse: (f32, f32), viewport: (f32, f32), cx: &mut Context<Self>) {
+    pub fn move_call_pip_resize(&mut self, edge: PipResizeEdge, mouse: (f32, f32), viewport: (f32, f32), cx: &mut Context<Self>) {
         if let Some(view) = &mut self.call
             && let Some((start_mouse, start_rb, start_size)) = view.pip_resize_anchor
         {
-            let dx = mouse.0 - start_mouse.0;
-            let dy = mouse.1 - start_mouse.1;
-            let max_w = (viewport.0 - 24.).min(960.).max(PIP_MIN_SIZE.0);
-            let max_h = (viewport.1 - 140.).min(640.).max(PIP_MIN_SIZE.1);
+            let (rb, size) = resize_pip_rect(edge, start_mouse, start_rb, start_size, mouse, viewport);
+            view.pip_size = Some(size);
+            view.pip_pos = Some(rb);
+            cx.notify();
+        }
+    }
 
-            let (new_w, new_right) = match corner {
-                PipResizeCorner::TopLeft | PipResizeCorner::BottomLeft => {
-                    let w = (start_size.0 - dx).clamp(PIP_MIN_SIZE.0, (viewport.0 - start_rb.0 - 12.).min(max_w).max(PIP_MIN_SIZE.0));
-                    (w, start_rb.0)
-                }
-                PipResizeCorner::BottomRight => {
-                    let w = (start_size.0 + dx).clamp(PIP_MIN_SIZE.0, max_w);
-                    let dw = w - start_size.0;
-                    let r = (start_rb.0 - dw).clamp(12., (viewport.0 - w - 12.).max(12.));
-                    (w, r)
-                }
-            };
-
-            let (new_h, new_bottom) = match corner {
-                PipResizeCorner::TopLeft => {
-                    let h = (start_size.1 - dy).clamp(PIP_MIN_SIZE.1, (viewport.1 - start_rb.1 - 110.).min(max_h).max(PIP_MIN_SIZE.1));
-                    (h, start_rb.1)
-                }
-                PipResizeCorner::BottomLeft | PipResizeCorner::BottomRight => {
-                    let h = (start_size.1 + dy).clamp(PIP_MIN_SIZE.1, max_h);
-                    let dh = h - start_size.1;
-                    let b = (start_rb.1 - dh).clamp(12., (viewport.1 - h - 110.).max(12.));
-                    (h, b)
-                }
-            };
-
-            view.pip_size = Some((new_w, new_h));
-            view.pip_pos = Some((new_right, new_bottom));
+    pub fn end_call_pip_resize(&mut self, cx: &mut Context<Self>) {
+        if let Some(view) = &mut self.call {
+            view.pip_pos = None;
+            view.pip_resize_anchor = None;
             cx.notify();
         }
     }
@@ -934,5 +1043,59 @@ mod tests {
         assert_eq!(user_of("@alice:example.org:ABCDEF"), "@alice:example.org");
         assert_eq!(user_of("@alice:example.org"), "@alice:example.org");
         assert_eq!(user_of("@bob:matrix.org:XYZ"), "@bob:matrix.org");
+    }
+
+    #[test]
+    fn pip_resize_keeps_opposite_edges_anchored() {
+        let vp = (1200., 800.);
+        let start_rb = (100., 100.);
+        let start_size = (360., 296.);
+        let start_mouse = (500., 500.);
+
+        // Dragging Left edge 40px left widens by 40px without moving right edge or height.
+        let (rb, sz) = resize_pip_rect(PipResizeEdge::Left, start_mouse, start_rb, start_size, (460., 450.), vp);
+        assert_eq!(rb, (100., 100.));
+        assert_eq!(sz, (400., 296.));
+
+        // Dragging Right edge 40px right widens by 40px and shifts right inset by -40px so left edge stays fixed.
+        let (rb, sz) = resize_pip_rect(PipResizeEdge::Right, start_mouse, start_rb, start_size, (540., 450.), vp);
+        assert_eq!(rb, (60., 100.));
+        assert_eq!(sz, (400., 296.));
+
+        // Dragging Top edge 50px up grows height by 50px without moving bottom edge or width.
+        let (rb, sz) = resize_pip_rect(PipResizeEdge::Top, start_mouse, start_rb, start_size, (550., 450.), vp);
+        assert_eq!(rb, (100., 100.));
+        assert_eq!(sz, (360., 346.));
+
+        // Dragging Bottom edge 50px down grows height by 50px and shifts bottom inset by -50px so top edge stays fixed.
+        let (rb, sz) = resize_pip_rect(PipResizeEdge::Bottom, start_mouse, start_rb, start_size, (550., 550.), vp);
+        assert_eq!(rb, (100., 50.));
+        assert_eq!(sz, (360., 346.));
+
+        // Dragging BottomRight past the viewport right/bottom margin clamps without sliding the opposite edges.
+        let (rb, sz) = resize_pip_rect(PipResizeEdge::BottomRight, start_mouse, start_rb, start_size, (900., 900.), vp);
+        assert_eq!(rb, (PIP_MARGIN, PIP_MARGIN));
+        assert_eq!(sz, (start_size.0 + start_rb.0 - PIP_MARGIN, start_size.1 + start_rb.1 - PIP_MARGIN));
+
+        // Shrinking below minimum clamps cleanly at PIP_MIN_SIZE.
+        let (rb, sz) = resize_pip_rect(PipResizeEdge::TopLeft, start_mouse, start_rb, start_size, (900., 900.), vp);
+        assert_eq!(rb, start_rb);
+        assert_eq!(sz, PIP_MIN_SIZE);
+    }
+
+    #[test]
+    fn pip_snaps_to_nearest_of_four_corners() {
+        let vp = (1200., 800.);
+        let sz = PIP_DEFAULT_SIZE;
+
+        for corner in [PipCorner::TopLeft, PipCorner::TopRight, PipCorner::BottomLeft, PipCorner::BottomRight] {
+            let pos = pip_corner_pos(corner, sz, vp);
+            assert_eq!(nearest_pip_corner(pos, sz, vp), corner);
+        }
+
+        // Dragging past the horizontal midpoint from BottomRight switches to BottomLeft.
+        assert_eq!(nearest_pip_corner((500., 18.), sz, vp), PipCorner::BottomLeft);
+        // Dragging into the upper-right quadrant switches to TopRight.
+        assert_eq!(nearest_pip_corner((40., 450.), sz, vp), PipCorner::TopRight);
     }
 }

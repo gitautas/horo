@@ -504,10 +504,14 @@ fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, full: bool, 
             .map(|t| draw(t, Size::Fixed(fitted.0, fitted.1), false, store, palette, cx))
             .collect();
         return h_flex()
+            .flex_1()
+            .min_h_0()
+            .w_full()
             .flex_wrap()
             .gap_2()
             .justify_center()
-            .when(full, |d| d.flex_1().min_h_0().content_center())
+            .items_center()
+            .content_center()
             .children(drawn)
             .into_any_element();
     };
@@ -522,10 +526,12 @@ fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, full: bool, 
         })
         .collect();
     v_flex()
+        .flex_1()
+        .min_h_0()
+        .w_full()
         .gap_2()
-        .when(full, |d| d.flex_1().min_h_0())
-        .child(div().w_full().map(|d| if full { d.flex_1().min_h_0() } else { d.h(zpx(area.1)) }).child(big))
-        .when(!others.is_empty(), |d| d.child(h_flex().flex_wrap().gap_2().when(full, |d| d.justify_center()).children(others)))
+        .child(div().w_full().flex_1().min_h_0().child(big))
+        .when(!others.is_empty(), |d| d.child(h_flex().flex_none().flex_wrap().gap_2().justify_center().children(others)))
         .into_any_element()
 }
 
@@ -533,17 +539,20 @@ fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, full: bool, 
 #[derive(Clone, Copy)]
 pub struct DraggedCallPip;
 
-/// Drag payload for resizing the floating mini call modal from a corner.
+/// Drag payload for resizing the floating mini call window from any edge or corner.
 #[derive(Clone, Copy)]
-pub struct ResizedCallPip(pub crate::call::PipResizeCorner);
+pub struct ResizedCallPip(pub crate::call::PipResizeEdge);
 
-/// Floating mini call modal anchored in the bottom-right corner (draggable and
-/// resizable) whenever you're in a live call (unless fullscreen or minimized).
-/// Shows video tiles when anyone is on camera/screen, or participant avatar
-/// tiles with speaking rings in voice-only calls.
-pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window, cx: &mut App) -> Option<AnyElement> {
+/// Floating mini call window that snaps to any of the four viewport corners
+/// (draggable from side to side and resizable from any edge or corner) whenever
+/// you're in a live call (unless fullscreen or minimized). Shows video tiles
+/// when anyone is on camera/screen, or participant avatar tiles with speaking
+/// rings in voice-only calls.
+pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window, cx: &mut App) -> Vec<AnyElement> {
     let state = store.read(cx);
-    let call = state.call.clone().filter(|c| c.is_live() && !c.fullscreen && !c.pip_hidden)?;
+    let Some(call) = state.call.clone().filter(|c| c.is_live() && !c.fullscreen && !c.pip_hidden) else {
+        return Vec::new();
+    };
     let room_id = call.room_id.clone();
     let room_name = state
         .rooms
@@ -556,54 +565,155 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window,
     let hide = store.clone();
     let open_room = store.clone();
     let drag_start = store.clone();
+    let drop_drag = store.clone();
+    let drop_resize = store.clone();
     let zoom = crate::theme::zoom();
     let vp = window.viewport_size();
-    let (vw, vh) = (f32::from(vp.width) / zoom, f32::from(vp.height) / zoom);
-    let (raw_w, raw_h) = call.pip_size.unwrap_or(crate::call::PIP_DEFAULT_SIZE);
-    let pip_w = raw_w.clamp(crate::call::PIP_MIN_SIZE.0, (vw - 24.).min(960.).max(crate::call::PIP_MIN_SIZE.0));
-    let pip_h = raw_h.clamp(crate::call::PIP_MIN_SIZE.1, (vh - 140.).min(640.).max(crate::call::PIP_MIN_SIZE.1));
-    let (raw_right, raw_bottom) = call.pip_pos.unwrap_or((18., 18.));
-    let right = raw_right.clamp(12., (vw - pip_w - 12.).max(12.));
-    let bottom = raw_bottom.clamp(12., (vh - pip_h - 110.).max(12.));
+    let viewport = (f32::from(vp.width) / zoom, f32::from(vp.height) / zoom);
+    let raw_size = call.pip_size.unwrap_or(crate::call::PIP_DEFAULT_SIZE);
+    let raw_pos = call.pip_pos.unwrap_or_else(|| crate::call::pip_corner_pos(call.pip_corner, raw_size, viewport));
+    let ((right, bottom), (pip_w, pip_h)) = crate::call::clamp_pip_rect(raw_pos, raw_size, viewport);
 
-    let resize_handle = |id: &'static str, corner: crate::call::PipResizeCorner, cursor: gpui::CursorStyle, store: Entity<Store>| {
+    // If a drag or resize ended outside the window (no drop event), snap back cleanly.
+    if call.pip_pos.is_some() && !cx.has_active_drag() {
+        let store = store.clone();
+        let was_dragging = call.is_pip_dragging();
+        cx.defer(move |cx| {
+            store.update(cx, |s, cx| {
+                if was_dragging {
+                    s.end_call_pip_drag(viewport, cx);
+                } else {
+                    s.end_call_pip_resize(cx);
+                }
+            });
+        });
+    }
+
+    // Header + body padding + controls + gaps (+ connecting banner if shown).
+    let chrome_h = if connecting { 128. } else { 104. };
+    let stage_area = ((pip_w - 20.).max(80.), (pip_h - chrome_h).max(60.));
+
+    let resize_handle = |id: &'static str, edge: crate::call::PipResizeEdge, cursor: gpui::CursorStyle, store: Entity<Store>| {
         div()
             .id(id)
             .absolute()
-            .size(zpx(16.))
             .cursor(cursor)
-            .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
+            .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
                 cx.stop_propagation();
                 let z = crate::theme::zoom();
                 let pos = (f32::from(event.position.x) / z, f32::from(event.position.y) / z);
-                store.update(cx, |s, _| s.begin_call_pip_resize(pos));
+                let vp = window.viewport_size();
+                let viewport = (f32::from(vp.width) / z, f32::from(vp.height) / z);
+                store.update(cx, |s, _| s.begin_call_pip_resize(pos, viewport));
             })
-            .on_drag(ResizedCallPip(corner), |_, _, _, cx| cx.new(|_| gpui::EmptyView))
+            .on_drag(ResizedCallPip(edge), |_, _, _, cx| cx.new(|_| gpui::EmptyView))
     };
 
-    let tl_handle = resize_handle("call-pip-resize-tl", crate::call::PipResizeCorner::TopLeft, gpui::CursorStyle::ResizeUpLeftDownRight, store.clone())
+    let t_handle = resize_handle("call-pip-resize-t", crate::call::PipResizeEdge::Top, gpui::CursorStyle::ResizeUpDown, store.clone())
         .top_0()
-        .left_0();
-    let bl_handle = resize_handle("call-pip-resize-bl", crate::call::PipResizeCorner::BottomLeft, gpui::CursorStyle::ResizeUpRightDownLeft, store.clone())
+        .left(zpx(12.))
+        .right(zpx(12.))
+        .h(zpx(6.));
+    let b_handle = resize_handle("call-pip-resize-b", crate::call::PipResizeEdge::Bottom, gpui::CursorStyle::ResizeUpDown, store.clone())
         .bottom_0()
-        .left_0();
-    let br_handle = resize_handle("call-pip-resize-br", crate::call::PipResizeCorner::BottomRight, gpui::CursorStyle::ResizeUpLeftDownRight, store.clone())
+        .left(zpx(12.))
+        .right(zpx(12.))
+        .h(zpx(6.));
+    let l_handle = resize_handle("call-pip-resize-l", crate::call::PipResizeEdge::Left, gpui::CursorStyle::ResizeLeftRight, store.clone())
+        .left_0()
+        .top(zpx(12.))
+        .bottom(zpx(12.))
+        .w(zpx(6.));
+    let r_handle = resize_handle("call-pip-resize-r", crate::call::PipResizeEdge::Right, gpui::CursorStyle::ResizeLeftRight, store.clone())
+        .right_0()
+        .top(zpx(12.))
+        .bottom(zpx(12.))
+        .w(zpx(6.));
+
+    let grip_color = palette.text_tertiary;
+    let docked = call.pip_corner;
+    let tl_handle = resize_handle("call-pip-resize-tl", crate::call::PipResizeEdge::TopLeft, gpui::CursorStyle::ResizeUpLeftDownRight, store.clone())
+        .top_0()
+        .left_0()
+        .size(zpx(14.))
+        .when(docked == crate::call::PipCorner::BottomRight, |d| {
+            d.flex()
+                .items_start()
+                .justify_start()
+                .p(zpx(4.))
+                .child(div().size(zpx(6.)).rounded_tl(corner(2.)).border_l_2().border_t_2().border_color(grip_color).opacity(0.55))
+        });
+    let tr_handle = resize_handle("call-pip-resize-tr", crate::call::PipResizeEdge::TopRight, gpui::CursorStyle::ResizeUpRightDownLeft, store.clone())
+        .top_0()
+        .right_0()
+        .size(zpx(12.))
+        .when(docked == crate::call::PipCorner::BottomLeft, |d| {
+            d.flex()
+                .items_start()
+                .justify_end()
+                .p(zpx(4.))
+                .child(div().size(zpx(6.)).rounded_tr(corner(2.)).border_r_2().border_t_2().border_color(grip_color).opacity(0.55))
+        });
+    let bl_handle = resize_handle("call-pip-resize-bl", crate::call::PipResizeEdge::BottomLeft, gpui::CursorStyle::ResizeUpRightDownLeft, store.clone())
+        .bottom_0()
+        .left_0()
+        .size(zpx(14.))
+        .when(docked == crate::call::PipCorner::TopRight, |d| {
+            d.flex()
+                .items_end()
+                .justify_start()
+                .p(zpx(4.))
+                .child(div().size(zpx(6.)).rounded_bl(corner(2.)).border_l_2().border_b_2().border_color(grip_color).opacity(0.55))
+        });
+    let br_handle = resize_handle("call-pip-resize-br", crate::call::PipResizeEdge::BottomRight, gpui::CursorStyle::ResizeUpLeftDownRight, store.clone())
         .bottom_0()
         .right_0()
-        .flex()
-        .items_end()
-        .justify_end()
-        .p(zpx(4.))
-        .child(div().size(zpx(6.)).rounded_br(corner(2.)).border_r_2().border_b_2().border_color(palette.text_tertiary).opacity(0.55));
+        .size(zpx(14.))
+        .when(docked == crate::call::PipCorner::TopLeft, |d| {
+            d.flex()
+                .items_end()
+                .justify_end()
+                .p(zpx(4.))
+                .child(div().size(zpx(6.)).rounded_br(corner(2.)).border_r_2().border_b_2().border_color(grip_color).opacity(0.55))
+        });
 
-    Some(
+    let mut out = Vec::with_capacity(2);
+    if call.is_pip_dragging() {
+        let target = crate::call::nearest_pip_corner((right, bottom), (pip_w, pip_h), viewport);
+        let (tr, tb) = crate::call::pip_corner_pos(target, (pip_w, pip_h), viewport);
+        out.push(
+            div()
+                .absolute()
+                .bottom(zpx(tb))
+                .right(zpx(tr))
+                .w(zpx(pip_w))
+                .h(zpx(pip_h))
+                .rounded(corner(16.))
+                .bg(Hsla { a: 0.08, ..palette.accent })
+                .border_2()
+                .border_color(Hsla { a: 0.45, ..palette.accent })
+                .into_any_element(),
+        );
+    }
+
+    out.push(
         v_flex()
             .id("call-floating")
             .absolute()
             .bottom(zpx(bottom))
             .right(zpx(right))
             .w(zpx(pip_w))
+            .h(zpx(pip_h))
             .occlude()
+            .on_drop(move |_: &DraggedCallPip, window, cx| {
+                let z = crate::theme::zoom();
+                let vp = window.viewport_size();
+                let viewport = (f32::from(vp.width) / z, f32::from(vp.height) / z);
+                drop_drag.update(cx, |s, cx| s.end_call_pip_drag(viewport, cx));
+            })
+            .on_drop(move |_: &ResizedCallPip, _, cx| {
+                drop_resize.update(cx, |s, cx| s.end_call_pip_resize(cx));
+            })
             .rounded(corner(16.))
             .bg(palette.card)
             .border_1()
@@ -613,6 +723,7 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window,
             .child(
                 h_flex()
                     .id("call-floating-header")
+                    .flex_none()
                     .items_center()
                     .justify_between()
                     .gap(space(8.))
@@ -621,10 +732,12 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window,
                     .border_b_1()
                     .border_color(palette.border_subtle)
                     .cursor_grab()
-                    .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
+                    .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
                         let z = crate::theme::zoom();
                         let pos = (f32::from(event.position.x) / z, f32::from(event.position.y) / z);
-                        drag_start.update(cx, |s, _| s.begin_call_pip_drag(pos));
+                        let vp = window.viewport_size();
+                        let viewport = (f32::from(vp.width) / z, f32::from(vp.height) / z);
+                        drag_start.update(cx, |s, _| s.begin_call_pip_drag(pos, viewport));
                     })
                     .on_drag(DraggedCallPip, |_, _, _, cx| cx.new(|_| gpui::EmptyView))
                     .child(
@@ -672,17 +785,25 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window,
             )
             .child(
                 v_flex()
+                    .flex_1()
+                    .min_h_0()
                     .p(space(10.))
                     .gap(space(8.))
-                    .when(connecting, |col| col.child(div().text_xs().text_color(palette.text_tertiary).child("joining the call…")))
-                    .child(stage(&call, store, palette, false, (pip_w - 20., pip_h), cx))
-                    .child(h_flex().justify_center().child(controls(store, &call, "float"))),
+                    .when(connecting, |col| col.child(div().flex_none().text_xs().text_color(palette.text_tertiary).child("joining the call…")))
+                    .child(stage(&call, store, palette, false, stage_area, cx))
+                    .child(h_flex().flex_none().justify_center().child(controls(store, &call, "float"))),
             )
+            .child(t_handle)
+            .child(b_handle)
+            .child(l_handle)
+            .child(r_handle)
             .child(tl_handle)
+            .child(tr_handle)
             .child(bl_handle)
             .child(br_handle)
             .into_any_element(),
-    )
+    );
+    out
 }
 
 /// The call filling the window: its tiles as big as they'll go, and its
