@@ -7,7 +7,7 @@ resolver = "3"
 members = ["crates/*", "apps/*"]
 
 [workspace.package]
-version = "0.12.13"
+version = "0.12.14"
 edition = "2024"
 rust-version = "1.93"
 authors = ["horo"]
