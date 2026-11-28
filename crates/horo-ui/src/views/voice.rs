@@ -351,21 +351,44 @@ enum Size {
     Fill,
 }
 
-/// The biggest 16:9 tiles `count` of which fit in `width` x `height` with
-/// gaps between them, over whichever number of columns does best.
-fn fit(count: usize, width: f32, height: f32) -> (f32, f32) {
+/// For `count` 16:9 tiles in `width` × `height` with `columns` columns,
+/// the largest tile `(w, h)` that fits.
+fn fit_for(count: usize, width: f32, height: f32, columns: usize) -> (f32, f32) {
     const GAP: f32 = 8.;
-    let mut best = (0., 0.);
-    for columns in 1..=count.max(1) {
-        let rows = count.max(1).div_ceil(columns);
-        let w = (width - GAP * (columns - 1) as f32) / columns as f32;
-        let h = (height - GAP * (rows - 1) as f32) / rows as f32;
-        let w = w.min(h * 16. / 9.).floor();
-        if w > best.0 {
-            best = (w, (w * 9. / 16.).floor());
+    let rows = count.max(1).div_ceil(columns);
+    let w = (width - GAP * (columns - 1) as f32) / columns as f32;
+    let h = (height - GAP * (rows - 1) as f32) / rows as f32;
+    let w = w.min(h * 16. / 9.).floor().max(0.);
+    (w, (w * 9. / 16.).floor().max(0.))
+}
+
+/// The biggest 16:9 tiles `count` of which fit in `width` × `height` with
+/// gaps between them, returning `((tile_w, tile_h), columns)`.
+/// When `prev_cols` is provided, keeps that column count unless another
+/// layout is at least 12% wider so resizing across a boundary doesn't flicker.
+fn fit_grid(count: usize, width: f32, height: f32, prev_cols: Option<usize>) -> ((f32, f32), usize) {
+    let n = count.max(1);
+    let mut best = ((0., 0.), 1);
+    for columns in 1..=n {
+        let size = fit_for(n, width, height, columns);
+        if size.0 > best.0.0 {
+            best = (size, columns);
+        }
+    }
+    if let Some(prev) = prev_cols.filter(|&c| c >= 1 && c <= n) {
+        let current = fit_for(n, width, height, prev);
+        if current.0 > 0. && best.0.0 <= current.0 * 1.12 {
+            return (current, prev);
         }
     }
     best
+}
+
+/// The biggest 16:9 tiles `count` of which fit in `width` × `height` with
+/// gaps between them, over whichever number of columns does best.
+#[cfg(test)]
+fn fit(count: usize, width: f32, height: f32) -> (f32, f32) {
+    fit_grid(count, width, height, None).0
 }
 
 /// The size of the tiles beside a focused one.
@@ -498,21 +521,36 @@ fn stage(call: &CallView, store: &Entity<Store>, palette: &Palette, full: bool, 
         FocusMode::Grid => None,
     };
     let Some(focused) = focused else {
-        let fitted = fit(tiles.len(), area.0, area.1);
-        let drawn: Vec<AnyElement> = tiles
-            .iter()
-            .map(|t| draw(t, Size::Fixed(fitted.0, fitted.1), false, store, palette, cx))
+        let (fitted, columns) = if full {
+            fit_grid(tiles.len(), area.0, area.1, None)
+        } else {
+            thread_local! {
+                static LAST_PIP_COLS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+            }
+            let (prev_n, prev_c) = LAST_PIP_COLS.with(|c| c.get());
+            let prev = (prev_n == tiles.len() && prev_c > 0).then_some(prev_c);
+            let result = fit_grid(tiles.len(), area.0, area.1, prev);
+            LAST_PIP_COLS.with(|c| c.set((tiles.len(), result.1)));
+            result
+        };
+        let rows: Vec<AnyElement> = tiles
+            .chunks(columns.max(1))
+            .map(|row| {
+                let drawn: Vec<AnyElement> = row
+                    .iter()
+                    .map(|t| draw(t, Size::Fixed(fitted.0, fitted.1), false, store, palette, cx))
+                    .collect();
+                h_flex().gap_2().justify_center().items_center().children(drawn).into_any_element()
+            })
             .collect();
-        return h_flex()
+        return v_flex()
             .flex_1()
             .min_h_0()
             .w_full()
-            .flex_wrap()
             .gap_2()
             .justify_center()
             .items_center()
-            .content_center()
-            .children(drawn)
+            .children(rows)
             .into_any_element();
     };
     let big = draw(&tiles[focused], Size::Fill, true, store, palette, cx);
@@ -589,9 +627,9 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window,
         });
     }
 
-    // Header + body padding + controls + gaps (+ connecting banner if shown).
-    let chrome_h = if connecting { 128. } else { 104. };
-    let stage_area = ((pip_w - 20.).max(80.), (pip_h - chrome_h).max(60.));
+    // Border (2) + header + body padding + controls + gaps (+ connecting banner if shown).
+    let chrome_h = if connecting { 130. } else { 106. };
+    let stage_area = ((pip_w - 24.).max(80.), (pip_h - chrome_h).max(60.));
 
     let resize_handle = |id: &'static str, edge: crate::call::PipResizeEdge, cursor: gpui::CursorStyle, store: Entity<Store>| {
         div()
@@ -1257,7 +1295,7 @@ pub fn ringing(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option
 
 #[cfg(test)]
 mod tests {
-    use super::fit;
+    use super::{fit, fit_grid};
 
     #[test]
     fn tiles_fill_the_window() {
@@ -1271,5 +1309,16 @@ mod tests {
         // Four on a near-square area: two by two.
         let (w, _) = fit(4, 1000., 800.);
         assert_eq!(w, 496.);
+    }
+
+    #[test]
+    fn pip_grid_hysteresis_avoids_flickering_at_boundary() {
+        // Near the 1-col vs 2-col boundary for 2 tiles, keeping prev_cols=2
+        // prevents flipping to 1 column on tiny height changes.
+        let (_, cols) = fit_grid(2, 330., 196., Some(2));
+        assert_eq!(cols, 2);
+        // Once the window is decisively taller, it switches cleanly to 1 column.
+        let (_, cols) = fit_grid(2, 330., 240., Some(2));
+        assert_eq!(cols, 1);
     }
 }
