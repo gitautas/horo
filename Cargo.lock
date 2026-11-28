@@ -3864,7 +3864,7 @@ dependencies = [
 
 [[package]]
 name = "horo-core"
-version = "0.12.6"
+version = "0.12.7"
 dependencies = [
  "anyhow",
  "apple-native-keyring-store",
@@ -3889,7 +3889,7 @@ dependencies = [
 
 [[package]]
 name = "horo-desktop"
-version = "0.12.6"
+version = "0.12.7"
 dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
@@ -3901,7 +3901,7 @@ dependencies = [
 
 [[package]]
 name = "horo-rtc"
-version = "0.12.6"
+version = "0.12.7"
 dependencies = [
  "cc",
  "cpal",
@@ -3938,7 +3938,7 @@ dependencies = [
 
 [[package]]
 name = "horo-ui"
-version = "0.12.6"
+version = "0.12.7"
 dependencies = [
  "anyhow",
  "ashpd",
