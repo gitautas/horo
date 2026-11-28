@@ -61,6 +61,10 @@ pub struct Prefs {
     pub space_order: Vec<String>,
     /// Show OpenGraph link preview cards under pasted URLs.
     pub link_previews: bool,
+    /// Private per-user notes (Discord-style), keyed by Matrix user ID.
+    pub user_notes: std::collections::HashMap<String, String>,
+    /// Cached custom status text (synced with MSC4133 `chat.commet.profile_status`).
+    pub custom_status: String,
 }
 
 /// How many recent reactions are kept.
@@ -115,6 +119,8 @@ impl Default for Prefs {
             hide_muted_in_spaces: Vec::new(),
             space_order: Vec::new(),
             link_previews: true,
+            user_notes: std::collections::HashMap::new(),
+            custom_status: String::new(),
         }
     }
 }

@@ -99,6 +99,8 @@ pub struct Timeline {
     link_previews: HashMap<String, LinkPreviewState>,
     /// Message currently being edited inline in the timeline.
     editing: Option<InlineEdit>,
+    /// Message text being forwarded to another room/DM, plus its room filter input.
+    forwarding: Option<(String, Entity<InputState>)>,
 }
 
 struct InlineEdit {
@@ -254,6 +256,7 @@ impl Timeline {
             pinned_ids: HashSet::new(),
             link_previews: HashMap::new(),
             editing: None,
+            forwarding: None,
         };
 
         let backend = Backend::global(cx);
@@ -553,6 +556,166 @@ impl Timeline {
             });
         })
         .detach();
+    }
+
+    fn start_forward(&mut self, body: String, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("forward to room or dm…"));
+        input.update(cx, |s, cx| s.focus(window, cx));
+        cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify()).detach();
+        self.forwarding = Some((body, input));
+        cx.notify();
+    }
+
+    fn forward_to(&mut self, target_room: String, target_name: String, body: String, cx: &mut Context<Self>) {
+        self.forwarding = None;
+        cx.notify();
+        let Ok(room_id) = OwnedRoomId::try_from(target_room.as_str()) else { return };
+        let store = self.store.clone();
+        let backend = Backend::global(cx);
+        let task = backend.run({
+            let state = backend.state.clone();
+            async move {
+                let core = state.core().await?;
+                let options = horo_core::dto::SendOptions {
+                    body,
+                    markdown: true,
+                    reply_to: None,
+                    thread_root: None,
+                    msgtype: None,
+                    emotes: Vec::new(),
+                    mentions: Vec::new(),
+                    role_mentions: Vec::new(),
+                };
+                horo_core::matrix::timeline::send(&core, &room_id, options).await
+            }
+        });
+        cx.spawn(async move |_, cx| {
+            let outcome = task.await;
+            let _ = store.update(cx, |s, cx| match outcome {
+                Ok(Ok(())) => s.show_banner(crate::store::Tone::Info, format!("forwarded to {target_name}"), cx),
+                Ok(Err(e)) => s.show_banner(crate::store::Tone::Error, format!("couldn't forward: {e}"), cx),
+                Err(e) => s.show_banner(crate::store::Tone::Error, format!("couldn't forward: {e}"), cx),
+            });
+        })
+        .detach();
+    }
+
+    fn forward_modal(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (body, input) = self.forwarding.clone()?;
+        let query = input.read(cx).value().trim().to_lowercase();
+        let rooms: Vec<horo_core::dto::RoomSummary> = self
+            .store
+            .read(cx)
+            .rooms
+            .iter()
+            .filter(|r| !r.is_space && r.membership == horo_core::dto::RoomMembership::Joined)
+            .filter(|r| query.is_empty() || r.name.to_lowercase().contains(&query))
+            .take(12)
+            .cloned()
+            .collect();
+        let preview: String = body.replace('\n', " ").chars().take(120).collect();
+
+        Some(
+            div()
+                .id("forward-scrim")
+                .occlude()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(Hsla { a: 0.55, ..palette.app })
+                .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                    this.forwarding = None;
+                    cx.notify();
+                }))
+                .child(
+                    v_flex()
+                        .id("forward-card")
+                        .w(zpx(380.))
+                        .max_h(zpx(460.))
+                        .p(space(14.))
+                        .gap(space(10.))
+                        .rounded(corner(18.))
+                        .bg(palette.card)
+                        .border_1()
+                        .border_color(palette.border)
+                        .shadow_lg()
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .justify_between()
+                                .child(div().font_family(palette.heading_font.clone()).text_base().font_weight(FontWeight::BOLD).child("forward message"))
+                                .child(
+                                    div()
+                                        .id("forward-close")
+                                        .px(zpx(6.))
+                                        .py(zpx(2.))
+                                        .rounded(corner(6.))
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(palette.text_tertiary)
+                                        .hover(|d| d.bg(palette.raised).text_color(palette.text))
+                                        .child("✕")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.forwarding = None;
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px(space(10.))
+                                .py(space(7.))
+                                .rounded(corner(10.))
+                                .bg(palette.app)
+                                .border_1()
+                                .border_color(palette.border_subtle)
+                                .text_xs()
+                                .text_color(palette.text_secondary)
+                                .truncate()
+                                .child(preview),
+                        )
+                        .child(
+                            div()
+                                .px(space(10.))
+                                .py(space(6.))
+                                .rounded(corner(10.))
+                                .bg(palette.inset)
+                                .border_1()
+                                .border_color(palette.border_subtle)
+                                .child(Input::new(&input).appearance(false)),
+                        )
+                        .child(
+                            v_flex()
+                                .id("forward-list")
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .gap(zpx(3.))
+                                .children(rooms.into_iter().enumerate().map(|(ix, r)| {
+                                    let (rid, rname, fwd_body) = (r.id.clone(), r.name.clone(), body.clone());
+                                    let face = avatar(&r.id, &r.name, r.avatar_url.as_deref(), zpx(24.), cx);
+                                    h_flex()
+                                        .id(("fwd-room", ix))
+                                        .gap(space(8.))
+                                        .px(space(8.))
+                                        .py(space(6.))
+                                        .rounded(corner(10.))
+                                        .items_center()
+                                        .cursor_pointer()
+                                        .hover(|d| d.bg(palette.raised))
+                                        .child(face)
+                                        .child(div().flex_1().min_w_0().truncate().text_sm().text_color(palette.text).child(r.name))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.forward_to(rid.clone(), rname.clone(), fwd_body.clone(), cx);
+                                        }))
+                                })),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     fn pins_popover(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -1347,6 +1510,7 @@ impl Render for Timeline {
             .child(self.footer(&palette, cx))
             .children(jump_bar)
             .children(self.pins_popover(&palette, cx))
+            .children(self.forward_modal(&palette, cx))
             .children(self.message_menu(&palette, cx))
             .children(self.picker.as_ref().map(|(_, at, picker)| {
                 gpui::deferred(
@@ -1437,10 +1601,16 @@ impl Timeline {
         }
         list = list.child(menu::separator(palette));
         if let Some(body) = body {
-            list = list.child(menu::item("mm-copy", "copy text", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(body.clone()));
-                close(this, cx);
-            })));
+            let fwd_body = body.clone();
+            list = list
+                .child(menu::item("mm-copy", "copy text", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(body.clone()));
+                    close(this, cx);
+                })))
+                .child(menu::item("mm-forward", "forward…", true, None, palette).on_click(cx.listener(move |this, _, window, cx| {
+                    close(this, cx);
+                    this.start_forward(fwd_body.clone(), window, cx);
+                })));
         }
         let link = format!("https://matrix.to/#/{}/{}", self.room_id, id);
         list = list.child(menu::item("mm-link", "copy link", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {

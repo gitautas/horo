@@ -140,6 +140,8 @@ pub struct Store {
     /// Custom Space profiles (`im.horo.space_profile`), keyed by space ID.
     pub space_profiles: HashMap<String, horo_core::matrix::spaces::SpaceProfileDto>,
     space_profiles_asked: HashSet<String>,
+    /// Unsent composer drafts, keyed by room ID (or `room_id/thread_root`).
+    pub drafts: HashMap<String, String>,
 }
 
 /// Looking for a newer horo.
@@ -376,6 +378,7 @@ impl Store {
             roles_asked: HashSet::new(),
             space_profiles: HashMap::new(),
             space_profiles_asked: HashSet::new(),
+            drafts: HashMap::new(),
         };
         // The saved look and zoom, before anything is drawn.
         crate::theme::set_zoom(store.prefs.zoom);

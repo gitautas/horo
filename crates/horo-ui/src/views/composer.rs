@@ -166,12 +166,20 @@ impl Composer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Composer {
+        let draft_key = match &thread_root {
+            Some(root) => format!("{room_id}/{root}"),
+            None => room_id.to_string(),
+        };
+        let saved_draft = store.read(cx).drafts.get(&draft_key).cloned().unwrap_or_default();
         let placeholder = if thread_root.is_some() { "reply in the thread~".to_owned() } else { format!("say something cute in {room_name}~") };
         let input = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx);
             state.set_auto_grow(1, 10, cx);
             state.set_submit_on_enter(true, cx);
             state.set_placeholder(placeholder, window, cx);
+            if !saved_draft.is_empty() {
+                state.set_value(saved_draft, window, cx);
+            }
             state
         });
         cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
@@ -181,6 +189,7 @@ impl Composer {
                 InputEvent::PressEnter { shift: false, .. } if this.completing.is_some() => this.complete(None, window, cx),
                 InputEvent::PressEnter { shift: false, .. } => this.send(window, cx),
                 InputEvent::Change => {
+                    this.save_draft(cx);
                     this.update_completion(cx);
                     this.note_typing(cx);
                 }
@@ -218,6 +227,25 @@ impl Composer {
             role_mentions: Vec::new(),
             staged: Vec::new(),
         }
+    }
+
+    fn draft_key(&self) -> String {
+        match &self.thread_root {
+            Some(root) => format!("{}/{root}", self.room_id),
+            None => self.room_id.to_string(),
+        }
+    }
+
+    fn save_draft(&self, cx: &mut Context<Self>) {
+        let key = self.draft_key();
+        let text = self.input.read(cx).value().to_string();
+        self.store.update(cx, |s, _| {
+            if text.is_empty() {
+                s.drafts.remove(&key);
+            } else {
+                s.drafts.insert(key, text);
+            }
+        });
     }
 
     /// Tell the room we're typing while there's text, at most every few
@@ -677,26 +705,32 @@ impl Composer {
     }
 
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let body = self.input.read(cx).value().trim().to_owned();
+        let raw_body = self.input.read(cx).value().trim().to_owned();
         // Pasted files go first, then the words, as their own message.
         let files: Vec<Outgoing> = std::mem::take(&mut self.staged).into_iter().map(|s| s.file).collect();
         let uploaded = (!files.is_empty()).then(|| self.upload(files, cx));
-        if body.is_empty() {
+        if raw_body.is_empty() {
             if let Some(uploaded) = uploaded {
                 uploaded.detach();
             }
             cx.notify();
             return;
         }
+        let (body, msgtype) = expand_slash_command(&raw_body);
+        if body.is_empty() {
+            cx.notify();
+            return;
+        }
         let mode = std::mem::replace(&mut self.mode, Mode::Write);
         self.input.update(cx, |state, cx| state.set_value("", window, cx));
+        self.save_draft(cx);
         self.stop_typing(cx);
         self.error = None;
         let mentions = std::mem::take(&mut self.mentions);
         let role_mentions = std::mem::take(&mut self.role_mentions);
         let backend = Backend::global(cx);
         let job = {
-            let (state, room_id, body, mode) = (backend.state.clone(), self.room_id.clone(), body.clone(), mode.clone());
+            let (state, room_id, body, msgtype, mode) = (backend.state.clone(), self.room_id.clone(), body.clone(), msgtype.map(str::to_owned), mode.clone());
             let thread_root = self.thread_root.clone();
             // Every emote we know; the backend puts in the ones the text uses.
             let emotes = packs::emote_refs(&self.store.read(cx).packs);
@@ -709,7 +743,7 @@ impl Composer {
                     Mode::Reply { event_id, .. } => Some(event_id),
                     Mode::Write => None,
                 };
-                let options = SendOptions { body, markdown: true, reply_to, thread_root, msgtype: None, emotes, mentions, role_mentions };
+                let options = SendOptions { body, markdown: true, reply_to, thread_root, msgtype, emotes, mentions, role_mentions };
                 timeline::send(&core, &room_id, options).await
             }
         };
@@ -1131,8 +1165,49 @@ impl Render for Composer {
     }
 }
 
+/// Expand Discord/Matrix slash commands (`/shrug`, `/tableflip`, `/unflip`,
+/// `/lenny`, `/me`, `/spoiler`) into `(body, optional msgtype)`.
+fn expand_slash_command(input: &str) -> (String, Option<&'static str>) {
+    let Some(rest) = input.strip_prefix('/') else {
+        return (input.to_owned(), None);
+    };
+    let (cmd, arg) = match rest.split_once(char::is_whitespace) {
+        Some((c, a)) => (c, a.trim()),
+        None => (rest, ""),
+    };
+    let append = |suffix: &str| {
+        if arg.is_empty() {
+            suffix.to_owned()
+        } else {
+            format!("{arg} {suffix}")
+        }
+    };
+    match cmd.to_ascii_lowercase().as_str() {
+        "shrug" => (append(r"¯\_(ツ)_/¯"), None),
+        "tableflip" => (append("(╯°□°)╯︵ ┻━┻"), None),
+        "unflip" => (append("┬─┬ノ( º _ ºノ)"), None),
+        "lenny" => (append("( ͡° ͜ʖ ͡°)"), None),
+        "me" if !arg.is_empty() => (arg.to_owned(), Some("m.emote")),
+        "spoiler" if !arg.is_empty() => (format!("||{arg}||"), None),
+        _ => (input.to_owned(), None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::expand_slash_command;
+
+    #[test]
+    fn slash_commands_expand_cleanly() {
+        assert_eq!(expand_slash_command("/shrug"), (r"¯\_(ツ)_/¯".to_owned(), None));
+        assert_eq!(expand_slash_command("/shrug idk"), (r"idk ¯\_(ツ)_/¯".to_owned(), None));
+        assert_eq!(expand_slash_command("/tableflip"), ("(╯°□°)╯︵ ┻━┻".to_owned(), None));
+        assert_eq!(expand_slash_command("/unflip calm"), ("calm ┬─┬ノ( º _ ºノ)".to_owned(), None));
+        assert_eq!(expand_slash_command("/lenny"), ("( ͡° ͜ʖ ͡°)".to_owned(), None));
+        assert_eq!(expand_slash_command("/me waves"), ("waves".to_owned(), Some("m.emote")));
+        assert_eq!(expand_slash_command("/spoiler secret"), ("||secret||".to_owned(), None));
+        assert_eq!(expand_slash_command("/unknown hi"), ("/unknown hi".to_owned(), None));
+    }
     use chrono::TimeZone;
     use gpui::{ClipboardEntry, ClipboardItem, ClipboardString, ExternalPaths, Image, ImageFormat};
 

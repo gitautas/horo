@@ -252,6 +252,67 @@ pub fn start_ringback(volume: f32, output: Option<String>) -> Ringback {
     Ringback { stop }
 }
 
+/// Short synthesized cues for voice call events (Discord-style).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallCue {
+    Join,
+    Leave,
+    PeerJoin,
+    PeerLeave,
+    Mute,
+    Unmute,
+    Deafen,
+    Undeafen,
+}
+
+fn call_cue_notes(cue: CallCue) -> Vec<Note> {
+    match cue {
+        // Warm rising fifth when you connect.
+        CallCue::Join => vec![note(0.0, hz(0.0), 0.09, Triangle, 0.75), note(0.065, hz(7.0), 0.14, Triangle, 0.85)],
+        // Falling fifth when you disconnect.
+        CallCue::Leave => vec![note(0.0, hz(7.0), 0.09, Triangle, 0.75), note(0.065, hz(0.0), 0.14, Triangle, 0.7)],
+        // Soft rising two-note pop when someone joins the call.
+        CallCue::PeerJoin => vec![note(0.0, hz(5.0), 0.07, Sine, 0.65), note(0.055, hz(12.0), 0.11, Sine, 0.7)],
+        // Soft falling two-note pop when someone leaves the call.
+        CallCue::PeerLeave => vec![note(0.0, hz(10.0), 0.07, Sine, 0.6), note(0.055, hz(3.0), 0.11, Sine, 0.55)],
+        // Low muted click-drop.
+        CallCue::Mute => vec![slide(0.0, 440.0, 260.0, 0.08, 0.65)],
+        // Crisp upward click.
+        CallCue::Unmute => vec![slide(0.0, 300.0, 520.0, 0.08, 0.65)],
+        // Deeper double drop for deafen.
+        CallCue::Deafen => vec![note(0.0, hz(2.0), 0.07, Triangle, 0.7), note(0.055, hz(-5.0), 0.11, Triangle, 0.7)],
+        // Crisp double rise for undeafen.
+        CallCue::Undeafen => vec![note(0.0, hz(-5.0), 0.07, Triangle, 0.7), note(0.055, hz(2.0), 0.11, Triangle, 0.75)],
+    }
+}
+
+/// Play a short call feedback cue on `output` (or the default speaker).
+pub fn play_call_cue(cue: CallCue, volume: f32, output: Option<String>) {
+    if volume <= 0.0 {
+        return;
+    }
+    let notes = call_cue_notes(cue);
+    let samples = Arc::new(render(&notes, volume * 0.85));
+    let spawned = std::thread::Builder::new().name("horo-cue".into()).spawn(move || {
+        let length = Duration::from_secs_f32(samples.len() as f32 / SAMPLE_RATE as f32);
+        let mut at = 0;
+        let source = samples.clone();
+        let playback = Playback::start(output.as_deref(), move |frame: &mut [f32; FRAME]| {
+            for slot in frame.iter_mut() {
+                *slot = source.get(at).copied().unwrap_or(0.0);
+                at += 1;
+            }
+        });
+        match playback {
+            Ok(_playback) => std::thread::sleep(length + Duration::from_millis(40)),
+            Err(e) => tracing::warn!("couldn't play call cue: {e}"),
+        }
+    });
+    if let Err(e) = spawned {
+        tracing::warn!("couldn't start cue thread: {e}");
+    }
+}
+
 /// Play a sound by id on the default speaker. Unknown ids and `none` are
 /// silence: a settings file from another build shouldn't fail every message.
 pub fn play(kind: Kind, id: &str, volume: f32) {

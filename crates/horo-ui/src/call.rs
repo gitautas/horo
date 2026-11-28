@@ -468,7 +468,11 @@ impl Store {
         let Some(view) = self.call.as_mut().filter(|c| c.room_id == room_id) else { return };
         match event {
             CallEvent::Connected => {
+                let first_connect = view.status != CallStatus::Connected;
                 view.status = CallStatus::Connected;
+                if first_connect {
+                    crate::sounds::play_call_cue(crate::sounds::CallCue::Join, self.prefs.notification_volume, self.prefs.audio_output.clone());
+                }
                 // We rang them; play ringback until they pick up.
                 if view.participants.is_empty()
                     && let Some(live) = &mut self.call_live
@@ -487,6 +491,15 @@ impl Store {
                     // Someone picked up (or was already there): stop ringing.
                     live.ringing = false;
                     live.ringback = None;
+                }
+                if view.status == CallStatus::Connected {
+                    let joined = participants.iter().any(|p| !view.participants.iter().any(|old| old.identity == p.identity));
+                    let left = view.participants.iter().any(|old| !participants.iter().any(|p| p.identity == old.identity));
+                    if joined {
+                        crate::sounds::play_call_cue(crate::sounds::CallCue::PeerJoin, self.prefs.notification_volume, self.prefs.audio_output.clone());
+                    } else if left {
+                        crate::sounds::play_call_cue(crate::sounds::CallCue::PeerLeave, self.prefs.notification_volume, self.prefs.audio_output.clone());
+                    }
                 }
                 // Once every screen share stops, return to Auto so the next one
                 // takes focus automatically.
@@ -523,11 +536,15 @@ impl Store {
 
     /// Leave the call, if there is one.
     pub fn leave_call(&mut self, cx: &mut Context<Self>) {
+        let was_live = self.call.as_ref().is_some_and(|c| c.is_live());
         self.call = None;
         self.call_volume_sliders.clear();
         self.call_participant_menu = None;
         if let Some(live) = self.call_live.take() {
             self.hang_up(live, cx);
+        }
+        if was_live {
+            crate::sounds::play_call_cue(crate::sounds::CallCue::Leave, self.prefs.notification_volume, self.prefs.audio_output.clone());
         }
         cx.notify();
     }
@@ -567,6 +584,7 @@ impl Store {
     }
 
     pub fn set_call_muted(&mut self, muted: bool, cx: &mut Context<Self>) {
+        let changed = self.call.as_ref().is_some_and(|v| v.muted != muted);
         if let Some(live) = &self.call_live {
             live.call.set_muted(muted);
         }
@@ -575,6 +593,10 @@ impl Store {
             view.self_speaking &= !muted;
             view.loud_at = None;
         }
+        if changed {
+            let cue = if muted { crate::sounds::CallCue::Mute } else { crate::sounds::CallCue::Unmute };
+            crate::sounds::play_call_cue(cue, self.prefs.notification_volume, self.prefs.audio_output.clone());
+        }
         cx.notify();
     }
 
@@ -582,6 +604,7 @@ impl Store {
     /// someone who can't hear shouldn't be heard; undeafening leaves the
     /// microphone as it is.
     pub fn set_call_deafened(&mut self, deafened: bool, cx: &mut Context<Self>) {
+        let changed = self.call.as_ref().is_some_and(|v| v.deafened != deafened);
         if let Some(live) = &self.call_live {
             live.call.set_deafened(deafened);
         }
@@ -591,7 +614,16 @@ impl Store {
             view.loud_at = None;
         }
         if deafened {
-            self.set_call_muted(true, cx);
+            if let Some(live) = &self.call_live {
+                live.call.set_muted(true);
+            }
+            if let Some(view) = &mut self.call {
+                view.muted = true;
+            }
+        }
+        if changed {
+            let cue = if deafened { crate::sounds::CallCue::Deafen } else { crate::sounds::CallCue::Undeafen };
+            crate::sounds::play_call_cue(cue, self.prefs.notification_volume, self.prefs.audio_output.clone());
         }
         cx.notify();
     }

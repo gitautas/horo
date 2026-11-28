@@ -61,6 +61,8 @@ pub struct Shell {
     quick_switcher: Option<Entity<QuickSwitcher>>,
     /// The bottom-left status picker popover, when open.
     status_menu: Option<gpui::Point<gpui::Pixels>>,
+    /// Inline custom status input inside `status_menu`.
+    status_input: Entity<InputState>,
     /// The profile card, while one is open.
     profile: Option<Entity<ProfileCard>>,
     /// Holds the window's focus when nothing inside does, so ⌘, still
@@ -91,7 +93,24 @@ impl Shell {
         focus.focus(window, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("find or start a conversation"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, room_menu_can_delete: None, invite_to_space: None, space_settings: None, leave_space: None, browse: None, settings: None, quick_switcher: None, status_menu: None, profile: None, focus, search, filter: Filter::All, filters_open: false, space_hierarchy: None, joining: HashSet::new() };
+        let initial_status = store.read(cx).prefs.custom_status.clone();
+        let status_input = cx.new(|cx| {
+            let mut s = InputState::new(window, cx).placeholder("set a custom status…");
+            if !initial_status.is_empty() {
+                s.set_value(initial_status, window, cx);
+            }
+            s
+        });
+        cx.subscribe(&status_input, |this, input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                let text = input.read(cx).value().trim().to_owned();
+                this.save_custom_status(text, cx);
+                this.status_menu = None;
+                cx.notify();
+            }
+        })
+        .detach();
+        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, room_menu_can_delete: None, invite_to_space: None, space_settings: None, leave_space: None, browse: None, settings: None, quick_switcher: None, status_menu: None, status_input, profile: None, focus, search, filter: Filter::All, filters_open: false, space_hierarchy: None, joining: HashSet::new() };
         shell.follow_room(window, cx);
         shell.follow_space(cx);
         shell.follow_settings(window, cx);
@@ -405,6 +424,18 @@ impl Shell {
     /// A space's right-click menu, as SpacesRail.tsx's (after Discord's
     /// server menu).
     /// Discord-style status picker popover above the bottom-left user bar.
+    fn save_custom_status(&self, text: String, cx: &mut Context<Self>) {
+        self.store.update(cx, |s, cx| s.update_prefs(|p| p.custom_status = text.clone(), cx));
+        let backend = Backend::global(cx);
+        let state = backend.state.clone();
+        drop(backend.run(async move {
+            if let Ok(core) = state.core().await {
+                let update = horo_core::matrix::profile::ProfileUpdate { status: Some(text), bio: None, cover_url: None };
+                let _ = horo_core::matrix::profile::set_profile(&core, update).await;
+            }
+        }));
+    }
+
     fn status_popover(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
         let at = self.status_menu?;
         let (info, current_shown) = {
@@ -433,7 +464,47 @@ impl Shell {
         }
 
         let (user_id, avatar_hint) = (info.user_id.clone(), info.avatar_url.clone());
+        let has_status = !self.status_input.read(cx).value().trim().is_empty();
         list = list
+            .child(menu::separator(palette))
+            .child(menu::caption("custom status", palette))
+            .child(
+                h_flex()
+                    .px(space(8.))
+                    .pb(space(6.))
+                    .gap(zpx(6.))
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .px(space(8.))
+                            .py(zpx(4.))
+                            .rounded(corner(8.))
+                            .bg(palette.inset)
+                            .border_1()
+                            .border_color(palette.border_subtle)
+                            .child(Input::new(&self.status_input).appearance(false)),
+                    )
+                    .when(has_status, |row| {
+                        row.child(
+                            div()
+                                .id("st-clear-status")
+                                .px(zpx(6.))
+                                .py(zpx(4.))
+                                .rounded(corner(6.))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(palette.text_tertiary)
+                                .hover(|d| d.bg(palette.inset).text_color(palette.text))
+                                .child("✕")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.status_input.update(cx, |s, cx| s.set_value("", window, cx));
+                                    this.save_custom_status(String::new(), cx);
+                                    cx.notify();
+                                })),
+                        )
+                    }),
+            )
             .child(menu::separator(palette))
             .child(menu::item("st-profile", "view profile", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
                 close(this, cx);

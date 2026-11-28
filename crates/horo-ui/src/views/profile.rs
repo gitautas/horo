@@ -6,13 +6,15 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::{
-    AnyElement, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render,
+    AnyElement, AppContext, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render,
     SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, anchored, deferred, div, img, prelude::FluentBuilder,
 };
 use gpui_component::{
     Disableable,
     button::{Button, ButtonVariants},
-    h_flex, v_flex,
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    v_flex,
 };
 use horo_core::{
     dto::Verification,
@@ -40,6 +42,7 @@ pub struct ProfileCard {
     store: Entity<Store>,
     pub target: ProfileTarget,
     focus: FocusHandle,
+    note_input: Entity<InputState>,
     profile: Option<ProfileDto>,
     context: Option<UserContextDto>,
     busy: bool,
@@ -51,6 +54,35 @@ impl ProfileCard {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         cx.observe(&store, |_, _, cx| cx.notify()).detach();
+
+        let existing_note = store.read(cx).prefs.user_notes.get(&target.user_id).cloned().unwrap_or_default();
+        let note_input = cx.new(|cx| {
+            let mut s = InputState::new(window, cx).placeholder("click to add a private note…");
+            if !existing_note.is_empty() {
+                s.set_value(existing_note, window, cx);
+            }
+            s
+        });
+        let note_uid = target.user_id.clone();
+        cx.subscribe(&note_input, move |this, input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                let text = input.read(cx).value().trim().to_owned();
+                let uid = note_uid.clone();
+                this.store.update(cx, |s, cx| {
+                    s.update_prefs(
+                        |p| {
+                            if text.is_empty() {
+                                p.user_notes.remove(&uid);
+                            } else {
+                                p.user_notes.insert(uid.clone(), text.clone());
+                            }
+                        },
+                        cx,
+                    );
+                });
+            }
+        })
+        .detach();
 
         let backend = Backend::global(cx);
         let task = backend.run({
@@ -75,7 +107,7 @@ impl ProfileCard {
         })
         .detach();
 
-        ProfileCard { store, target, focus, profile: None, context: None, busy: false, error: None }
+        ProfileCard { store, target, focus, note_input, profile: None, context: None, busy: false, error: None }
     }
 
     fn close(&mut self, cx: &mut Context<Self>) {
@@ -307,6 +339,18 @@ impl Render for ProfileCard {
                     .when_some(bio, |c, bio| c.child(label("about")).child(div().text_sm().text_color(palette.text_secondary).child(bio)))
                     .when(!rooms.is_empty(), |c| {
                         c.child(label(if shared.len() == 1 { "1 shared room" } else { "shared rooms" })).children(rooms)
+                    })
+                    .when(!is_me, |c| {
+                        c.child(label("note")).child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded(palette.radius_md)
+                                .bg(palette.inset)
+                                .border_1()
+                                .border_color(palette.border_subtle)
+                                .child(Input::new(&self.note_input).appearance(false)),
+                        )
                     })
                     .children(self.error.clone().map(|e| div().text_sm().text_color(palette.danger).child(e)))
                     .children(actions.map(|a| a.pt_3())),
