@@ -70,17 +70,13 @@ fn localpart(user_id: &str) -> &str {
 }
 
 /// Everyone in our call, ourselves first, one entry per person (several
-/// devices of one person are one person).
+/// devices of one person are collapsed unless multiple devices are actively
+/// sending video; duplicate sessions for the same identity are always merged).
 fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
     let mut out: Vec<Person> = Vec::new();
     let mut add = |identity: &str, name: &str, muted: bool, me: bool, camera: bool, screen: bool, screen_audio: bool| {
         let user = user_of(identity).to_owned();
-        // A person's devices are one tile, except a device showing its
-        // camera: that picture needs a tile of its own (your phone's, say,
-        // beside this computer's).
-        if !camera && !screen && out.iter().any(|p| p.user_id == user && !p.camera && !p.screen) {
-            return;
-        }
+        let has_video = camera || screen;
         let mut person = person(&user, profiles, call.is_speaking(&user), muted);
         person.identity = Some(identity.to_owned());
         person.camera = camera;
@@ -92,6 +88,25 @@ fn people(call: &CallView, profiles: &HashMap<String, Known>) -> Vec<Person> {
             // The call's own name for them until their profile arrives.
             person.name = name.to_owned();
             person.real_name = name.to_owned();
+        }
+        // Never duplicate the exact same MatrixRTC identity (e.g. ghost SFU session).
+        if let Some(existing) = out.iter_mut().find(|p| p.identity.as_deref() == Some(identity)) {
+            if has_video || (!existing.camera && !existing.screen) {
+                *existing = person;
+            }
+            return;
+        }
+        // Collapse multiple devices of the same user into one tile unless both
+        // have active video; a video session replaces a voice-only ghost.
+        if let Some(ix) = out.iter().position(|p| p.user_id == user && !me) {
+            let existing_has_video = out[ix].camera || out[ix].screen;
+            if !has_video {
+                return;
+            }
+            if !existing_has_video {
+                out[ix] = person;
+                return;
+            }
         }
         out.push(person);
     };
@@ -947,6 +962,7 @@ impl gpui::Render for CallPopoutWindow {
             .child(stage(&call, &self.store, &palette, true, area, cx))
             .child(h_flex().flex_none().justify_center().child(controls(&self.store, &call, "popout")))
             .children(mixer(&self.store, &palette, window, cx))
+            .children(stats_popover(&self.store, &palette, cx))
             .children(participant_menu(&self.store, &palette, window, cx))
             .into_any_element()
     }
@@ -1471,6 +1487,91 @@ pub fn mixer(store: &Entity<Store>, palette: &Palette, window: &mut gpui::Window
     )
 }
 
+/// Floating connection stats popover (jitter buffer delay, packet loss, echo
+/// canceller status, and active streams).
+pub fn stats_popover(store: &Entity<Store>, palette: &Palette, cx: &mut App) -> Option<AnyElement> {
+    let open = store.read(cx).call.as_ref().is_some_and(|c| c.is_live() && c.stats_open);
+    if !open {
+        return None;
+    }
+    let stats = store.read(cx).call_stats_snapshot()?;
+    let (status_label, status_color) = match &stats.status {
+        CallStatus::Connected => ("connected", palette.online),
+        CallStatus::Connecting => ("connecting…", palette.idle),
+        CallStatus::Reconnecting => ("reconnecting…", palette.idle),
+        CallStatus::Failed(_) => ("disconnected", palette.danger),
+    };
+    let total = stats.packets_received + stats.packets_lost;
+    let loss_pct = if total > 0 { (stats.packets_lost as f64 / total as f64) * 100.0 } else { 0.0 };
+    let echo_label = match (stats.echo_cancelling, stats.echo_delay_ms) {
+        (true, Some(ms)) => format!("active ({ms} ms)"),
+        (true, None) => "active".to_owned(),
+        (false, _) => "off".to_owned(),
+    };
+    let row = |label: &'static str, value: String, color: Hsla| {
+        h_flex()
+            .items_center()
+            .justify_between()
+            .child(div().text_xs().text_color(palette.text_tertiary).child(label))
+            .child(div().font_family(palette.mono_font.clone()).text_xs().text_color(color).child(value))
+    };
+    let close_out = store.clone();
+    let close_btn = store.clone();
+
+    Some(
+        v_flex()
+            .id("call-stats-popover")
+            .occlude()
+            .absolute()
+            .bottom(space(78.))
+            .right(space(18.))
+            .w(zpx(270.))
+            .rounded(corner(16.))
+            .bg(palette.card)
+            .border_1()
+            .border_color(palette.border)
+            .shadow_lg()
+            .overflow_hidden()
+            .on_mouse_down_out(move |_, _, cx| close_out.update(cx, |s, cx| s.close_call_stats(cx)))
+            .child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .px(space(14.))
+                    .py(space(10.))
+                    .border_b_1()
+                    .border_color(palette.border_subtle)
+                    .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(palette.text).child("connection info"))
+                    .child(
+                        div()
+                            .id("stats-close")
+                            .px(space(6.))
+                            .py(zpx(2.))
+                            .rounded(corner(6.))
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(palette.text_tertiary)
+                            .hover(|d| d.bg(palette.raised).text_color(palette.text))
+                            .child("✕")
+                            .on_click(move |_, _, cx| close_btn.update(cx, |s, cx| s.close_call_stats(cx))),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .gap(zpx(8.))
+                    .p(space(12.))
+                    .child(row("status", status_label.to_owned(), status_color))
+                    .child(row("audio codec", "Opus · 48 kHz".to_owned(), palette.text_secondary))
+                    .child(row("jitter buffer", format!("{} ms", stats.jitter_ms), if stats.jitter_ms > 120 { palette.idle } else { palette.text_secondary }))
+                    .child(row("packet loss", format!("{loss_pct:.1}% ({}/{total})", stats.packets_lost), if loss_pct > 2.0 { palette.danger } else { palette.text_secondary }))
+                    .child(row("echo canceller", echo_label, palette.text_secondary))
+                    .child(row("remote audio tracks", stats.tracks.to_string(), palette.text_secondary))
+                    .child(row("video streams", stats.video_streams.to_string(), palette.text_secondary)),
+            )
+            .into_any_element(),
+    )
+}
+
 /// Our camera, screen, microphone, hearing, volume mixer and the way out.
 fn controls(store: &Entity<Store>, call: &CallView, prefix: &'static str) -> gpui::Div {
     let row = h_flex().gap_1();
@@ -1498,8 +1599,8 @@ fn controls(store: &Entity<Store>, call: &CallView, prefix: &'static str) -> gpu
                 .on_click(move |_, _, cx| camera.update(cx, |s, cx| s.set_call_camera(!camera_on, cx))),
         )
     };
-    let (mute, deafen, mixer_store, leave) = (store.clone(), store.clone(), store.clone(), store.clone());
-    let (muted, deafened, mixer_open) = (call.muted, call.deafened, call.mixer_open);
+    let (mute, deafen, mixer_store, stats_store, leave) = (store.clone(), store.clone(), store.clone(), store.clone(), store.clone());
+    let (muted, deafened, mixer_open, stats_open) = (call.muted, call.deafened, call.mixer_open, call.stats_open);
     row.child(
         Button::new(SharedString::from(format!("{prefix}-call-mute")))
             .ghost()
@@ -1523,6 +1624,14 @@ fn controls(store: &Entity<Store>, call: &CallView, prefix: &'static str) -> gpu
             .tooltip("per-user volume mixer")
             .when(mixer_open, |b| b.primary())
             .on_click(move |_, _, cx| mixer_store.update(cx, |s, cx| s.toggle_call_mixer(cx))),
+    )
+    .child(
+        Button::new(SharedString::from(format!("{prefix}-call-stats")))
+            .ghost()
+            .icon(gpui_component::Icon::new(gpui_component::IconName::Info))
+            .tooltip("connection stats")
+            .when(stats_open, |b| b.primary())
+            .on_click(move |_, _, cx| stats_store.update(cx, |s, cx| s.toggle_call_stats(cx))),
     )
     .child(
         Button::new(SharedString::from(format!("{prefix}-call-leave")))

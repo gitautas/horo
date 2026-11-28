@@ -26,10 +26,18 @@ use objc2_screen_capture_kit::{
 /// Called with each picture, on the capture queue.
 pub type OnFrame = Box<dyn Fn(&CVPixelBuffer) + Send + Sync>;
 
+/// Called with each chunk of 48 kHz mono float32 system audio, on the capture queue.
+pub type OnAudio = Box<dyn Fn(&[f32]) + Send + Sync>;
+
+struct SinkHandlers {
+    on_frame: OnFrame,
+    on_audio: Option<OnAudio>,
+}
+
 define_class!(
     #[unsafe(super(NSObject))]
     #[name = "HoroScreenSink"]
-    #[ivars = OnFrame]
+    #[ivars = SinkHandlers]
     struct Sink;
 
     unsafe impl NSObjectProtocol for Sink {}
@@ -37,21 +45,37 @@ define_class!(
     unsafe impl SCStreamOutput for Sink {
         #[unsafe(method(stream:didOutputSampleBuffer:ofType:))]
         fn did_output(&self, _stream: &SCStream, sample: &CMSampleBuffer, kind: SCStreamOutputType) {
-            if kind != SCStreamOutputType::Screen {
-                return;
-            }
-            // A screen that hasn't changed sends buffers with no picture.
-            // SAFETY: a plain accessor on the buffer we were handed.
-            if let Some(image) = unsafe { sample.image_buffer() } {
-                (self.ivars())(&image);
+            if kind == SCStreamOutputType::Screen {
+                // A screen that hasn't changed sends buffers with no picture.
+                // SAFETY: a plain accessor on the buffer we were handed.
+                if let Some(image) = unsafe { sample.image_buffer() } {
+                    (self.ivars().on_frame)(&image);
+                }
+            } else if kind == SCStreamOutputType::Audio
+                && let Some(on_audio) = &self.ivars().on_audio
+            {
+                // SAFETY: reading raw f32 PCM bytes from the audio CMSampleBuffer.
+                if let Some(buf) = unsafe { sample.data_buffer() } {
+                    let len = unsafe { buf.data_length() };
+                    if len >= 4 && len % 4 == 0 {
+                        let count = len / 4;
+                        let mut samples = vec![0.0f32; count];
+                        if let Some(dst) = std::ptr::NonNull::new(samples.as_mut_ptr().cast()) {
+                            let status = unsafe { buf.copy_data_bytes(0, len, dst) };
+                            if status == 0 {
+                                on_audio(&samples);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 );
 
 impl Sink {
-    fn new(on_frame: OnFrame) -> Retained<Sink> {
-        let this = Sink::alloc().set_ivars(on_frame);
+    fn new(on_frame: OnFrame, on_audio: Option<OnAudio>) -> Retained<Sink> {
+        let this = Sink::alloc().set_ivars(SinkHandlers { on_frame, on_audio });
         // SAFETY: NSObject's init, on a freshly allocated object.
         unsafe { msg_send![super(this), init] }
     }
@@ -169,9 +193,10 @@ pub struct ScreenShare {
 unsafe impl Send for ScreenShare {}
 
 impl ScreenShare {
-    /// Start sharing what was picked, `on_frame` hearing each picture.
+    /// Start sharing what was picked, `on_frame` hearing each picture and
+    /// `on_audio` optionally hearing 48 kHz mono system audio.
     /// Blocks while macOS answers (run it off the UI thread).
-    pub fn start(picked: Picked, quality: crate::prefs::ScreenQuality, on_frame: OnFrame) -> Result<ScreenShare, String> {
+    pub fn start(picked: Picked, quality: crate::prefs::ScreenQuality, on_frame: OnFrame, on_audio: Option<OnAudio>) -> Result<ScreenShare, String> {
         let filter = picked.0;
         // SAFETY: plain queries on the filter.
         let (w, h) = unsafe {
@@ -179,13 +204,20 @@ impl ScreenShare {
             let scale = f64::from(filter.pointPixelScale()).max(1.);
             (rect.size.width * scale, rect.size.height * scale)
         };
-        Self::stream(&filter, (w, h), quality, on_frame)
+        Self::stream(&filter, (w, h), quality, on_frame, on_audio)
     }
 
     /// Stream `filter`'s content, `(w, h)` pixels, fitted into `quality.max_size()`.
-    fn stream(filter: &SCContentFilter, (w, h): (f64, f64), quality: crate::prefs::ScreenQuality, on_frame: OnFrame) -> Result<ScreenShare, String> {
+    fn stream(
+        filter: &SCContentFilter,
+        (w, h): (f64, f64),
+        quality: crate::prefs::ScreenQuality,
+        on_frame: OnFrame,
+        on_audio: Option<OnAudio>,
+    ) -> Result<ScreenShare, String> {
         let (max_w, max_h) = quality.max_size();
         let fps = quality.fps() as i32;
+        let with_audio = on_audio.is_some();
         // SAFETY: ScreenCaptureKit calls with valid, retained arguments.
         unsafe {
             let config = SCStreamConfiguration::new();
@@ -198,13 +230,26 @@ impl ScreenShare {
             config.setPixelFormat(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
             config.setShowsCursor(true);
             config.setQueueDepth(5);
+            if with_audio {
+                config.setCapturesAudio(true);
+                config.setSampleRate(48_000);
+                config.setChannelCount(1);
+            }
 
             let stream = SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), filter, &config, None);
-            let sink = Sink::new(on_frame);
+            let sink = Sink::new(on_frame, on_audio);
             let queue = DispatchQueue::new("horo.screen", None);
             stream
                 .addStreamOutput_type_sampleHandlerQueue_error(ProtocolObject::from_ref(&*sink), SCStreamOutputType::Screen, Some(&queue))
                 .map_err(|e| e.localizedDescription().to_string())?;
+            if with_audio {
+                let audio_queue = DispatchQueue::new("horo.screen.audio", None);
+                let _ = stream.addStreamOutput_type_sampleHandlerQueue_error(
+                    ProtocolObject::from_ref(&*sink),
+                    SCStreamOutputType::Audio,
+                    Some(&audio_queue),
+                );
+            }
 
             let (tx, rx) = mpsc::channel();
             let started = block2::RcBlock::new(move |error: *mut NSError| {

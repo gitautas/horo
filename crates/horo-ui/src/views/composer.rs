@@ -82,6 +82,8 @@ struct Staged {
     file: Outgoing,
     /// The picture itself, when it is one.
     preview: Option<gpui::ImageSource>,
+    /// Mark attachment as a spoiler (`SPOILER_` prefix).
+    spoiler: bool,
 }
 
 impl Staged {
@@ -94,7 +96,7 @@ impl Staged {
                 .is_some_and(|m| m.starts_with("image/"))
                 .then(|| gpui::ImageSource::from(path.clone())),
         };
-        Staged { file, preview }
+        Staged { file, preview, spoiler: false }
     }
 }
 
@@ -157,6 +159,7 @@ const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand { name: "lenny", description: "appends ( ͡° ͜ʖ ͡°)" },
     SlashCommand { name: "me", description: "send an action / emote message" },
     SlashCommand { name: "spoiler", description: "wrap text in a spoiler" },
+    SlashCommand { name: "poll", description: "create a poll: /poll question | opt 1 | opt 2" },
 ];
 
 /// One line of the suggestions menu.
@@ -687,11 +690,11 @@ impl Composer {
 
     /// Queue each file in turn, saying under the box which ones failed;
     /// done when the last is queued.
-    fn upload(&mut self, files: Vec<Outgoing>, cx: &mut Context<Self>) -> gpui::Task<()> {
+    fn upload(&mut self, files: Vec<(Outgoing, bool)>, cx: &mut Context<Self>) -> gpui::Task<()> {
         let (room_id, thread_root) = (self.room_id.clone(), self.thread_root.clone());
         self.error = None;
         cx.spawn(async move |this, cx| {
-            for file in files {
+            for (file, spoiler) in files {
                 let name = file.name();
                 if let Outgoing::Path(path) = &file
                     && std::fs::metadata(path).is_ok_and(|m| m.len() > MAX_ATTACHMENT_BYTES)
@@ -702,14 +705,20 @@ impl Composer {
                     });
                     continue;
                 }
+                let caption = spoiler.then(|| format!("SPOILER_{name}"));
                 let Ok(task) = this.update(cx, |_, cx| {
                     let backend = Backend::global(cx);
                     let (state, room_id, thread) = (backend.state.clone(), room_id.clone(), thread_root.clone());
                     backend.run(async move {
                         let core = state.core().await?;
                         match file {
-                            Outgoing::Path(path) => timeline::send_attachment(&core, &room_id, thread.as_deref(), &path.to_string_lossy(), None).await,
-                            Outgoing::Bytes { bytes, mime, name } => timeline::send_attachment_data(&core, &room_id, thread.as_deref(), &name, Some(mime), bytes, None).await,
+                            Outgoing::Path(path) => {
+                                timeline::send_attachment(&core, &room_id, thread.as_deref(), &path.to_string_lossy(), caption).await
+                            }
+                            Outgoing::Bytes { bytes, mime, name } => {
+                                let name = if spoiler && !name.starts_with("SPOILER_") { format!("SPOILER_{name}") } else { name };
+                                timeline::send_attachment_data(&core, &room_id, thread.as_deref(), &name, Some(mime), bytes, None).await
+                            }
                         }
                     })
                 }) else {
@@ -731,12 +740,54 @@ impl Composer {
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let raw_body = self.input.read(cx).value().trim().to_owned();
         // Pasted files go first, then the words, as their own message.
-        let files: Vec<Outgoing> = std::mem::take(&mut self.staged).into_iter().map(|s| s.file).collect();
+        let files: Vec<(Outgoing, bool)> = std::mem::take(&mut self.staged).into_iter().map(|s| (s.file, s.spoiler)).collect();
         let uploaded = (!files.is_empty()).then(|| self.upload(files, cx));
         if raw_body.is_empty() {
             if let Some(uploaded) = uploaded {
                 uploaded.detach();
             }
+            cx.notify();
+            return;
+        }
+        // `/poll Question | Option 1 | Option 2` sends an interactive Matrix poll.
+        if let Some(rest) = raw_body.strip_prefix("/poll").map(str::trim)
+            && !rest.is_empty()
+        {
+            let parts: Vec<String> = rest.split('|').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect();
+            if parts.len() < 3 {
+                self.error = Some("usage: /poll Question | Option 1 | Option 2".into());
+                cx.notify();
+                return;
+            }
+            let question = parts[0].clone();
+            let answers = parts[1..].to_vec();
+            self.input.update(cx, |state, cx| state.set_value("", window, cx));
+            self.save_draft(cx);
+            self.stop_typing(cx);
+            self.error = None;
+            let backend = Backend::global(cx);
+            let (state, room_id, thread) = (backend.state.clone(), self.room_id.clone(), self.thread_root.clone());
+            let task = backend.run(async move {
+                let core = state.core().await?;
+                timeline::send_poll(&core, &room_id, thread.as_deref(), question, answers).await
+            });
+            cx.spawn_in(window, async move |this, cx| {
+                if let Some(uploaded) = uploaded {
+                    uploaded.await;
+                }
+                let err = match task.await {
+                    Ok(Ok(())) => None,
+                    Ok(Err(e)) => Some(e.to_string()),
+                    Err(e) => Some(e.to_string()),
+                };
+                if let Some(e) = err {
+                    let _ = this.update(cx, |composer, cx| {
+                        composer.error = Some(format!("couldn't start poll: {e}").into());
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
             cx.notify();
             return;
         }
@@ -840,6 +891,29 @@ impl Composer {
                     move |window, cx| gpui_component::tooltip::Tooltip::new(name.clone()).build(window, cx)
                 })
                 .child(face)
+                .child(
+                    div()
+                        .id(("spoiler-staged", i))
+                        .absolute()
+                        .bottom(zpx(4.))
+                        .left(zpx(4.))
+                        .px(zpx(5.))
+                        .py(zpx(1.))
+                        .rounded(corner(5.))
+                        .bg(if staged.spoiler { palette.accent } else { gpui::Hsla { a: 0.78, ..palette.app } })
+                        .text_size(text(9.))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(if staged.spoiler { palette.app } else { palette.text_secondary })
+                        .cursor_pointer()
+                        .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("mark as spoiler").build(window, cx))
+                        .child("spoiler")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(s) = this.staged.get_mut(i) {
+                                s.spoiler = !s.spoiler;
+                            }
+                            cx.notify();
+                        })),
+                )
                 .child(
                     div()
                         .id(("unstage", i))

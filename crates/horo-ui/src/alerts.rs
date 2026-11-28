@@ -82,7 +82,9 @@ impl Watch {
             // A room we've only just heard of has nothing to compare with.
             let Some(before) = seen.insert(room.id.clone(), now) else { continue };
 
-            if prefs.notify_messages && !room.is_muted {
+            let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let locally_muted = prefs.room_notify_overrides.get(&room.id).is_some_and(|o| o.is_muted_now(now_secs));
+            if prefs.notify_messages && !room.is_muted && !locally_muted {
                 let reading = !prefs.notify_when_focused && looking.window_active && looking.room == Some(room.id.as_str());
                 if now.count > before.count && !reading {
                     outcome.alerts.push(describe(room));

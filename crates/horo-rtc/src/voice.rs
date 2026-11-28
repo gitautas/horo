@@ -188,6 +188,59 @@ impl Meter {
     }
 }
 
+/// Live microphone-to-speaker loopback ("Let's Check" mic test) gated through
+/// the same [`NoiseGate`] calls use. Dropping it stops both devices.
+pub struct Loopback {
+    _capture: Capture,
+    _playback: Playback,
+    threshold: Arc<AtomicU32>,
+}
+
+impl Loopback {
+    /// Start looping `input` to `output` (system defaults when `None`), gated
+    /// at `threshold` dBFS.
+    pub fn start(input: Option<&str>, output: Option<&str>, threshold: f32) -> Result<Loopback> {
+        let queue: Arc<Mutex<std::collections::VecDeque<[f32; FRAME]>>> = Arc::new(Mutex::new(std::collections::VecDeque::with_capacity(8)));
+        let wanted = Arc::new(AtomicU32::new(threshold.to_bits()));
+        let q_in = queue.clone();
+        let wants = wanted.clone();
+        let mut gate = NoiseGate::new(SAMPLE_RATE);
+        gate.set_threshold(threshold);
+        let mut applied = threshold;
+        let capture = Capture::start(input, move |frame: &[f32; FRAME]| {
+            let t = f32::from_bits(wants.load(Ordering::Relaxed));
+            if t != applied {
+                applied = t;
+                gate.set_threshold(t);
+            }
+            let mut copy = *frame;
+            gate.process(&mut copy);
+            if let Ok(mut q) = q_in.lock() {
+                if q.len() >= 6 {
+                    q.pop_front();
+                }
+                q.push_back(copy);
+            }
+        })?;
+        let q_out = queue;
+        let playback = Playback::start(output, move |frame: &mut [f32; FRAME]| {
+            if let Ok(mut q) = q_out.lock()
+                && let Some(next) = q.pop_front()
+            {
+                *frame = next;
+            } else {
+                frame.fill(0.0);
+            }
+        })?;
+        Ok(Loopback { _capture: capture, _playback: playback, threshold: wanted })
+    }
+
+    /// Move the gate's threshold while testing.
+    pub fn set_threshold(&self, db: f32) {
+        self.threshold.store(db.to_bits(), Ordering::Relaxed);
+    }
+}
+
 /// An RMS level as a 0-to-1 loudness: a square root lifts quiet speech
 /// into view, the way voice-message waveforms are usually drawn.
 fn loudness(rms: f32) -> f32 {

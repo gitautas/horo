@@ -43,6 +43,50 @@ impl ScreenQuality {
     }
 }
 
+/// A bookmarked message saved locally for quick reference in the Inbox drawer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Bookmark {
+    pub room_id: String,
+    pub room_name: String,
+    pub event_id: String,
+    pub sender: String,
+    pub body: String,
+    pub saved_at: u64,
+}
+
+/// Per-channel local notification override (Discord-style right-click mute).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RoomNotifyOverride {
+    All,
+    MentionsOnly,
+    /// Muted until the given Unix epoch seconds (`None` = muted forever).
+    Muted { until: Option<u64> },
+}
+
+impl RoomNotifyOverride {
+    /// Whether this override currently suppresses all notifications.
+    pub fn is_muted_now(&self, now_secs: u64) -> bool {
+        match self {
+            Self::Muted { until: None } => true,
+            Self::Muted { until: Some(t) } => now_secs < *t,
+            _ => false,
+        }
+    }
+}
+
+/// A custom collapsible sidebar folder grouping rooms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomFolder {
+    pub id: String,
+    pub name: String,
+    pub room_ids: Vec<String>,
+    #[serde(default)]
+    pub collapsed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Prefs {
@@ -103,6 +147,28 @@ pub struct Prefs {
     pub custom_status: String,
     /// Preferred screen-share resolution and frame rate.
     pub screen_quality: ScreenQuality,
+    /// Include system/app audio when sharing your screen (where supported).
+    pub share_screen_audio: bool,
+    /// Remembered per-user local voice volume (`0.0..=2.0`), keyed by Matrix user ID.
+    pub user_volumes: std::collections::HashMap<String, f32>,
+    /// Remembered per-user local screen-share audio volume (`0.0..=2.0`), keyed by Matrix user ID.
+    pub user_screen_volumes: std::collections::HashMap<String, f32>,
+    /// Last docked corner for the floating PiP call window (`"bottomRight"`, `"bottomLeft"`, `"topRight"`, `"topLeft"`).
+    pub pip_corner: String,
+    /// Last resized `(width, height)` of the floating PiP call window.
+    pub pip_size: Option<(f32, f32)>,
+    /// Push-to-Talk mode (`false` = Voice Activity, `true` = Push-to-Talk).
+    pub push_to_talk: bool,
+    /// Key name for Push-to-Talk (e.g. `"`"`, `"v"`, `"alt"`).
+    pub ptt_key: String,
+    /// Release delay (ms) before re-muting after releasing the PTT key.
+    pub ptt_release_ms: u32,
+    /// Locally bookmarked messages.
+    pub bookmarks: Vec<Bookmark>,
+    /// Per-room notification overrides (all / mentions only / timed or permanent mute).
+    pub room_notify_overrides: std::collections::HashMap<String, RoomNotifyOverride>,
+    /// Custom collapsible sidebar room folders.
+    pub room_folders: Vec<RoomFolder>,
 }
 
 /// How many recent reactions are kept.
@@ -160,6 +226,17 @@ impl Default for Prefs {
             user_notes: std::collections::HashMap::new(),
             custom_status: String::new(),
             screen_quality: ScreenQuality::default(),
+            share_screen_audio: true,
+            user_volumes: std::collections::HashMap::new(),
+            user_screen_volumes: std::collections::HashMap::new(),
+            pip_corner: "bottomRight".into(),
+            pip_size: None,
+            push_to_talk: false,
+            ptt_key: "`".into(),
+            ptt_release_ms: 200,
+            bookmarks: Vec::new(),
+            room_notify_overrides: std::collections::HashMap::new(),
+            room_folders: Vec::new(),
         }
     }
 }

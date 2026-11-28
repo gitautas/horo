@@ -1289,6 +1289,31 @@ impl Store {
         }
     }
 
+    /// Bookmark a message or remove it if already bookmarked.
+    pub fn toggle_bookmark(&mut self, bookmark: crate::prefs::Bookmark, cx: &mut Context<Self>) {
+        self.update_prefs(
+            |p| {
+                if let Some(ix) = p.bookmarks.iter().position(|b| b.room_id == bookmark.room_id && b.event_id == bookmark.event_id) {
+                    p.bookmarks.remove(ix);
+                } else {
+                    p.bookmarks.insert(0, bookmark);
+                    p.bookmarks.truncate(200);
+                }
+            },
+            cx,
+        );
+    }
+
+    pub fn remove_bookmark(&mut self, room_id: &str, event_id: &str, cx: &mut Context<Self>) {
+        let (rid, eid) = (room_id.to_owned(), event_id.to_owned());
+        self.update_prefs(
+            |p| {
+                p.bookmarks.retain(|b| !(b.room_id == rid && b.event_id == eid));
+            },
+            cx,
+        );
+    }
+
     /// Open settings at `section`, or close them with `None`.
     pub fn show_settings(&mut self, section: Option<SettingsSection>, cx: &mut Context<Self>) {
         self.settings = section;

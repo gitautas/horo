@@ -398,6 +398,14 @@ pub struct MediaInfoDto {
     pub is_voice: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PollAnswerDto {
+    pub id: String,
+    pub text: String,
+    pub voters: Vec<String>,
+}
+
 /// Message content, flattened into what the UI actually needs to draw.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
@@ -421,7 +429,7 @@ pub enum ContentDto {
     #[serde(rename_all = "camelCase")]
     Sticker { body: String, media: MediaInfoDto },
     #[serde(rename_all = "camelCase")]
-    Poll { question: String, answers: Vec<String>, ended: bool },
+    Poll { question: String, answers: Vec<PollAnswerDto>, total_votes: usize, ended: bool },
     Redacted,
     #[serde(rename_all = "camelCase")]
     UnableToDecrypt { reason: String },
@@ -826,9 +834,20 @@ fn convert_content(content: &TimelineItemContent) -> (ContentDto, ContentExtras<
                 }
                 MsgLikeKind::Poll(p) => {
                     let results = p.results();
+                    let mut total_votes = 0usize;
+                    let answers = results
+                        .answers
+                        .iter()
+                        .map(|a| {
+                            let voters = results.votes.get(&a.id).cloned().unwrap_or_default();
+                            total_votes += voters.len();
+                            PollAnswerDto { id: a.id.clone(), text: a.text.clone(), voters }
+                        })
+                        .collect();
                     ContentDto::Poll {
                         question: results.question.clone(),
-                        answers: results.answers.iter().map(|a| a.text.clone()).collect(),
+                        answers,
+                        total_votes,
                         ended: results.end_time.is_some(),
                     }
                 }

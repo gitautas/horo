@@ -560,6 +560,84 @@ pub async fn send_sticker(
     Ok(())
 }
 
+/// Start an interactive Matrix poll (MSC3381 `org.matrix.msc3381.poll.start`).
+pub async fn send_poll(
+    core: &MatrixCore,
+    room_id: &RoomId,
+    thread_root: Option<&str>,
+    question: String,
+    answers: Vec<String>,
+) -> Result<()> {
+    use matrix_sdk::ruma::events::{
+        AnyMessageLikeEventContent,
+        poll::unstable_start::{
+            NewUnstablePollStartEventContent, UnstablePollAnswer, UnstablePollAnswers,
+            UnstablePollStartContentBlock, UnstablePollStartEventContent,
+        },
+    };
+
+    let poll_answers: Vec<UnstablePollAnswer> = answers
+        .into_iter()
+        .take(20)
+        .enumerate()
+        .map(|(i, text)| UnstablePollAnswer::new(format!("opt-{i}"), text))
+        .collect();
+    if poll_answers.len() < 2 {
+        return Err(Error::Other("a poll needs at least 2 options".into()));
+    }
+    let fallback = format!(
+        "{}\n{}",
+        question,
+        poll_answers.iter().enumerate().map(|(i, a)| format!("{}. {}", i + 1, a.text)).collect::<Vec<_>>().join("\n")
+    );
+    let answers = UnstablePollAnswers::try_from(poll_answers).map_err(|e| Error::Other(e.to_string()))?;
+    let block = UnstablePollStartContentBlock::new(question, answers);
+    let content = UnstablePollStartEventContent::New(NewUnstablePollStartEventContent::plain_text(fallback, block));
+    let timeline = get(core, room_id, thread_root).await?;
+    timeline.send(AnyMessageLikeEventContent::UnstablePollStart(content)).await?;
+    Ok(())
+}
+
+/// Cast (or change) our vote on an interactive Matrix poll.
+pub async fn vote_poll(
+    core: &MatrixCore,
+    room_id: &RoomId,
+    thread_root: Option<&str>,
+    poll_event_id: &str,
+    answer_id: String,
+) -> Result<()> {
+    use matrix_sdk::ruma::{
+        OwnedEventId,
+        events::{AnyMessageLikeEventContent, poll::unstable_response::UnstablePollResponseEventContent},
+    };
+
+    let event_id = OwnedEventId::try_from(poll_event_id).map_err(|e| Error::Other(e.to_string()))?;
+    let content = UnstablePollResponseEventContent::new(vec![answer_id], event_id);
+    let timeline = get(core, room_id, thread_root).await?;
+    timeline.send(AnyMessageLikeEventContent::UnstablePollResponse(content)).await?;
+    Ok(())
+}
+
+/// Close an interactive Matrix poll.
+pub async fn end_poll(
+    core: &MatrixCore,
+    room_id: &RoomId,
+    thread_root: Option<&str>,
+    poll_event_id: &str,
+    summary: String,
+) -> Result<()> {
+    use matrix_sdk::ruma::{
+        OwnedEventId,
+        events::{AnyMessageLikeEventContent, poll::unstable_end::UnstablePollEndEventContent},
+    };
+
+    let event_id = OwnedEventId::try_from(poll_event_id).map_err(|e| Error::Other(e.to_string()))?;
+    let content = UnstablePollEndEventContent::new(summary, event_id);
+    let timeline = get(core, room_id, thread_root).await?;
+    timeline.send(AnyMessageLikeEventContent::UnstablePollEnd(content)).await?;
+    Ok(())
+}
+
 pub async fn paginate_back(
     core: &MatrixCore,
     room_id: &RoomId,

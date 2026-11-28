@@ -66,6 +66,8 @@ pub struct Settings {
     devices: Option<(Vec<DeviceInfo>, Vec<DeviceInfo>)>,
     /// The chosen microphone, listened to while the voice section is open.
     meter: Option<Preview<horo_rtc::voice::Meter>>,
+    /// Live mic-to-speaker loopback ("let's check" test), while active.
+    loopback: Option<horo_rtc::voice::Loopback>,
     /// The chosen camera, likewise; and the cameras there are.
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     camera: Option<Preview<crate::camera::Camera>>,
@@ -244,6 +246,7 @@ impl Settings {
             font,
             devices: None,
             meter: None,
+            loopback: None,
             sensitivity,
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             camera: None,
@@ -633,6 +636,7 @@ impl Settings {
 
     fn stop_previews(&mut self) {
         self.meter = None;
+        self.loopback = None;
         #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         {
             self.camera = None;
@@ -739,6 +743,144 @@ impl Settings {
                                         this.store.update(cx, |s, cx| s.update_prefs(|p| p.screen_quality = q, cx));
                                     }))
                             })),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .pt_1()
+                            .child(div().text_xs().text_color(palette.text_secondary).child("share system audio with screen"))
+                            .child(
+                                Switch::new("share-screen-audio")
+                                    .checked(prefs.share_screen_audio)
+                                    .on_click(cx.listener(|this, on, _, cx| {
+                                        let on = *on;
+                                        this.store.update(cx, |s, cx| s.update_prefs(|p| p.share_screen_audio = on, cx));
+                                    })),
+                            ),
+                    ),
+            )
+            .child(
+                card(palette)
+                    .child(field(palette, "input mode", Some("voice activity sends whenever you speak; push-to-talk sends while holding the key.")))
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .children([(false, "voice activity"), (true, "push-to-talk")].into_iter().enumerate().map(|(i, (ptt, label))| {
+                                let on = prefs.push_to_talk == ptt;
+                                div()
+                                    .id(("input-mode", i))
+                                    .px_3()
+                                    .py(zpx(6.))
+                                    .rounded_full()
+                                    .border_1()
+                                    .border_color(if on { palette.accent } else { palette.border })
+                                    .when(on, |d| d.bg(gpui::Hsla { a: 0.12, ..palette.accent }))
+                                    .text_xs()
+                                    .text_color(if on { palette.text } else { palette.text_secondary })
+                                    .cursor_pointer()
+                                    .hover(|d| d.text_color(palette.text))
+                                    .child(label)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.store.update(cx, |s, cx| s.update_prefs(|p| p.push_to_talk = ptt, cx));
+                                    }))
+                            })),
+                    )
+                    .when(prefs.push_to_talk, |c| {
+                        let key_choices = [
+                            ("`", "` (backtick)"),
+                            ("v", "V"),
+                            ("f13", "F13"),
+                            ("capslock", "Caps Lock"),
+                        ];
+                        let delay_choices = [(0u32, "0 ms"), (200u32, "200 ms"), (500u32, "500 ms")];
+                        c.child(
+                            h_flex()
+                                .flex_wrap()
+                                .items_center()
+                                .gap_2()
+                                .child(div().text_xs().text_color(palette.text_tertiary).child("key:"))
+                                .children(key_choices.into_iter().enumerate().map(|(i, (k, label))| {
+                                    let on = prefs.ptt_key == k;
+                                    div()
+                                        .id(("ptt-key", i))
+                                        .px_2p5()
+                                        .py(zpx(4.))
+                                        .rounded_full()
+                                        .border_1()
+                                        .border_color(if on { palette.accent } else { palette.border })
+                                        .when(on, |d| d.bg(gpui::Hsla { a: 0.12, ..palette.accent }))
+                                        .text_xs()
+                                        .text_color(if on { palette.text } else { palette.text_secondary })
+                                        .cursor_pointer()
+                                        .child(label)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.store.update(cx, |s, cx| s.update_prefs(|p| p.ptt_key = k.to_owned(), cx));
+                                        }))
+                                })),
+                        )
+                        .child(
+                            h_flex()
+                                .flex_wrap()
+                                .items_center()
+                                .gap_2()
+                                .child(div().text_xs().text_color(palette.text_tertiary).child("release delay:"))
+                                .children(delay_choices.into_iter().enumerate().map(|(i, (ms, label))| {
+                                    let on = prefs.ptt_release_ms == ms;
+                                    div()
+                                        .id(("ptt-delay", i))
+                                        .px_2p5()
+                                        .py(zpx(4.))
+                                        .rounded_full()
+                                        .border_1()
+                                        .border_color(if on { palette.accent } else { palette.border })
+                                        .when(on, |d| d.bg(gpui::Hsla { a: 0.12, ..palette.accent }))
+                                        .text_xs()
+                                        .text_color(if on { palette.text } else { palette.text_secondary })
+                                        .cursor_pointer()
+                                        .child(label)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.store.update(cx, |s, cx| s.update_prefs(|p| p.ptt_release_ms = ms, cx));
+                                        }))
+                                })),
+                        )
+                    }),
+            )
+            .child(
+                card(palette)
+                    .child(field(palette, "mic test", Some("hear your microphone through your speaker with the noise gate applied.")))
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Button::new("mic-loopback-toggle")
+                                    .when(self.loopback.is_some(), |b| b.danger())
+                                    .when(self.loopback.is_none(), |b| b.ghost())
+                                    .label(if self.loopback.is_some() { "stop testing" } else { "let's check" })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if this.loopback.take().is_some() {
+                                            cx.notify();
+                                            return;
+                                        }
+                                        let prefs = this.store.read(cx).prefs.clone();
+                                        match horo_rtc::voice::Loopback::start(
+                                            prefs.audio_input.as_deref(),
+                                            prefs.audio_output.as_deref(),
+                                            prefs.input_sensitivity,
+                                        ) {
+                                            Ok(lb) => {
+                                                this.loopback = Some(lb);
+                                                this.error = None;
+                                            }
+                                            Err(e) => {
+                                                this.error = Some(format!("couldn't start mic test: {e}").into());
+                                            }
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
                     ),
             )
             .child(div().text_xs().text_color(palette.text_tertiary).child(

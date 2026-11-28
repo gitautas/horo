@@ -441,10 +441,11 @@ impl Timeline {
 
     fn update_search(&mut self, cx: &mut Context<Self>) {
         let Some(input) = &self.search else { return };
-        let needle = input.read(cx).value().trim().to_lowercase();
+        let raw = input.read(cx).value().trim().to_owned();
         self.search_matches.clear();
         self.search_cursor = 0;
-        if !needle.is_empty() {
+        if !raw.is_empty() {
+            let filter = SearchFilter::parse(&raw);
             for (ix, item) in self.items.iter().enumerate().rev() {
                 if item.kind != TimelineRowKind::Event {
                     continue;
@@ -453,9 +454,7 @@ impl Timeline {
                 if !worth_showing(&event.content) || is_system(&event.content) {
                     continue;
                 }
-                let (text_body, _) = body_text(&event.content);
-                let sender = event.sender_name.as_deref().unwrap_or(event.sender.as_str());
-                if text_body.to_lowercase().contains(&needle) || sender.to_lowercase().contains(&needle) {
+                if filter.matches(event) {
                     self.search_matches.push(ix);
                 }
             }
@@ -880,70 +879,109 @@ impl Timeline {
         } else {
             format!("{} / {}", self.search_cursor + 1, total)
         };
-        Some(
-            h_flex()
-                .flex_none()
-                .items_center()
-                .gap(space(8.))
-                .mx(space(22.))
-                .mt(space(10.))
-                .px(space(12.))
-                .py(space(6.))
-                .rounded(corner(12.))
-                .bg(palette.card)
+        let chip = |id: &'static str, token: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .px(space(7.))
+                .py(zpx(2.))
+                .rounded_full()
+                .bg(palette.raised)
                 .border_1()
-                .border_color(palette.border)
-                .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                    if event.keystroke.key == "escape" {
-                        cx.stop_propagation();
-                        this.close_search(cx);
+                .border_color(palette.border_subtle)
+                .text_size(text(10.5))
+                .text_color(palette.text_tertiary)
+                .cursor_pointer()
+                .hover(|d| d.text_color(palette.text).border_color(palette.accent))
+                .child(label)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if let Some(search) = &this.search {
+                        let cur = search.read(cx).value().to_string();
+                        let next = if cur.trim().is_empty() { token.to_owned() } else { format!("{} {token}", cur.trim_end()) };
+                        search.update(cx, |s, cx| {
+                            s.set_value(next, window, cx);
+                            s.focus(window, cx);
+                        });
+                        this.update_search(cx);
                     }
                 }))
-                .child(Icon::new(IconName::Search).size(zpx(14.)).text_color(palette.text_tertiary))
-                .child(div().flex_1().min_w_0().text_size(text(13.)).child(Input::new(input).appearance(false)))
-                .when(!count_label.is_empty(), |d| {
-                    d.child(div().flex_none().font_family(palette.mono_font.clone()).text_size(text(11.)).text_color(palette.text_tertiary).child(count_label))
-                })
+        };
+        Some(
+            v_flex()
+                .flex_none()
+                .gap(zpx(6.))
+                .mx(space(22.))
+                .mt(space(10.))
                 .child(
-                    div()
-                        .id("search-prev")
-                        .px(space(6.))
-                        .py(zpx(2.))
-                        .rounded(corner(6.))
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(if total > 0 { palette.text_secondary } else { palette.text_tertiary })
-                        .hover(|d| d.bg(palette.raised))
-                        .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("older match").build(window, cx))
-                        .child("↑")
-                        .on_click(cx.listener(|this, _, _, cx| this.step_search(1, cx))),
+                    h_flex()
+                        .items_center()
+                        .gap(space(8.))
+                        .px(space(12.))
+                        .py(space(6.))
+                        .rounded(corner(12.))
+                        .bg(palette.card)
+                        .border_1()
+                        .border_color(palette.border)
+                        .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                            if event.keystroke.key == "escape" {
+                                cx.stop_propagation();
+                                this.close_search(cx);
+                            }
+                        }))
+                        .child(Icon::new(IconName::Search).size(zpx(14.)).text_color(palette.text_tertiary))
+                        .child(div().flex_1().min_w_0().text_size(text(13.)).child(Input::new(input).appearance(false)))
+                        .when(!count_label.is_empty(), |d| {
+                            d.child(div().flex_none().font_family(palette.mono_font.clone()).text_size(text(11.)).text_color(palette.text_tertiary).child(count_label))
+                        })
+                        .child(
+                            div()
+                                .id("search-prev")
+                                .px(space(6.))
+                                .py(zpx(2.))
+                                .rounded(corner(6.))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(if total > 0 { palette.text_secondary } else { palette.text_tertiary })
+                                .hover(|d| d.bg(palette.raised))
+                                .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("older match").build(window, cx))
+                                .child("↑")
+                                .on_click(cx.listener(|this, _, _, cx| this.step_search(1, cx))),
+                        )
+                        .child(
+                            div()
+                                .id("search-next")
+                                .px(space(6.))
+                                .py(zpx(2.))
+                                .rounded(corner(6.))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(if total > 0 { palette.text_secondary } else { palette.text_tertiary })
+                                .hover(|d| d.bg(palette.raised))
+                                .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("newer match").build(window, cx))
+                                .child("↓")
+                                .on_click(cx.listener(|this, _, _, cx| this.step_search(-1, cx))),
+                        )
+                        .child(
+                            div()
+                                .id("search-close")
+                                .px(space(6.))
+                                .py(zpx(2.))
+                                .rounded(corner(6.))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(palette.text_tertiary)
+                                .hover(|d| d.bg(palette.raised).text_color(palette.text))
+                                .child("✕")
+                                .on_click(cx.listener(|this, _, _, cx| this.close_search(cx))),
+                        ),
                 )
                 .child(
-                    div()
-                        .id("search-next")
-                        .px(space(6.))
-                        .py(zpx(2.))
-                        .rounded(corner(6.))
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(if total > 0 { palette.text_secondary } else { palette.text_tertiary })
-                        .hover(|d| d.bg(palette.raised))
-                        .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("newer match").build(window, cx))
-                        .child("↓")
-                        .on_click(cx.listener(|this, _, _, cx| this.step_search(-1, cx))),
-                )
-                .child(
-                    div()
-                        .id("search-close")
-                        .px(space(6.))
-                        .py(zpx(2.))
-                        .rounded(corner(6.))
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(palette.text_tertiary)
-                        .hover(|d| d.bg(palette.raised).text_color(palette.text))
-                        .child("✕")
-                        .on_click(cx.listener(|this, _, _, cx| this.close_search(cx))),
+                    h_flex()
+                        .gap(space(6.))
+                        .px(space(4.))
+                        .child(chip("sf-image", "has:image", "has:image"))
+                        .child(chip("sf-link", "has:link", "has:link"))
+                        .child(chip("sf-file", "has:file", "has:file"))
+                        .child(chip("sf-from", "from:", "from:")),
                 )
                 .into_any_element(),
         )
@@ -1625,6 +1663,33 @@ impl Timeline {
                 close(this, cx);
                 this.set_pin(pin_id.clone(), !pinned, cx);
             })));
+            let room_id = self.room_id.to_string();
+            let bookmarked = self.store.read(cx).prefs.bookmarks.iter().any(|b| b.room_id == room_id && b.event_id == id);
+            let bm_label = if bookmarked { "remove bookmark" } else { "bookmark message" };
+            let bm_event_id = id.clone();
+            let bm_sender = name.clone();
+            let bm_body = reply_preview(&event.content);
+            let bm_room_name = self
+                .store
+                .read(cx)
+                .rooms
+                .iter()
+                .find(|r| r.id == room_id)
+                .map(|r| r.name.clone())
+                .unwrap_or_else(|| room_id.clone());
+            list = list.child(menu::item("mm-bookmark", bm_label, true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
+                close(this, cx);
+                let saved_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let bm = crate::prefs::Bookmark {
+                    room_id: room_id.clone(),
+                    room_name: bm_room_name.clone(),
+                    event_id: bm_event_id.clone(),
+                    sender: bm_sender.clone(),
+                    body: bm_body.clone(),
+                    saved_at,
+                };
+                this.store.update(cx, |s, cx| s.toggle_bookmark(bm, cx));
+            })));
         }
         list = list.child(menu::item("mm-unread", "mark as unread", true, None, palette).on_click(cx.listener(move |this, _, _, cx| {
             close(this, cx);
@@ -1887,8 +1952,9 @@ fn body_text(content: &ContentDto) -> (String, bool) {
         ContentDto::File { body, .. } => (format!("📎  {body}"), true),
         ContentDto::Sticker { body, .. } => (format!("sticker: {body}"), true),
         ContentDto::Location { body, .. } => (format!("📍  {body}"), true),
-        ContentDto::Poll { question, answers, ended } => {
-            (format!("📊  {question}{}\n{}", if *ended { " (ended)" } else { "" }, answers.join(" · ")), true)
+        ContentDto::Poll { question, answers, ended, .. } => {
+            let opts: Vec<&str> = answers.iter().map(|a| a.text.as_str()).collect();
+            (format!("📊  {question}{}\n{}", if *ended { " (ended)" } else { "" }, opts.join(" · ")), true)
         }
         ContentDto::Redacted => ("message deleted".into(), true),
         ContentDto::UnableToDecrypt { .. } => ("can't decrypt this message yet".into(), true),
@@ -2252,6 +2318,42 @@ impl Timeline {
                 div().w_full().italic().text_color(palette.text).child(content::linked_plain(&id, &format!("* {body}"), palette.text, &rich_ctx, palette)).into_any_element()
             }
             ContentDto::Image { body, media } => {
+                let is_spoiler = body.starts_with("SPOILER_") || body.starts_with("||");
+                if is_spoiler && !self.revealed_spoilers.contains(&id) {
+                    let key = id.clone();
+                    return div()
+                        .id(SharedString::from(format!("spoiler-media/{id}")))
+                        .w(zpx(280.))
+                        .h(zpx(140.))
+                        .rounded(corner(12.))
+                        .bg(palette.raised)
+                        .border_1()
+                        .border_color(palette.border)
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(zpx(6.))
+                        .cursor_pointer()
+                        .hover(|d| d.border_color(palette.accent))
+                        .child(
+                            div()
+                                .px(space(10.))
+                                .py(zpx(3.))
+                                .rounded_full()
+                                .bg(palette.app)
+                                .text_xs()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(palette.text)
+                                .child("SPOILER"),
+                        )
+                        .child(div().text_xs().text_color(palette.text_tertiary).child("click to reveal image"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.revealed_spoilers.insert(key.clone());
+                            cx.notify();
+                        }))
+                        .into_any_element();
+                }
                 let entity = cx.entity().clone();
                 let store = store.clone();
                 let key = event_key(event);
@@ -2285,6 +2387,143 @@ impl Timeline {
                 self.audio(event, body, media, palette, cx)
             }
             ContentDto::File { body, media } => content::card(&id, "📎", body, media, Open::Save, palette, cx),
+            ContentDto::Poll { question, answers, total_votes, ended } => {
+                let own = self.store.read(cx).own_user_id().map(str::to_owned);
+                let poll_id = event.event_id.clone();
+                let can_end = event.is_own && !*ended && poll_id.is_some();
+                let total = *total_votes;
+                let ended = *ended;
+                let question_for_end = question.clone();
+                let poll_id_for_end = poll_id.clone();
+                v_flex()
+                    .w(zpx(360.))
+                    .max_w_full()
+                    .p(space(12.))
+                    .gap(zpx(8.))
+                    .rounded(corner(14.))
+                    .bg(palette.card)
+                    .border_1()
+                    .border_color(palette.border_subtle)
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(space(8.))
+                            .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(palette.text).child(question.clone()))
+                            .when(ended, |r| {
+                                r.child(
+                                    div()
+                                        .px(space(6.))
+                                        .py(zpx(1.))
+                                        .rounded_full()
+                                        .bg(palette.raised)
+                                        .text_size(text(10.))
+                                        .text_color(palette.text_tertiary)
+                                        .child("ended"),
+                                )
+                            }),
+                    )
+                    .children(answers.iter().enumerate().map(|(ix, ans)| {
+                        let count = ans.voters.len();
+                        let pct = if total > 0 { (count as f32 / total as f32).clamp(0.0, 1.0) } else { 0.0 };
+                        let voted = own.as_deref().is_some_and(|me| ans.voters.iter().any(|u| u == me));
+                        let pid = poll_id.clone();
+                        let aid = ans.id.clone();
+                        div()
+                            .id(SharedString::from(format!("poll/{id}/{ix}")))
+                            .relative()
+                            .overflow_hidden()
+                            .rounded(corner(10.))
+                            .bg(palette.app)
+                            .border_1()
+                            .border_color(if voted { palette.accent } else { palette.border_subtle })
+                            .when(!ended && pid.is_some(), |d| d.cursor_pointer().hover(|d| d.border_color(palette.accent)))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .bottom_0()
+                                    .left_0()
+                                    .w(gpui::relative(pct))
+                                    .bg(gpui::Hsla { a: if voted { 0.22 } else { 0.10 }, ..palette.accent }),
+                            )
+                            .child(
+                                h_flex()
+                                    .relative()
+                                    .items_center()
+                                    .justify_between()
+                                    .px(space(10.))
+                                    .py(zpx(7.))
+                                    .gap(space(8.))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_weight(if voted { FontWeight::BOLD } else { FontWeight::NORMAL })
+                                            .text_color(palette.text)
+                                            .child(if voted { format!("✓ {}", ans.text) } else { ans.text.clone() }),
+                                    )
+                                    .child(
+                                        div()
+                                            .font_family(palette.mono_font.clone())
+                                            .text_size(text(10.5))
+                                            .text_color(palette.text_tertiary)
+                                            .child(format!("{count} ({:.0}%)", pct * 100.0)),
+                                    ),
+                            )
+                            .when(!ended, |d| {
+                                d.on_click(cx.listener(move |this, _, _, cx| {
+                                    let Some(pid) = pid.clone() else { return };
+                                    let aid = aid.clone();
+                                    let room_id = this.room_id.clone();
+                                    let thread = this.thread_root.clone();
+                                    let backend = Backend::global(cx);
+                                    let state = backend.state.clone();
+                                    drop(backend.run(async move {
+                                        if let Ok(core) = state.core().await {
+                                            let _ = timeline::vote_poll(&core, &room_id, thread.as_deref(), &pid, aid).await;
+                                        }
+                                    }));
+                                }))
+                            })
+                    }))
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .pt(zpx(2.))
+                            .child(
+                                div()
+                                    .text_size(text(10.5))
+                                    .text_color(palette.text_tertiary)
+                                    .child(if total == 1 { "1 vote".to_owned() } else { format!("{total} votes") }),
+                            )
+                            .when(can_end, |row| {
+                                row.child(
+                                    div()
+                                        .id(SharedString::from(format!("poll-end/{id}")))
+                                        .text_size(text(10.5))
+                                        .text_color(palette.accent)
+                                        .cursor_pointer()
+                                        .hover(|d| d.underline())
+                                        .child("close poll")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            let Some(pid) = poll_id_for_end.clone() else { return };
+                                            let summary = format!("Poll ended: {question_for_end}");
+                                            let room_id = this.room_id.clone();
+                                            let thread = this.thread_root.clone();
+                                            let backend = Backend::global(cx);
+                                            let state = backend.state.clone();
+                                            drop(backend.run(async move {
+                                                if let Ok(core) = state.core().await {
+                                                    let _ = timeline::end_poll(&core, &room_id, thread.as_deref(), &pid, summary).await;
+                                                }
+                                            }));
+                                        })),
+                                )
+                            }),
+                    )
+                    .into_any_element()
+            }
             content => {
                 let (text, muted) = body_text(content);
                 div()
@@ -2704,6 +2943,68 @@ fn reaction(r: &ReactionDto, known: &HashMap<String, horo_core::matrix::packs::P
         .child(key)
         .child(div().font_weight(FontWeight::BOLD).child(r.count.to_string()))
         .into_any_element()
+}
+
+/// Structured room-search filter (`from:`, `has:image|link|file|video`,
+/// `before:YYYY-MM-DD`, `after:YYYY-MM-DD`, plus free-text terms).
+struct SearchFilter {
+    from: Option<String>,
+    has_image: bool,
+    has_link: bool,
+    has_file: bool,
+    has_video: bool,
+    terms: Vec<String>,
+}
+
+impl SearchFilter {
+    fn parse(raw: &str) -> Self {
+        let mut f = Self { from: None, has_image: false, has_link: false, has_file: false, has_video: false, terms: Vec::new() };
+        for tok in raw.split_whitespace() {
+            let lower = tok.to_ascii_lowercase();
+            if let Some(who) = lower.strip_prefix("from:") {
+                if !who.is_empty() {
+                    f.from = Some(who.trim_start_matches('@').to_owned());
+                }
+            } else if let Some(kind) = lower.strip_prefix("has:") {
+                match kind {
+                    "image" | "img" | "photo" => f.has_image = true,
+                    "link" | "url" => f.has_link = true,
+                    "file" | "attachment" => f.has_file = true,
+                    "video" => f.has_video = true,
+                    _ => {}
+                }
+            } else {
+                f.terms.push(lower);
+            }
+        }
+        f
+    }
+
+    fn matches(&self, event: &EventItemDto) -> bool {
+        let (text_body, _) = body_text(&event.content);
+        let lower_body = text_body.to_lowercase();
+        let sender = event.sender_name.as_deref().unwrap_or(event.sender.as_str()).to_lowercase();
+        let sender_id = event.sender.to_lowercase();
+        if let Some(who) = &self.from
+            && !sender.contains(who)
+            && !sender_id.contains(who)
+        {
+            return false;
+        }
+        if self.has_image && !matches!(event.content, ContentDto::Image { .. } | ContentDto::Sticker { .. }) {
+            return false;
+        }
+        if self.has_video && !matches!(event.content, ContentDto::Video { .. }) {
+            return false;
+        }
+        if self.has_file && !matches!(event.content, ContentDto::File { .. } | ContentDto::Audio { .. }) {
+            return false;
+        }
+        if self.has_link && !(lower_body.contains("http://") || lower_body.contains("https://")) {
+            return false;
+        }
+        self.terms.iter().all(|t| lower_body.contains(t) || sender.contains(t))
+    }
 }
 
 #[cfg(test)]

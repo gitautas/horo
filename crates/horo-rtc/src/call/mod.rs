@@ -49,6 +49,7 @@ pub use video::{Picture, Screens, Source, VideoFeed, screen_key};
 
 /// The client track id of our microphone, echoed back by the server.
 const MIC_CID: &str = "microphone";
+const SCREEN_AUDIO_CID: &str = "screen_audio";
 /// And of our camera, and our shared screen.
 const CAMERA_CID: &str = "camera";
 const SCREEN_CID: &str = "screen";
@@ -154,10 +155,51 @@ pub enum CallEvent {
 enum Command {
     Mute(bool),
     Video(Source, bool),
+    ScreenAudio(bool),
     Reconnect,
     Sever { signalling: bool },
     KillPublisher,
     Leave,
+}
+
+/// Outgoing screen-share audio track: buffers 48 kHz mono PCM into 20 ms Opus
+/// frames and ships them on the `ScreenShareAudio` track while enabled.
+pub struct ScreenAudioFeed {
+    encoder: Encoder,
+    rtp: u64,
+    buf: Vec<f32>,
+    packets: mpsc::UnboundedSender<(u64, Vec<u8>)>,
+    on: Arc<AtomicBool>,
+}
+
+impl ScreenAudioFeed {
+    fn new(packets: mpsc::UnboundedSender<(u64, Vec<u8>)>, on: Arc<AtomicBool>) -> Result<Self> {
+        Ok(Self {
+            encoder: Encoder::new()?,
+            rtp: 0,
+            buf: Vec::with_capacity(FRAME * 2),
+            packets,
+            on,
+        })
+    }
+
+    /// Push 48 kHz mono PCM samples (`-1.0..=1.0`). Drops samples while off.
+    pub fn push_samples(&mut self, samples: &[f32]) {
+        if !self.on.load(Ordering::Relaxed) {
+            self.buf.clear();
+            return;
+        }
+        self.buf.extend_from_slice(samples);
+        while self.buf.len() >= FRAME {
+            let mut frame = [0.0f32; FRAME];
+            frame.copy_from_slice(&self.buf[..FRAME]);
+            self.buf.drain(..FRAME);
+            if let Ok(packet) = self.encoder.encode(&frame) {
+                let _ = self.packets.send((self.rtp, packet));
+                self.rtp = self.rtp.wrapping_add(FRAME as u64);
+            }
+        }
+    }
 }
 
 /// The remote side of the mix: one jitter buffer per subscribed track, plus
@@ -220,6 +262,8 @@ pub struct Joined {
     pub camera: VideoFeed,
     /// And our screen's, once [`Call::set_screen`] has.
     pub screen: VideoFeed,
+    /// Outgoing screen-share audio (48 kHz mono PCM), once [`Call::set_screen_audio`] has.
+    pub screen_audio: ScreenAudioFeed,
 }
 
 /// The connection to the room: signalling and both peers, with their event
@@ -279,6 +323,9 @@ impl Call {
         let screens = Screens::default();
         let (broken_tx, broken) = mpsc::unbounded_channel();
         let (video_tx, video_packets) = mpsc::unbounded_channel::<video::VideoPacket>();
+        let (screen_audio_tx, screen_audio_packets) = mpsc::unbounded_channel::<(u64, Vec<u8>)>();
+        let screen_audio_on = Arc::new(AtomicBool::new(false));
+        let screen_audio = ScreenAudioFeed::new(screen_audio_tx, screen_audio_on.clone())?;
         let outgoing = [Outgoing::new(Source::Camera), Outgoing::new(Source::Screen)];
         let camera = VideoFeed::new(Source::Camera, video_tx.clone(), outgoing[0].on.clone(), outgoing[0].keyframe.clone());
         let screen = VideoFeed::new(Source::Screen, video_tx, outgoing[1].on.clone(), outgoing[1].keyframe.clone());
@@ -292,6 +339,9 @@ impl Call {
             link,
             turn,
             mic_sid: None,
+            screen_audio_on,
+            screen_audio_mid: None,
+            screen_audio_sid: None,
             publishing: false,
             ever_connected: false,
             identity: identity.clone(),
@@ -314,7 +364,7 @@ impl Call {
             route_checked: Instant::now(),
         };
         engine.joined(&join);
-        let task = tokio::spawn(engine.run(packets, commands_rx, broken, video_packets, local_speaking_rx));
+        let task = tokio::spawn(engine.run(packets, screen_audio_packets, commands_rx, broken, video_packets, local_speaking_rx));
 
         let mut gate = NoiseGate::new(crate::audio::SAMPLE_RATE);
         gate.set_threshold(options.gate_threshold);
@@ -339,7 +389,7 @@ impl Call {
             local_speaking: local_speaking_tx,
             last_speaking: Vec::new(),
         };
-        Ok(Joined { call: Call { commands, muted, deafened, remotes, gate: threshold, identity, task }, microphone, speaker, events, screens, camera, screen })
+        Ok(Joined { call: Call { commands, muted, deafened, remotes, gate: threshold, identity, task }, microphone, speaker, events, screens, camera, screen, screen_audio })
     }
 
     /// Stop sending the microphone, and tell the room.
@@ -357,6 +407,11 @@ impl Call {
     /// Share our screen in the call, or stop.
     pub fn set_screen(&self, on: bool) {
         let _ = self.commands.send(Command::Video(Source::Screen, on));
+    }
+
+    /// Share system/screen audio in the call (`TrackSource::ScreenShareAudio`), or stop.
+    pub fn set_screen_audio(&self, on: bool) {
+        let _ = self.commands.send(Command::ScreenAudio(on));
     }
 
     pub fn is_muted(&self) -> bool {
@@ -561,6 +616,10 @@ struct Engine {
     turn: Vec<TurnServer>,
     /// The server's id for our microphone track, once it's published.
     mic_sid: Option<String>,
+    /// Outgoing screen-share audio track state.
+    screen_audio_on: Arc<AtomicBool>,
+    screen_audio_mid: Option<Mid>,
+    screen_audio_sid: Option<String>,
     /// The publisher's DTLS is up: packets can be written.
     publishing: bool,
     ever_connected: bool,
@@ -635,7 +694,18 @@ impl Engine {
     fn joined(&mut self, join: &proto::JoinResponse) {
         self.own_sid = join.participant.as_ref().map(|p| p.sid.clone()).unwrap_or_default();
         self.ping = (join.ping_interval, join.ping_timeout);
-        self.participants = join.other_participants.iter().map(|p| (p.sid.clone(), participant(p))).collect();
+        self.participants.clear();
+        for p in &join.other_participants {
+            if p.sid == self.own_sid
+                || p.identity == self.identity
+                || p.state == proto::participant_info::State::Disconnected as i32
+            {
+                continue;
+            }
+            let now = participant(p);
+            self.participants.retain(|_, existing| existing.identity != now.identity);
+            self.participants.insert(p.sid.clone(), now);
+        }
         // A new session: whoever was speaking will be said again.
         self.speakers.clear();
         let _ = self.events.send(CallEvent::Speaking(Vec::new()));
@@ -646,6 +716,7 @@ impl Engine {
     async fn run(
         mut self,
         mut packets: mpsc::UnboundedReceiver<(u64, Vec<u8>, i8, bool)>,
+        mut screen_audio_packets: mpsc::UnboundedReceiver<(u64, Vec<u8>)>,
         mut commands: mpsc::UnboundedReceiver<Command>,
         mut broken: mpsc::UnboundedReceiver<Mid>,
         mut video_packets: mpsc::UnboundedReceiver<video::VideoPacket>,
@@ -688,6 +759,14 @@ impl Engine {
                     }
                     Ok(())
                 }
+                Some((rtp, packet)) = screen_audio_packets.recv() => {
+                    if self.publishing
+                        && let Some(mid) = self.screen_audio_mid
+                    {
+                        let _ = self.link.publisher.write_audio(mid, rtp, packet);
+                    }
+                    Ok(())
+                }
                 Some(now_speaking) = local_speaking.recv() => {
                     if self.local_speaking != now_speaking {
                         self.local_speaking = now_speaking;
@@ -703,6 +782,7 @@ impl Engine {
                         Ok(())
                     }
                     Some(Command::Video(source, on)) => self.set_video(source, on).await,
+                    Some(Command::ScreenAudio(on)) => self.set_screen_audio(on).await,
                     Some(Command::Reconnect) => Err(Trouble::Lost("the network changed".into(), ReconnectReason::RrSwitchCandidate)),
                     Some(Command::KillPublisher) => {
                         self.link.publisher.close();
@@ -839,6 +919,8 @@ impl Engine {
         self.link = link;
         self.turn = turn;
         self.mic_sid = None;
+        self.screen_audio_mid = None;
+        self.screen_audio_sid = None;
         self.remotes.lock().unwrap().tracks.clear();
         self.video.reset();
         self.owners.clear();
@@ -855,6 +937,11 @@ impl Engine {
             {
                 tracing::warn!("{}: republishing {source:?}: {e}", self.identity);
             }
+        }
+        if self.screen_audio_on.load(Ordering::Relaxed)
+            && let Err(e) = self.publish_screen_audio().await
+        {
+            tracing::warn!("{}: republishing screen audio: {e}", self.identity);
         }
         Ok(())
     }
@@ -939,6 +1026,35 @@ impl Engine {
         Ok(())
     }
 
+    async fn publish_screen_audio(&mut self) -> Result<()> {
+        self.link.signal.add_track(AddTrack {
+            cid: SCREEN_AUDIO_CID.into(),
+            name: SCREEN_AUDIO_CID.into(),
+            kind: proto::TrackType::Audio,
+            source: proto::TrackSource::ScreenShareAudio,
+            muted: false,
+            width: 0,
+            height: 0,
+            layers: Vec::new(),
+        })?;
+        let (sdp, mid) = self.link.publisher.offer_audio(&format!("{}-screen-audio", self.identity), SCREEN_AUDIO_CID).await?;
+        self.link.signal.offer(sdp, 1)?;
+        self.screen_audio_mid = Some(mid);
+        Ok(())
+    }
+
+    async fn set_screen_audio(&mut self, on: bool) -> Result<(), Trouble> {
+        self.screen_audio_on.store(on, Ordering::Relaxed);
+        if on && self.screen_audio_mid.is_none() {
+            if let Err(e) = self.publish_screen_audio().await {
+                tracing::warn!("{}: publishing screen audio: {e}", self.identity);
+            }
+        } else if let Some(sid) = self.screen_audio_sid.clone() {
+            let _ = self.link.signal.mute(&sid, !on);
+        }
+        Ok(())
+    }
+
     async fn set_video(&mut self, source: Source, on: bool) -> Result<(), Trouble> {
         let out = self.outgoing(source);
         out.on.store(on, Ordering::Relaxed);
@@ -1016,6 +1132,14 @@ impl Engine {
                 let source = if cid == CAMERA_CID { Source::Camera } else { Source::Screen };
                 self.outgoing(source).sid = track.map(|t| t.sid);
             }
+            SignalEvent::TrackPublished { cid, track } if cid == SCREEN_AUDIO_CID => {
+                self.screen_audio_sid = track.map(|t| t.sid);
+                if let Some(sid) = &self.screen_audio_sid
+                    && !self.screen_audio_on.load(Ordering::Relaxed)
+                {
+                    let _ = self.link.signal.mute(sid, true);
+                }
+            }
             SignalEvent::TrackPublished { cid, track } if cid == MIC_CID => {
                 self.mic_sid = track.map(|t| t.sid);
                 // Muted while the track was being republished after a rejoin.
@@ -1028,24 +1152,43 @@ impl Engine {
             SignalEvent::Participants(updates) => {
                 let mut changed = false;
                 for p in updates {
-                    if p.sid == self.own_sid {
+                    if p.sid == self.own_sid || p.identity == self.identity {
                         continue;
                     }
                     changed = true;
                     let now = participant(&p);
                     let left = p.state == proto::participant_info::State::Disconnected as i32;
-                    if left || !now.camera {
-                        self.video.gone(&now.identity);
-                    }
-                    if left || !now.screen {
-                        self.video.gone(&screen_key(&now.identity));
-                    }
-                    if p.state == proto::participant_info::State::Disconnected as i32 {
-                        self.participants.remove(&p.sid);
+                    if left {
+                        let removed = self.participants.remove(&p.sid);
                         if self.speakers.remove(&p.sid).is_some() {
                             self.send_speaking();
                         }
+                        // Only clear video if no newer session for the same identity has
+                        // already replaced this stale sid (e.g. rapid rejoin / app update).
+                        let still_here = self.participants.values().any(|other| other.identity == now.identity);
+                        if removed.is_some() && !still_here {
+                            self.video.gone(&now.identity);
+                            self.video.gone(&screen_key(&now.identity));
+                        }
                     } else {
+                        // Evict any older ghost session for the same identity so a peer
+                        // restarting/updating never appears twice in the call.
+                        let stale_sids: Vec<String> = self
+                            .participants
+                            .iter()
+                            .filter(|(sid, other)| *sid != &p.sid && other.identity == now.identity)
+                            .map(|(sid, _)| sid.clone())
+                            .collect();
+                        for sid in stale_sids {
+                            self.participants.remove(&sid);
+                            self.speakers.remove(&sid);
+                        }
+                        if !now.camera {
+                            self.video.gone(&now.identity);
+                        }
+                        if !now.screen {
+                            self.video.gone(&screen_key(&now.identity));
+                        }
                         self.participants.insert(p.sid.clone(), now);
                     }
                 }

@@ -77,10 +77,18 @@ pub struct Shell {
     space_hierarchy: Option<(String, Vec<String>, Vec<PublicRoom>)>,
     /// Unjoined rooms currently being joined.
     joining: HashSet<String>,
-    /// Discord-style Inbox drawer (mentions & unreads across all rooms/spaces).
+    /// Discord-style Inbox drawer (mentions, unreads & bookmarks across all rooms/spaces).
     inbox_open: bool,
-    /// `true` = mentions & invites tab, `false` = all unreads tab.
-    inbox_mentions_only: bool,
+    inbox_tab: InboxTab,
+    /// Keyboard shortcuts cheat sheet modal (`⌘/` or `Ctrl+/`).
+    shortcuts_open: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InboxTab {
+    Unreads,
+    Mentions,
+    Bookmarks,
 }
 
 impl Shell {
@@ -114,7 +122,7 @@ impl Shell {
             }
         })
         .detach();
-        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, room_menu_can_delete: None, invite_to_space: None, space_settings: None, leave_space: None, browse: None, settings: None, quick_switcher: None, status_menu: None, status_input, profile: None, focus, search, filter: Filter::All, filters_open: false, space_hierarchy: None, joining: HashSet::new(), inbox_open: false, inbox_mentions_only: false };
+        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, room_menu_can_delete: None, invite_to_space: None, space_settings: None, leave_space: None, browse: None, settings: None, quick_switcher: None, status_menu: None, status_input, profile: None, focus, search, filter: Filter::All, filters_open: false, space_hierarchy: None, joining: HashSet::new(), inbox_open: false, inbox_tab: InboxTab::Unreads, shortcuts_open: false };
         shell.follow_room(window, cx);
         shell.follow_space(cx);
         shell.follow_settings(window, cx);
@@ -445,19 +453,18 @@ impl Shell {
         if !self.inbox_open {
             return None;
         }
-        let mentions_only = self.inbox_mentions_only;
+        let active_tab = self.inbox_tab;
+        let bookmarks = self.store.read(cx).prefs.bookmarks.clone();
         let rooms: Vec<RoomSummary> = self
             .store
             .read(cx)
             .rooms
             .iter()
             .filter(|r| !r.is_space)
-            .filter(|r| {
-                if mentions_only {
-                    r.highlight_count > 0 || r.membership == RoomMembership::Invited
-                } else {
-                    r.has_unread || r.notification_count > 0 || r.highlight_count > 0 || r.membership == RoomMembership::Invited
-                }
+            .filter(|r| match active_tab {
+                InboxTab::Mentions => r.highlight_count > 0 || r.membership == RoomMembership::Invited,
+                InboxTab::Unreads => r.has_unread || r.notification_count > 0 || r.highlight_count > 0 || r.membership == RoomMembership::Invited,
+                InboxTab::Bookmarks => false,
             })
             .cloned()
             .collect();
@@ -475,6 +482,148 @@ impl Shell {
                 .text_color(if active { palette.text } else { palette.text_tertiary })
                 .hover(|d| d.text_color(palette.text))
                 .child(label)
+        };
+
+        let body: AnyElement = if active_tab == InboxTab::Bookmarks {
+            if bookmarks.is_empty() {
+                div()
+                    .py(space(28.))
+                    .text_center()
+                    .text_xs()
+                    .text_color(palette.text_tertiary)
+                    .child("no bookmarked messages yet~")
+                    .into_any_element()
+            } else {
+                v_flex()
+                    .id("inbox-bookmarks-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .p(space(8.))
+                    .gap(zpx(4.))
+                    .children(bookmarks.into_iter().enumerate().map(|(ix, bm)| {
+                        let (rid_open, rid_rm, eid_rm) = (bm.room_id.clone(), bm.room_id.clone(), bm.event_id.clone());
+                        h_flex()
+                            .id(("bm-row", ix))
+                            .gap(space(8.))
+                            .px(space(10.))
+                            .py(space(8.))
+                            .rounded(corner(12.))
+                            .items_start()
+                            .cursor_pointer()
+                            .hover(|d| d.bg(palette.raised))
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap(zpx(2.))
+                                    .child(
+                                        h_flex()
+                                            .gap(space(6.))
+                                            .items_center()
+                                            .child(div().truncate().text_xs().font_weight(FontWeight::BOLD).text_color(palette.text).child(bm.sender))
+                                            .child(div().truncate().text_size(text(10.5)).text_color(palette.text_tertiary).child(format!("in {}", bm.room_name))),
+                                    )
+                                    .child(div().truncate().text_xs().text_color(palette.text_secondary).child(bm.body.replace('\n', " "))),
+                            )
+                            .child(
+                                div()
+                                    .id(("bm-rm", ix))
+                                    .flex_none()
+                                    .px(space(5.))
+                                    .py(zpx(1.))
+                                    .rounded(corner(5.))
+                                    .text_xs()
+                                    .text_color(palette.text_tertiary)
+                                    .hover(|d| d.bg(palette.card).text_color(palette.danger))
+                                    .child("✕")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.store.update(cx, |s, cx| s.remove_bookmark(&rid_rm, &eid_rm, cx));
+                                    })),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.inbox_open = false;
+                                let id = rid_open.clone();
+                                this.store.update(cx, |s, cx| s.open_room(id, cx));
+                                cx.notify();
+                            }))
+                    }))
+                    .into_any_element()
+            }
+        } else if rooms.is_empty() {
+            div()
+                .py(space(28.))
+                .text_center()
+                .text_xs()
+                .text_color(palette.text_tertiary)
+                .child(if active_tab == InboxTab::Mentions { "no unread mentions~" } else { "all caught up~" })
+                .into_any_element()
+        } else {
+            v_flex()
+                .id("inbox-scroll")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .p(space(8.))
+                .gap(zpx(4.))
+                .children(rooms.into_iter().enumerate().map(|(ix, r)| {
+                    let rid = r.id.clone();
+                    let face = avatar(&r.id, &r.name, r.avatar_url.as_deref(), zpx(30.), cx);
+                    let preview = if r.membership == RoomMembership::Invited {
+                        "invited you to join".to_owned()
+                    } else {
+                        preview_for(&r).replace('\n', " ")
+                    };
+                    let badge = if r.membership == RoomMembership::Invited {
+                        Some(("invite".to_owned(), palette.accent))
+                    } else if r.highlight_count > 0 {
+                        Some((format!("@{}", r.highlight_count), palette.danger))
+                    } else if r.notification_count > 0 {
+                        Some((r.notification_count.to_string(), palette.accent))
+                    } else {
+                        None
+                    };
+                    h_flex()
+                        .id(("inbox-row", ix))
+                        .gap(space(10.))
+                        .px(space(10.))
+                        .py(space(8.))
+                        .rounded(corner(12.))
+                        .items_center()
+                        .cursor_pointer()
+                        .hover(|d| d.bg(palette.raised))
+                        .child(face)
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap(zpx(2.))
+                                .child(div().truncate().text_xs().font_weight(FontWeight::BOLD).text_color(palette.text).child(r.name))
+                                .when(!preview.is_empty(), |col| {
+                                    col.child(div().truncate().text_xs().text_color(palette.text_tertiary).child(preview))
+                                }),
+                        )
+                        .children(badge.map(|(txt, col)| {
+                            div()
+                                .flex_none()
+                                .px(space(7.))
+                                .py(zpx(2.))
+                                .rounded_full()
+                                .bg(Hsla { a: 0.16, ..col })
+                                .font_family(palette.mono_font.clone())
+                                .text_size(text(10.))
+                                .text_color(col)
+                                .child(txt)
+                        }))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.inbox_open = false;
+                            let id = rid.clone();
+                            this.store.update(cx, |s, cx| s.open_room(id, cx));
+                            cx.notify();
+                        }))
+                }))
+                .into_any_element()
         };
 
         Some(
@@ -507,12 +656,16 @@ impl Shell {
                         .child(
                             h_flex()
                                 .gap(zpx(4.))
-                                .child(tab("inbox-tab-unreads", "unreads", !mentions_only).on_click(cx.listener(|this, _, _, cx| {
-                                    this.inbox_mentions_only = false;
+                                .child(tab("inbox-tab-unreads", "unreads", active_tab == InboxTab::Unreads).on_click(cx.listener(|this, _, _, cx| {
+                                    this.inbox_tab = InboxTab::Unreads;
                                     cx.notify();
                                 })))
-                                .child(tab("inbox-tab-mentions", "mentions", mentions_only).on_click(cx.listener(|this, _, _, cx| {
-                                    this.inbox_mentions_only = true;
+                                .child(tab("inbox-tab-mentions", "mentions", active_tab == InboxTab::Mentions).on_click(cx.listener(|this, _, _, cx| {
+                                    this.inbox_tab = InboxTab::Mentions;
+                                    cx.notify();
+                                })))
+                                .child(tab("inbox-tab-bookmarks", "saved", active_tab == InboxTab::Bookmarks).on_click(cx.listener(|this, _, _, cx| {
+                                    this.inbox_tab = InboxTab::Bookmarks;
                                     cx.notify();
                                 }))),
                         )
@@ -556,80 +709,105 @@ impl Shell {
                                 ),
                         ),
                 )
-                .child(if rooms.is_empty() {
-                    div()
-                        .py(space(28.))
-                        .text_center()
-                        .text_xs()
-                        .text_color(palette.text_tertiary)
-                        .child(if mentions_only { "no unread mentions~" } else { "all caught up~" })
-                        .into_any_element()
-                } else {
+                .child(body)
+                .into_any_element(),
+        )
+    }
+
+    /// Keyboard shortcuts cheat sheet modal (`⌘/` or `Ctrl+/`).
+    fn shortcuts_modal(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.shortcuts_open {
+            return None;
+        }
+        let mod_key = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
+        let rows: &[(&str, String)] = &[
+            ("Quick switcher", format!("{mod_key}K")),
+            ("Search in room", format!("{mod_key}F")),
+            ("Settings", format!("{mod_key},")),
+            ("Keyboard shortcuts", format!("{mod_key}/")),
+            ("Previous / next room", "Alt+↑ / Alt+↓".into()),
+            ("Previous / next unread", "Alt+Shift+↑ / ↓".into()),
+            ("Toggle mute in call", format!("{mod_key}Shift+M")),
+            ("Toggle deafen in call", format!("{mod_key}Shift+D")),
+            ("Lightbox zoom / pan", "Click / Scroll / Drag".into()),
+            ("Close modal or menu", "Esc".into()),
+        ];
+        Some(
+            div()
+                .id("shortcuts-backdrop")
+                .occlude()
+                .absolute()
+                .inset_0()
+                .bg(Hsla { a: 0.6, ..palette.app })
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.shortcuts_open = false;
+                    cx.notify();
+                }))
+                .child(
                     v_flex()
-                        .id("inbox-scroll")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .p(space(8.))
-                        .gap(zpx(4.))
-                        .children(rooms.into_iter().enumerate().map(|(ix, r)| {
-                            let rid = r.id.clone();
-                            let face = avatar(&r.id, &r.name, r.avatar_url.as_deref(), zpx(30.), cx);
-                            let preview = if r.membership == RoomMembership::Invited {
-                                "invited you to join".to_owned()
-                            } else {
-                                preview_for(&r).replace('\n', " ")
-                            };
-                            let badge = if r.membership == RoomMembership::Invited {
-                                Some(("invite".to_owned(), palette.accent))
-                            } else if r.highlight_count > 0 {
-                                Some((format!("@{}", r.highlight_count), palette.danger))
-                            } else if r.notification_count > 0 {
-                                Some((r.notification_count.to_string(), palette.accent))
-                            } else {
-                                None
-                            };
+                        .id("shortcuts-card")
+                        .w(zpx(380.))
+                        .rounded(corner(16.))
+                        .bg(palette.card)
+                        .border_1()
+                        .border_color(palette.border)
+                        .shadow_lg()
+                        .overflow_hidden()
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
                             h_flex()
-                                .id(("inbox-row", ix))
-                                .gap(space(10.))
-                                .px(space(10.))
-                                .py(space(8.))
-                                .rounded(corner(12.))
                                 .items_center()
-                                .cursor_pointer()
-                                .hover(|d| d.bg(palette.raised))
-                                .child(face)
+                                .justify_between()
+                                .px(space(16.))
+                                .py(space(12.))
+                                .border_b_1()
+                                .border_color(palette.border_subtle)
+                                .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(palette.text).child("keyboard shortcuts"))
                                 .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .gap(zpx(2.))
-                                        .child(div().truncate().text_xs().font_weight(FontWeight::BOLD).text_color(palette.text).child(r.name))
-                                        .when(!preview.is_empty(), |col| {
-                                            col.child(div().truncate().text_xs().text_color(palette.text_tertiary).child(preview))
-                                        }),
-                                )
-                                .children(badge.map(|(txt, col)| {
                                     div()
-                                        .flex_none()
-                                        .px(space(7.))
+                                        .id("shortcuts-close")
+                                        .px(space(6.))
                                         .py(zpx(2.))
-                                        .rounded_full()
-                                        .bg(Hsla { a: 0.16, ..col })
-                                        .font_family(palette.mono_font.clone())
-                                        .text_size(text(10.))
-                                        .text_color(col)
-                                        .child(txt)
-                                }))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.inbox_open = false;
-                                    let id = rid.clone();
-                                    this.store.update(cx, |s, cx| s.open_room(id, cx));
-                                    cx.notify();
-                                }))
-                        }))
-                        .into_any_element()
-                })
+                                        .rounded(corner(6.))
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(palette.text_tertiary)
+                                        .hover(|d| d.bg(palette.raised).text_color(palette.text))
+                                        .child("✕")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.shortcuts_open = false;
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
+                        .child(
+                            v_flex()
+                                .p(space(14.))
+                                .gap(zpx(8.))
+                                .children(rows.iter().map(|(label, keys)| {
+                                    h_flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(div().text_xs().text_color(palette.text_secondary).child(*label))
+                                        .child(
+                                            div()
+                                                .px(space(8.))
+                                                .py(zpx(2.))
+                                                .rounded(corner(6.))
+                                                .bg(palette.raised)
+                                                .border_1()
+                                                .border_color(palette.border_subtle)
+                                                .font_family(palette.mono_font.clone())
+                                                .text_size(text(11.))
+                                                .text_color(palette.text)
+                                                .child(keys.clone()),
+                                        )
+                                })),
+                        ),
+                )
                 .into_any_element(),
         )
     }
@@ -893,9 +1071,41 @@ impl Shell {
                 list = list.child(menu::item(SharedString::from(format!("rm-notify-{words}")), words, true, Some(mode == m), palette).on_click(cx.listener(
                     move |this, _, _, cx| {
                         close(this, cx);
+                        let rid_pref = rid.clone();
+                        this.store.update(cx, |s, cx| s.update_prefs(|p| { p.room_notify_overrides.remove(&rid_pref); }, cx));
                         this.on_rooms(vec![rid.clone()], cx, move |core, id| Box::pin(async move { core_rooms::set_notify_mode(&core, &id, m).await }));
                     },
                 )));
+            }
+            let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let timed_muted = self.store.read(cx).prefs.room_notify_overrides.get(&id).is_some_and(|o| o.is_muted_now(now_secs));
+            if timed_muted {
+                let rid = id.clone();
+                list = list.child(menu::item("rm-unmute-timed", "unmute timed silence", true, Some(true), palette).on_click(cx.listener(move |this, _, _, cx| {
+                    close(this, cx);
+                    this.store.update(cx, |s, cx| s.update_prefs(|p| { p.room_notify_overrides.remove(&rid); }, cx));
+                })));
+            } else {
+                for (mins, label) in [(15u64, "mute for 15 min"), (60, "mute for 1 hour"), (480, "mute for 8 hours"), (1440, "mute for 24 hours")] {
+                    let rid = id.clone();
+                    list = list.child(menu::item(SharedString::from(format!("rm-mute-{mins}")), label, true, None, palette).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            close(this, cx);
+                            let until = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs() + mins * 60)
+                                .ok();
+                            this.store.update(cx, |s, cx| {
+                                s.update_prefs(
+                                    |p| {
+                                        p.room_notify_overrides.insert(rid.clone(), crate::prefs::RoomNotifyOverride::Muted { until });
+                                    },
+                                    cx,
+                                );
+                            });
+                        },
+                    )));
+                }
             }
             list = list.child(menu::separator(palette));
             let rid = id.clone();
@@ -2147,22 +2357,70 @@ impl Render for Shell {
                     cx.stop_propagation();
                 }
             }))
-            // Escape closes open menus / call mixer, as a click elsewhere does.
+            // Escape closes open menus / call mixer / stats; handle PTT & call hotkeys.
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
-                    let closed_local = this.space_menu.take().is_some() | this.room_menu.take().is_some() | std::mem::take(&mut this.inbox_open);
+                    let closed_local = this.space_menu.take().is_some()
+                        | this.room_menu.take().is_some()
+                        | std::mem::take(&mut this.inbox_open)
+                        | std::mem::take(&mut this.shortcuts_open);
                     let closed_call = this.store.read(cx).call_participant_menu.is_some()
-                        || this.store.read(cx).call.as_ref().is_some_and(|c| c.mixer_open);
+                        || this.store.read(cx).call.as_ref().is_some_and(|c| c.mixer_open || c.stats_open);
                     if closed_call {
                         this.store.update(cx, |s, cx| {
                             s.close_participant_menu(cx);
                             s.close_call_mixer(cx);
+                            s.close_call_stats(cx);
                         });
                     }
                     if closed_local || closed_call {
                         cx.stop_propagation();
                         cx.notify();
                     }
+                    return;
+                }
+                let mods = event.keystroke.modifiers;
+                let cmd = if cfg!(target_os = "macos") { mods.platform } else { mods.control };
+                if cmd && !mods.alt && event.keystroke.key == "/" {
+                    this.shortcuts_open = !this.shortcuts_open;
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
+                if cmd && mods.shift && !mods.alt {
+                    if event.keystroke.key.eq_ignore_ascii_case("m") {
+                        let muted = this.store.read(cx).call.as_ref().map(|c| c.muted);
+                        if let Some(m) = muted {
+                            this.store.update(cx, |s, cx| s.set_call_muted(!m, cx));
+                            cx.stop_propagation();
+                            return;
+                        }
+                    } else if event.keystroke.key.eq_ignore_ascii_case("d") {
+                        let deafened = this.store.read(cx).call.as_ref().map(|c| c.deafened);
+                        if let Some(d) = deafened {
+                            this.store.update(cx, |s, cx| s.set_call_deafened(!d, cx));
+                            cx.stop_propagation();
+                            return;
+                        }
+                    }
+                }
+                if !event.is_held {
+                    let (ptt, key) = {
+                        let p = &this.store.read(cx).prefs;
+                        (p.push_to_talk, p.ptt_key.clone())
+                    };
+                    if ptt && event.keystroke.key.eq_ignore_ascii_case(&key) {
+                        this.store.update(cx, |s, cx| s.set_ptt_active(true, cx));
+                    }
+                }
+            }))
+            .on_key_up(cx.listener(|this, event: &gpui::KeyUpEvent, _, cx| {
+                let (ptt, key) = {
+                    let p = &this.store.read(cx).prefs;
+                    (p.push_to_talk, p.ptt_key.clone())
+                };
+                if ptt && event.keystroke.key.eq_ignore_ascii_case(&key) {
+                    this.store.update(cx, |s, cx| s.set_ptt_active(false, cx));
                 }
             }))
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
@@ -2240,8 +2498,10 @@ impl Render for Shell {
             .children(voice::floating(&self.store, &palette, window, cx))
             .children(voice::fullscreen(&self.store, &palette, window, cx))
             .children(voice::mixer(&self.store, &palette, window, cx))
+            .children(voice::stats_popover(&self.store, &palette, cx))
             .children(voice::participant_menu(&self.store, &palette, window, cx))
             .children(self.settings.clone())
+            .children(self.shortcuts_modal(&palette, cx))
             .children(self.quick_switcher.clone())
             .children(lightbox::lightbox(&self.store, &palette, window, cx))
             .children(voice::ringing(&self.store, &palette, cx))

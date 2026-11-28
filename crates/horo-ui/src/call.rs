@@ -75,6 +75,39 @@ pub enum PipCorner {
     BottomRight,
 }
 
+impl PipCorner {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TopLeft => "topLeft",
+            Self::TopRight => "topRight",
+            Self::BottomLeft => "bottomLeft",
+            Self::BottomRight => "bottomRight",
+        }
+    }
+
+    pub fn from_pref(s: &str) -> Self {
+        match s {
+            "topLeft" => Self::TopLeft,
+            "topRight" => Self::TopRight,
+            "bottomLeft" => Self::BottomLeft,
+            _ => Self::BottomRight,
+        }
+    }
+}
+
+/// Snapshot of live call network & audio stats for the connection stats popover.
+#[derive(Debug, Clone)]
+pub struct CallStatsSnapshot {
+    pub status: CallStatus,
+    pub tracks: usize,
+    pub jitter_ms: u32,
+    pub packets_received: u64,
+    pub packets_lost: u64,
+    pub echo_cancelling: bool,
+    pub echo_delay_ms: Option<i32>,
+    pub video_streams: usize,
+}
+
 /// Which edge or corner of the floating mini call window is being dragged to resize it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipResizeEdge {
@@ -213,6 +246,8 @@ pub struct CallView {
     pub screen_audio_volumes: std::collections::HashMap<String, f32>,
     /// Whether the per-user call volume mixer popover is open.
     pub mixer_open: bool,
+    /// Whether the call connection stats popover is open.
+    pub stats_open: bool,
     /// User minimized the bottom-right mini call modal.
     pub pip_hidden: bool,
     /// Call is popped out into its own OS window.
@@ -279,6 +314,8 @@ pub struct Live {
     /// Where our camera's and screen's pictures go.
     feed: Arc<Mutex<horo_rtc::call::VideoFeed>>,
     screen_feed: Arc<Mutex<horo_rtc::call::VideoFeed>>,
+    /// Outgoing screen-share audio feed (48 kHz mono PCM).
+    screen_audio_feed: Arc<Mutex<horo_rtc::call::ScreenAudioFeed>>,
     /// We rang the room; play ringback until someone joins or we hang up.
     ringing: bool,
     ringback: Option<crate::sounds::Ringback>,
@@ -309,10 +346,13 @@ impl Store {
         self.leave_call(cx);
         self.stop_ringing(cx);
         let Ok(room) = OwnedRoomId::try_from(room_id.as_str()) else { return };
+        let start_muted = self.prefs.push_to_talk;
+        let saved_corner = PipCorner::from_pref(&self.prefs.pip_corner);
+        let saved_size = self.prefs.pip_size;
         self.call = Some(CallView {
             room_id: room_id.clone(),
             status: CallStatus::Connecting,
-            muted: false,
+            muted: start_muted,
             deafened: false,
             focus: FocusMode::Auto,
             fullscreen: false,
@@ -323,11 +363,12 @@ impl Store {
             participant_volumes: std::collections::HashMap::new(),
             screen_audio_volumes: std::collections::HashMap::new(),
             mixer_open: false,
+            stats_open: false,
             pip_hidden: false,
             popped_out: false,
-            pip_corner: PipCorner::default(),
+            pip_corner: saved_corner,
             pip_pos: None,
-            pip_size: None,
+            pip_size: saved_size,
             pip_drag_anchor: None,
             pip_resize_anchor: None,
             speaking: Vec::new(),
@@ -356,7 +397,7 @@ impl Store {
                         Box::pin(async move { horo_rtc::join(&core, &room, false).await.map(|c| c.jwt).map_err(|e| e.to_string()) })
                     })
                 };
-                let options = CallOptions { refresh_token: Some(refresh), gate_threshold, ..Default::default() };
+                let options = CallOptions { refresh_token: Some(refresh), gate_threshold, muted: start_muted, ..Default::default() };
                 let joined = match Call::connect(&credentials.livekit_url, &credentials.jwt, options).await {
                     Ok(joined) => joined,
                     Err(e) => {
@@ -364,7 +405,7 @@ impl Store {
                         return Err(format!("couldn't connect to the call: {e}"));
                     }
                 };
-                let Joined { call, microphone, speaker, events, screens, camera, screen } = joined;
+                let Joined { call, microphone, speaker, events, screens, camera, screen, screen_audio } = joined;
                 let audio = match devices::start(microphone, speaker, devices) {
                     Ok(audio) => audio,
                     Err(e) => {
@@ -373,7 +414,7 @@ impl Store {
                         return Err(format!("couldn't start your microphone or speaker: {e}"));
                     }
                 };
-                Ok((call, audio, events, screens, camera, screen, ringing))
+                Ok((call, audio, events, screens, camera, screen, screen_audio, ringing))
             }
         });
 
@@ -382,7 +423,7 @@ impl Store {
             let Ok(Some(mut events)) = this.update(cx, |store, cx| {
                 let still_wanted = store.call.as_ref().is_some_and(|c| c.room_id == room_id);
                 match outcome {
-                    Ok((call, audio, events, screens, feed, screen_feed, ringing)) if still_wanted => {
+                    Ok((call, audio, events, screens, feed, screen_feed, screen_audio_feed, ringing)) if still_wanted => {
                         let backend = Backend::global(cx);
                         let refresher = backend.spawn({
                             let (state, room) = (backend.state.clone(), room.clone());
@@ -417,6 +458,7 @@ impl Store {
                             screens,
                             feed: Arc::new(Mutex::new(feed)),
                             screen_feed: Arc::new(Mutex::new(screen_feed)),
+                            screen_audio_feed: Arc::new(Mutex::new(screen_audio_feed)),
                             ringing,
                             ringback: None,
                             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -428,7 +470,7 @@ impl Store {
                         Some(events)
                     }
                     // Left (or moved on) while it was connecting.
-                    Ok((call, audio, _, screens, feed, screen_feed, _)) => {
+                    Ok((call, audio, _, screens, feed, screen_feed, screen_audio_feed, _)) => {
                         store.hang_up(
                             Live {
                                 room_id: room,
@@ -438,6 +480,7 @@ impl Store {
                                 screens,
                                 feed: Arc::new(Mutex::new(feed)),
                                 screen_feed: Arc::new(Mutex::new(screen_feed)),
+                                screen_audio_feed: Arc::new(Mutex::new(screen_audio_feed)),
                                 ringing: false,
                                 ringback: None,
                                 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -511,6 +554,26 @@ impl Store {
                 // takes focus automatically.
                 if view.focus == FocusMode::Grid && !participants.iter().any(|p| p.screen) {
                     view.focus = FocusMode::Auto;
+                }
+                // Apply remembered per-user voice and screen-share audio volumes for newly seen participants.
+                for p in &participants {
+                    let uid = user_of(&p.identity);
+                    if !view.participant_volumes.contains_key(&p.identity)
+                        && let Some(&vol) = self.prefs.user_volumes.get(uid)
+                    {
+                        view.participant_volumes.insert(p.identity.clone(), vol);
+                        if let Some(live) = &self.call_live {
+                            live.call.set_participant_volume(&p.identity, vol);
+                        }
+                    }
+                    if !view.screen_audio_volumes.contains_key(&p.identity)
+                        && let Some(&vol) = self.prefs.user_screen_volumes.get(uid)
+                    {
+                        view.screen_audio_volumes.insert(p.identity.clone(), vol);
+                        if let Some(live) = &self.call_live {
+                            live.call.set_screen_audio_volume(&p.identity, vol);
+                        }
+                    }
                 }
                 view.participants = participants;
             }
@@ -634,12 +697,14 @@ impl Store {
         cx.notify();
     }
 
-    /// Adjust a remote participant's local volume (`0.0`..=`2.0`) in the active call.
+    /// Adjust a remote participant's local volume (`0.0`..=`2.0`) in the active call,
+    /// and remember it by Matrix user ID for future calls.
     pub fn set_participant_volume(&mut self, identity: String, volume: f32, cx: &mut Context<Self>) {
         let clamped = volume.clamp(0.0, 2.0);
         if let Some(live) = &self.call_live {
             live.call.set_participant_volume(&identity, clamped);
         }
+        let uid = user_of(&identity).to_owned();
         if let Some(view) = &mut self.call {
             if (clamped - 1.0).abs() < 0.001 {
                 view.participant_volumes.remove(&identity);
@@ -647,15 +712,26 @@ impl Store {
                 view.participant_volumes.insert(identity, clamped);
             }
         }
-        cx.notify();
+        self.update_prefs(
+            |p| {
+                if (clamped - 1.0).abs() < 0.001 {
+                    p.user_volumes.remove(&uid);
+                } else {
+                    p.user_volumes.insert(uid, clamped);
+                }
+            },
+            cx,
+        );
     }
 
-    /// Adjust a remote participant's screen-share audio local volume (`0.0`..=`2.0`) in the active call.
+    /// Adjust a remote participant's screen-share audio local volume (`0.0`..=`2.0`) in the active call,
+    /// and remember it by Matrix user ID for future calls.
     pub fn set_screen_audio_volume(&mut self, identity: String, volume: f32, cx: &mut Context<Self>) {
         let clamped = volume.clamp(0.0, 2.0);
         if let Some(live) = &self.call_live {
             live.call.set_screen_audio_volume(&identity, clamped);
         }
+        let uid = user_of(&identity).to_owned();
         if let Some(view) = &mut self.call {
             if (clamped - 1.0).abs() < 0.001 {
                 view.screen_audio_volumes.remove(&identity);
@@ -663,7 +739,16 @@ impl Store {
                 view.screen_audio_volumes.insert(identity, clamped);
             }
         }
-        cx.notify();
+        self.update_prefs(
+            |p| {
+                if (clamped - 1.0).abs() < 0.001 {
+                    p.user_screen_volumes.remove(&uid);
+                } else {
+                    p.user_screen_volumes.insert(uid, clamped);
+                }
+            },
+            cx,
+        );
     }
 
     /// Move the call to a microphone or speaker just chosen (`before` is
@@ -838,13 +923,18 @@ impl Store {
 
     /// Snap the floating call window into whichever of the four corners is closest.
     pub fn end_call_pip_drag(&mut self, viewport: (f32, f32), cx: &mut Context<Self>) {
+        let mut new_corner = None;
         if let Some(view) = &mut self.call {
             if let Some(pos) = view.pip_pos.take() {
                 let (_, size) = clamp_pip_rect(pos, view.pip_size.unwrap_or(PIP_DEFAULT_SIZE), viewport);
                 view.pip_corner = nearest_pip_corner(pos, size, viewport);
+                new_corner = Some(view.pip_corner);
             }
             view.pip_drag_anchor = None;
             cx.notify();
+        }
+        if let Some(corner) = new_corner {
+            self.update_prefs(|p| p.pip_corner = corner.as_str().to_owned(), cx);
         }
     }
 
@@ -869,10 +959,91 @@ impl Store {
     }
 
     pub fn end_call_pip_resize(&mut self, cx: &mut Context<Self>) {
+        let mut new_size = None;
         if let Some(view) = &mut self.call {
             view.pip_pos = None;
             view.pip_resize_anchor = None;
+            new_size = view.pip_size;
             cx.notify();
+        }
+        if let Some(size) = new_size {
+            self.update_prefs(|p| p.pip_size = Some(size), cx);
+        }
+    }
+
+    pub fn toggle_call_stats(&mut self, cx: &mut Context<Self>) {
+        self.call_participant_menu = None;
+        if let Some(view) = &mut self.call {
+            view.stats_open = !view.stats_open;
+            if view.stats_open {
+                view.mixer_open = false;
+            }
+            cx.notify();
+        }
+    }
+
+    pub fn close_call_stats(&mut self, cx: &mut Context<Self>) {
+        if let Some(view) = &mut self.call
+            && view.stats_open
+        {
+            view.stats_open = false;
+            cx.notify();
+        }
+    }
+
+    /// Snapshot live audio/jitter/echo/video stats for the active call.
+    pub fn call_stats_snapshot(&self) -> Option<CallStatsSnapshot> {
+        let view = self.call.as_ref().filter(|c| c.is_live())?;
+        let (tracks, jitter_ms, packets_received, packets_lost, echo_cancelling, echo_delay_ms) = match &self.call_live {
+            Some(live) => {
+                let stats = live.audio.speaker_stats();
+                let tracks = stats.len();
+                let jitter_ms = stats.iter().map(|(d, _)| d.as_millis() as u32).max().unwrap_or(0);
+                let packets_received: u64 = stats.iter().map(|(_, s)| s.received).sum();
+                let packets_lost: u64 = stats.iter().map(|(_, s)| s.concealed + s.late).sum();
+                let echo = live.audio.echo_stats();
+                (tracks, jitter_ms, packets_received, packets_lost, live.audio.cancels_echo(), echo.and_then(|e| e.delay).map(|d| d.as_millis() as i32))
+            }
+            None => (0, 0, 0, 0, true, None),
+        };
+        let video_streams = view.participants.iter().filter(|p| p.camera).count()
+            + view.participants.iter().filter(|p| p.screen).count()
+            + usize::from(view.camera)
+            + usize::from(view.sharing);
+        Some(CallStatsSnapshot {
+            status: view.status.clone(),
+            tracks,
+            jitter_ms,
+            packets_received,
+            packets_lost,
+            echo_cancelling,
+            echo_delay_ms,
+            video_streams,
+        })
+    }
+
+    /// Push-to-Talk key press / release handler (only active when `prefs.push_to_talk` is on).
+    pub fn set_ptt_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if !self.prefs.push_to_talk || self.call.as_ref().is_none_or(|c| !c.is_live() || c.deafened) {
+            return;
+        }
+        if active {
+            if self.call.as_ref().is_some_and(|c| c.muted) {
+                self.set_call_muted(false, cx);
+            }
+        } else {
+            let delay = Duration::from_millis(self.prefs.ptt_release_ms as u64);
+            cx.spawn(async move |this, cx| {
+                if !delay.is_zero() {
+                    cx.background_executor().timer(delay).await;
+                }
+                let _ = this.update(cx, |store, cx| {
+                    if store.prefs.push_to_talk && store.call.as_ref().is_some_and(|c| c.is_live() && !c.muted) {
+                        store.set_call_muted(true, cx);
+                    }
+                });
+            })
+            .detach();
         }
     }
 
@@ -1004,7 +1175,9 @@ impl Store {
         if let Some(view) = &mut self.call {
             view.sharing = on;
         }
+        let share_audio = self.prefs.share_screen_audio;
         live.call.set_screen(on);
+        live.call.set_screen_audio(on && share_audio);
         if !on {
             live.screen = None;
             crate::screen::done_picking();
@@ -1012,6 +1185,7 @@ impl Store {
             return;
         }
         let feed = live.screen_feed.clone();
+        let audio_feed = live.screen_audio_feed.clone();
         let quality = self.prefs.screen_quality;
         // The system's picker first: a window, an app or a display.
         let picked = crate::screen::pick();
@@ -1041,7 +1215,14 @@ impl Store {
                         feed.push(&frame);
                     }
                 });
-                crate::screen::ScreenShare::start(picked, quality, on_frame)
+                let on_audio: Option<crate::screen::OnAudio> = share_audio.then(|| {
+                    Box::new(move |samples: &[f32]| {
+                        if let Ok(mut feed) = audio_feed.lock() {
+                            feed.push_samples(samples);
+                        }
+                    }) as crate::screen::OnAudio
+                });
+                crate::screen::ScreenShare::start(picked, quality, on_frame, on_audio)
             });
             let started = task.await;
             let _ = this.update(cx, |store, cx| {

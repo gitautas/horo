@@ -68,6 +68,11 @@ impl RunningAudio {
         self.echo.as_ref().map(EchoCanceller::stats)
     }
 
+    /// Each live remote audio track's jitter buffer delay and packet counters.
+    pub fn speaker_stats(&self) -> Vec<(Duration, crate::audio::jitter::JitterStats)> {
+        self.speaker.lock().map(|s| s.stats()).unwrap_or_default()
+    }
+
     /// Devices that wouldn't open at the start, the default used instead.
     pub fn fallen_back(&self) -> &[FellBack] {
         &self.fallen_back
