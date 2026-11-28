@@ -169,6 +169,21 @@ struct Remote {
     buffer: JitterBuffer,
     last_packet: Instant,
     identity: Option<String>,
+    /// When this remote track last sounded like speech (for immediate local
+    /// speaking-ring detection independent of server `SpeakersChanged`).
+    loud_at: Option<Instant>,
+}
+
+/// Speech threshold (dBFS) for RTP voice-activity and local remote speaker detection.
+const SPEAKING_DB: f32 = -50.0;
+/// Hold time so speaking indicators don't flicker between words.
+const SPEAKING_HOLD: Duration = Duration::from_millis(250);
+
+/// RMS loudness of a 20 ms PCM frame in dBFS (`-127.0..=0.0`).
+fn frame_dbfs(frame: &[f32; FRAME]) -> f32 {
+    let mean_sq = frame.iter().map(|&s| s * s).sum::<f32>() / FRAME as f32;
+    let rms = mean_sq.sqrt();
+    if rms > 1e-6 { (20.0 * rms.log10()).clamp(-127.0, 0.0) } else { -127.0 }
 }
 
 /// A joined call. Dropping it leaves.
@@ -250,6 +265,7 @@ impl Call {
 
         let (events_tx, events) = mpsc::unbounded_channel();
         let (packets_tx, packets) = mpsc::unbounded_channel();
+        let (local_speaking_tx, local_speaking_rx) = mpsc::unbounded_channel();
         let (commands, commands_rx) = mpsc::unbounded_channel();
         let muted = Arc::new(AtomicBool::new(options.muted));
         let remotes = Arc::new(Mutex::new(Remotes::default()));
@@ -276,6 +292,7 @@ impl Call {
             ping: (0, 0),
             participants: HashMap::new(),
             speakers: HashMap::new(),
+            local_speaking: Vec::new(),
             remotes: remotes.clone(),
             video: video::Receiver::new(screens.clone(), broken_tx),
             outgoing,
@@ -290,7 +307,7 @@ impl Call {
             route_checked: Instant::now(),
         };
         engine.joined(&join);
-        let task = tokio::spawn(engine.run(packets, commands_rx, broken, video_packets));
+        let task = tokio::spawn(engine.run(packets, commands_rx, broken, video_packets, local_speaking_rx));
 
         let mut gate = NoiseGate::new(crate::audio::SAMPLE_RATE);
         gate.set_threshold(options.gate_threshold);
@@ -307,7 +324,14 @@ impl Call {
             echo: None,
         };
         let deafened = Arc::new(AtomicBool::new(false));
-        let speaker = Speaker { remotes: remotes.clone(), frames: Vec::new(), echo: None, deafened: deafened.clone() };
+        let speaker = Speaker {
+            remotes: remotes.clone(),
+            frames: Vec::new(),
+            echo: None,
+            deafened: deafened.clone(),
+            local_speaking: local_speaking_tx,
+            last_speaking: Vec::new(),
+        };
         Ok(Joined { call: Call { commands, muted, deafened, remotes, gate: threshold, identity, task }, microphone, speaker, events, screens, camera, screen })
     }
 
@@ -519,6 +543,8 @@ struct Engine {
     /// Who's speaking now, by sid, with their level. The server only says
     /// whose state changed, so this keeps the rest.
     speakers: HashMap<String, f32>,
+    /// Remote identities heard speaking directly from decoded audio frames.
+    local_speaking: Vec<String>,
     remotes: Arc<Mutex<Remotes>>,
     /// Remote cameras.
     video: video::Receiver,
@@ -559,14 +585,20 @@ impl Engine {
         }
     }
 
-    /// Who's speaking, loudest first, by identity.
+    /// Who's speaking, loudest first, by identity (merging server active-speaker
+    /// updates with locally detected speech from decoded remote audio).
     fn send_speaking(&self) {
         let mut loudest: Vec<(&String, f32)> = self.speakers.iter().map(|(sid, level)| (sid, *level)).collect();
         loudest.sort_by(|a, b| b.1.total_cmp(&a.1));
-        let speaking = loudest
+        let mut speaking: Vec<String> = loudest
             .into_iter()
             .filter_map(|(sid, _)| if *sid == self.own_sid { Some(self.identity.clone()) } else { self.participants.get(sid).map(|p| p.identity.clone()) })
             .collect();
+        for id in &self.local_speaking {
+            if !speaking.iter().any(|s| s == id) {
+                speaking.push(id.clone());
+            }
+        }
         let _ = self.events.send(CallEvent::Speaking(speaking));
     }
 
@@ -584,10 +616,11 @@ impl Engine {
 
     async fn run(
         mut self,
-        mut packets: mpsc::UnboundedReceiver<(u64, Vec<u8>)>,
+        mut packets: mpsc::UnboundedReceiver<(u64, Vec<u8>, i8, bool)>,
         mut commands: mpsc::UnboundedReceiver<Command>,
         mut broken: mpsc::UnboundedReceiver<Mid>,
         mut video_packets: mpsc::UnboundedReceiver<video::VideoPacket>,
+        mut local_speaking: mpsc::UnboundedReceiver<Vec<String>>,
     ) {
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         let reason = loop {
@@ -619,10 +652,17 @@ impl Engine {
                     }
                     Ok(())
                 }
-                Some((rtp, packet)) = packets.recv() => {
+                Some((rtp, packet, audio_level, vad)) = packets.recv() => {
                     if self.publishing {
                         // A failed write means the peer is closing; its event says why.
-                        let _ = self.link.publisher.write_audio(self.link.mic_mid, rtp, packet);
+                        let _ = self.link.publisher.write_audio_with_level(self.link.mic_mid, rtp, packet, audio_level, vad);
+                    }
+                    Ok(())
+                }
+                Some(now_speaking) = local_speaking.recv() => {
+                    if self.local_speaking != now_speaking {
+                        self.local_speaking = now_speaking;
+                        self.send_speaking();
                     }
                     Ok(())
                 }
@@ -1018,7 +1058,7 @@ impl Engine {
                     .and_then(|(sid, _)| self.participants.get(sid))
                     .map(|p| p.identity.clone());
                 let mut remotes = self.remotes.lock().unwrap();
-                let fresh = || JitterBuffer::new().map(|buffer| Remote { buffer, last_packet: now, identity: owner.clone() });
+                let fresh = || JitterBuffer::new().map(|buffer| Remote { buffer, last_packet: now, identity: owner.clone(), loud_at: None });
                 let remote = match remotes.tracks.entry(mid) {
                     std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                     std::collections::hash_map::Entry::Vacant(entry) => match fresh() {
@@ -1073,7 +1113,7 @@ pub struct Microphone {
     applied: f32,
     encoder: Encoder,
     rtp: u64,
-    packets: mpsc::UnboundedSender<(u64, Vec<u8>)>,
+    packets: mpsc::UnboundedSender<(u64, Vec<u8>, i8, bool)>,
     muted: Arc<AtomicBool>,
     events: mpsc::UnboundedSender<CallEvent>,
     echo: Option<EchoCanceller>,
@@ -1114,9 +1154,12 @@ impl Microphone {
         if self.muted.load(Ordering::Relaxed) {
             return;
         }
+        let db = frame_dbfs(&frame);
+        let audio_level = db.round().clamp(-127.0, 0.0) as i8;
+        let vad = db > SPEAKING_DB;
         match self.encoder.encode(&frame) {
             Ok(packet) => {
-                let _ = self.packets.send((rtp, packet));
+                let _ = self.packets.send((rtp, packet, audio_level, vad));
             }
             Err(e) => tracing::warn!("encoding the microphone: {e}"),
         }
@@ -1131,6 +1174,9 @@ pub struct Speaker {
     /// Deafened: everyone else is still received (and their buffers kept
     /// moving) but not played.
     deafened: Arc<AtomicBool>,
+    /// Reports locally detected remote speakers to the engine.
+    local_speaking: mpsc::UnboundedSender<Vec<String>>,
+    last_speaking: Vec<String>,
 }
 
 impl Speaker {
@@ -1159,11 +1205,21 @@ impl Speaker {
         let volumes = remotes.volumes.clone();
         let live = remotes.tracks.values_mut().filter(|r| now.duration_since(r.last_packet) <= IDLE);
         let mut used = 0;
+        let mut speaking_now = Vec::new();
         for remote in live {
             if used == self.frames.len() {
                 self.frames.push([0.0; FRAME]);
             }
             if remote.buffer.pop(&mut self.frames[used]).is_ok() {
+                if frame_dbfs(&self.frames[used]) > SPEAKING_DB {
+                    remote.loud_at = Some(now);
+                }
+                if remote.loud_at.is_some_and(|at| now.duration_since(at) < SPEAKING_HOLD)
+                    && let Some(id) = &remote.identity
+                    && !speaking_now.contains(id)
+                {
+                    speaking_now.push(id.clone());
+                }
                 let gain = remote.identity.as_deref().and_then(|id| volumes.get(id).copied()).unwrap_or(1.0);
                 if gain <= 0.001 {
                     continue;
@@ -1177,6 +1233,11 @@ impl Speaker {
             }
         }
         drop(remotes);
+        speaking_now.sort();
+        if speaking_now != self.last_speaking {
+            self.last_speaking = speaking_now.clone();
+            let _ = self.local_speaking.send(speaking_now);
+        }
         if self.deafened.load(Ordering::Relaxed) {
             used = 0;
         }

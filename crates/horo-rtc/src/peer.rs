@@ -200,7 +200,7 @@ enum Command {
     AcceptAnswer { sdp: String, reply: oneshot::Sender<Result<()>> },
     AcceptOffer { sdp: String, reply: oneshot::Sender<Result<String>> },
     RemoteCandidate(String),
-    WriteAudio { mid: Mid, rtp_time: u64, data: Vec<u8> },
+    WriteAudio { mid: Mid, rtp_time: u64, data: Vec<u8>, audio_level: Option<(i8, bool)> },
     RequestKeyframe { mid: Mid },
     WriteVideo { mid: Mid, rid: Option<&'static str>, rtp_time: u64, data: Vec<u8> },
     Restart { config: Box<PeerConfig>, offer: bool, reply: oneshot::Sender<Result<Option<String>>> },
@@ -291,7 +291,16 @@ impl Peer {
 
     /// Send one encoded Opus frame; `rtp_time` counts samples at 48 kHz.
     pub fn write_audio(&self, mid: Mid, rtp_time: u64, data: Vec<u8>) -> Result<()> {
-        self.commands.send(Command::WriteAudio { mid, rtp_time, data }).map_err(|_| PeerError::Closed)
+        self.commands.send(Command::WriteAudio { mid, rtp_time, data, audio_level: None }).map_err(|_| PeerError::Closed)
+    }
+
+    /// Send one encoded Opus frame with RFC 6464 `ssrc-audio-level` metadata
+    /// (`audio_level` in negative dBov `-127..=0`, `voice_activity` true when speaking)
+    /// so LiveKit's server-side active-speaker detection lights up for other clients.
+    pub fn write_audio_with_level(&self, mid: Mid, rtp_time: u64, data: Vec<u8>, audio_level: i8, voice_activity: bool) -> Result<()> {
+        self.commands
+            .send(Command::WriteAudio { mid, rtp_time, data, audio_level: Some((audio_level, voice_activity)) })
+            .map_err(|_| PeerError::Closed)
     }
 
     /// One encoded VP8 frame on a send line (on simulcast layer `rid`),
@@ -779,11 +788,14 @@ impl Driver {
                     Err(e) => tracing::debug!("{}: skipping candidate {line:?}: {e}", self.name),
                 }
             }
-            Command::WriteAudio { mid, rtp_time, data } => {
-                let Some(writer) = self.rtc.writer(mid) else { return Ok(()) };
+            Command::WriteAudio { mid, rtp_time, data, audio_level } => {
+                let Some(mut writer) = self.rtc.writer(mid) else { return Ok(()) };
                 let Some(pt) = writer.payload_params().find(|p| p.spec().codec == Codec::Opus).map(|p| p.pt()) else {
                     return Ok(()); // not negotiated yet
                 };
+                if let Some((level, vad)) = audio_level {
+                    writer = writer.audio_level(level, vad);
+                }
                 writer.write(pt, Instant::now(), MediaTime::new(rtp_time, str0m::media::Frequency::FORTY_EIGHT_KHZ), data)?;
                 self.drain()?;
             }

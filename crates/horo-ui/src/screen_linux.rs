@@ -13,9 +13,6 @@ use ashpd::desktop::{
 
 use crate::pw_video;
 
-/// The biggest picture sent: a screen is scaled down to fit.
-const MAX_SIZE: (u32, u32) = (1920, 1080);
-
 /// Called with each picture, on the capture's thread.
 pub type OnFrame = pw_video::OnFrame;
 
@@ -30,7 +27,7 @@ impl ScreenShare {
     /// Ask the portal what to share and start sending it, `on_frame`
     /// hearing each picture. `Ok(None)` if the picker was cancelled. Waits
     /// for the user: run it off the UI thread.
-    pub async fn start(on_frame: OnFrame) -> Result<Option<ScreenShare>, String> {
+    pub async fn start(quality: crate::prefs::ScreenQuality, on_frame: OnFrame) -> Result<Option<ScreenShare>, String> {
         let failed = |e: ashpd::Error| format!("couldn't share the screen: {e}");
         let proxy = Screencast::new().await.map_err(|e| format!("the desktop can't share screens (no ScreenCast portal): {e}"))?;
         let session = proxy.create_session(Default::default()).await.map_err(failed)?;
@@ -73,7 +70,7 @@ impl ScreenShare {
                 return Err(failed(e));
             }
         };
-        match pw_video::start(pw_video::Source::Screen { remote, node }, MAX_SIZE, on_frame) {
+        match pw_video::start(pw_video::Source::Screen { remote, node }, quality.max_size(), on_frame) {
             Ok(capture) => Ok(Some(ScreenShare { capture: Some(capture), session: Some(session) })),
             Err(e) => {
                 let _ = session.close().await;

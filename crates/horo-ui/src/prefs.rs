@@ -7,6 +7,42 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// Resolution and frame-rate preset for screen sharing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ScreenQuality {
+    Hd720p30,
+    #[default]
+    Fhd1080p30,
+    Fhd1080p60,
+}
+
+impl ScreenQuality {
+    pub const ALL: [ScreenQuality; 3] = [Self::Hd720p30, Self::Fhd1080p30, Self::Fhd1080p60];
+
+    pub fn max_size(self) -> (u32, u32) {
+        match self {
+            Self::Hd720p30 => (1280, 720),
+            Self::Fhd1080p30 | Self::Fhd1080p60 => (1920, 1080),
+        }
+    }
+
+    pub fn fps(self) -> u32 {
+        match self {
+            Self::Hd720p30 | Self::Fhd1080p30 => 30,
+            Self::Fhd1080p60 => 60,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Hd720p30 => "720p · 30 fps",
+            Self::Fhd1080p30 => "1080p · 30 fps",
+            Self::Fhd1080p60 => "1080p · 60 fps",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Prefs {
@@ -65,6 +101,8 @@ pub struct Prefs {
     pub user_notes: std::collections::HashMap<String, String>,
     /// Cached custom status text (synced with MSC4133 `chat.commet.profile_status`).
     pub custom_status: String,
+    /// Preferred screen-share resolution and frame rate.
+    pub screen_quality: ScreenQuality,
 }
 
 /// How many recent reactions are kept.
@@ -121,6 +159,7 @@ impl Default for Prefs {
             link_previews: true,
             user_notes: std::collections::HashMap::new(),
             custom_status: String::new(),
+            screen_quality: ScreenQuality::default(),
         }
     }
 }

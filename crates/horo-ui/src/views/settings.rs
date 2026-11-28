@@ -713,6 +713,34 @@ impl Settings {
                     ),
             )
             .children(self.camera_card(prefs, palette, cx))
+            .child(
+                card(palette)
+                    .child(field(palette, "screen sharing", Some("resolution and frame rate when you share your screen.")))
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .children(crate::prefs::ScreenQuality::ALL.into_iter().enumerate().map(|(i, q)| {
+                                let on = prefs.screen_quality == q;
+                                div()
+                                    .id(("screen-quality", i))
+                                    .px_3()
+                                    .py(zpx(6.))
+                                    .rounded_full()
+                                    .border_1()
+                                    .border_color(if on { palette.accent } else { palette.border })
+                                    .when(on, |d| d.bg(gpui::Hsla { a: 0.12, ..palette.accent }))
+                                    .text_xs()
+                                    .text_color(if on { palette.text } else { palette.text_secondary })
+                                    .cursor_pointer()
+                                    .hover(|d| d.text_color(palette.text))
+                                    .child(q.label())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.store.update(cx, |s, cx| s.update_prefs(|p| p.screen_quality = q, cx));
+                                    }))
+                            })),
+                    ),
+            )
             .child(div().text_xs().text_color(palette.text_tertiary).child(
                 "echo cancellation and noise suppression are always on: horo's own, the same on every platform.",
             ))

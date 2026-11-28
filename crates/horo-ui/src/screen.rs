@@ -26,9 +26,6 @@ use objc2_screen_capture_kit::{
 /// Called with each picture, on the capture queue.
 pub type OnFrame = Box<dyn Fn(&CVPixelBuffer) + Send + Sync>;
 
-/// The biggest picture sent: a screen is scaled down to fit.
-const MAX_SIZE: (f64, f64) = (1920., 1080.);
-
 define_class!(
     #[unsafe(super(NSObject))]
     #[name = "HoroScreenSink"]
@@ -174,7 +171,7 @@ unsafe impl Send for ScreenShare {}
 impl ScreenShare {
     /// Start sharing what was picked, `on_frame` hearing each picture.
     /// Blocks while macOS answers (run it off the UI thread).
-    pub fn start(picked: Picked, on_frame: OnFrame) -> Result<ScreenShare, String> {
+    pub fn start(picked: Picked, quality: crate::prefs::ScreenQuality, on_frame: OnFrame) -> Result<ScreenShare, String> {
         let filter = picked.0;
         // SAFETY: plain queries on the filter.
         let (w, h) = unsafe {
@@ -182,20 +179,22 @@ impl ScreenShare {
             let scale = f64::from(filter.pointPixelScale()).max(1.);
             (rect.size.width * scale, rect.size.height * scale)
         };
-        Self::stream(&filter, (w, h), on_frame)
+        Self::stream(&filter, (w, h), quality, on_frame)
     }
 
-    /// Stream `filter`'s content, `(w, h)` pixels, fitted into MAX_SIZE.
-    fn stream(filter: &SCContentFilter, (w, h): (f64, f64), on_frame: OnFrame) -> Result<ScreenShare, String> {
+    /// Stream `filter`'s content, `(w, h)` pixels, fitted into `quality.max_size()`.
+    fn stream(filter: &SCContentFilter, (w, h): (f64, f64), quality: crate::prefs::ScreenQuality, on_frame: OnFrame) -> Result<ScreenShare, String> {
+        let (max_w, max_h) = quality.max_size();
+        let fps = quality.fps() as i32;
         // SAFETY: ScreenCaptureKit calls with valid, retained arguments.
         unsafe {
             let config = SCStreamConfiguration::new();
             // In even numbers, as 4:2:0 wants.
-            let scale = (MAX_SIZE.0 / w).min(MAX_SIZE.1 / h).min(1.);
+            let scale = (f64::from(max_w) / w).min(f64::from(max_h) / h).min(1.);
             let even = |v: f64| ((v * scale) as usize) & !1;
             config.setWidth(even(w).max(2));
             config.setHeight(even(h).max(2));
-            config.setMinimumFrameInterval(CMTime::new(1, 30));
+            config.setMinimumFrameInterval(CMTime::new(1, fps));
             config.setPixelFormat(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
             config.setShowsCursor(true);
             config.setQueueDepth(5);

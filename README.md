@@ -29,3 +29,6 @@ See [docs/releasing.md](docs/releasing.md) for packaging and release
 instructions. Tagging `v*` builds every desktop platform and publishes a signed
 release using `TAURI_SIGNING_PRIVATE_KEY` (and
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) in GitHub Actions secrets.
+
+## License
+Licensed under the [GNU Affero General Public License v3.0 or later](LICENSE) (`AGPL-3.0-or-later`).

@@ -77,6 +77,10 @@ pub struct Shell {
     space_hierarchy: Option<(String, Vec<String>, Vec<PublicRoom>)>,
     /// Unjoined rooms currently being joined.
     joining: HashSet<String>,
+    /// Discord-style Inbox drawer (mentions & unreads across all rooms/spaces).
+    inbox_open: bool,
+    /// `true` = mentions & invites tab, `false` = all unreads tab.
+    inbox_mentions_only: bool,
 }
 
 impl Shell {
@@ -110,7 +114,7 @@ impl Shell {
             }
         })
         .detach();
-        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, room_menu_can_delete: None, invite_to_space: None, space_settings: None, leave_space: None, browse: None, settings: None, quick_switcher: None, status_menu: None, status_input, profile: None, focus, search, filter: Filter::All, filters_open: false, space_hierarchy: None, joining: HashSet::new() };
+        let mut shell = Shell { store, timeline: None, info: None, explore: None, create: None, room_settings: None, invite: None, space_menu: None, room_menu: None, room_menu_can_delete: None, invite_to_space: None, space_settings: None, leave_space: None, browse: None, settings: None, quick_switcher: None, status_menu: None, status_input, profile: None, focus, search, filter: Filter::All, filters_open: false, space_hierarchy: None, joining: HashSet::new(), inbox_open: false, inbox_mentions_only: false };
         shell.follow_room(window, cx);
         shell.follow_space(cx);
         shell.follow_settings(window, cx);
@@ -434,6 +438,200 @@ impl Shell {
                 let _ = horo_core::matrix::profile::set_profile(&core, update).await;
             }
         }));
+    }
+
+    fn inbox_popover(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use horo_core::dto::RoomMembership;
+        if !self.inbox_open {
+            return None;
+        }
+        let mentions_only = self.inbox_mentions_only;
+        let rooms: Vec<RoomSummary> = self
+            .store
+            .read(cx)
+            .rooms
+            .iter()
+            .filter(|r| !r.is_space)
+            .filter(|r| {
+                if mentions_only {
+                    r.highlight_count > 0 || r.membership == RoomMembership::Invited
+                } else {
+                    r.has_unread || r.notification_count > 0 || r.highlight_count > 0 || r.membership == RoomMembership::Invited
+                }
+            })
+            .cloned()
+            .collect();
+        let unread_ids: Vec<String> = rooms.iter().filter(|r| r.membership == RoomMembership::Joined).map(|r| r.id.clone()).collect();
+        let tab = |id: &'static str, label: &'static str, active: bool| {
+            div()
+                .id(id)
+                .px(space(10.))
+                .py(zpx(4.))
+                .rounded(corner(8.))
+                .cursor_pointer()
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .bg(if active { palette.raised } else { gpui::transparent_black() })
+                .text_color(if active { palette.text } else { palette.text_tertiary })
+                .hover(|d| d.text_color(palette.text))
+                .child(label)
+        };
+
+        Some(
+            v_flex()
+                .id("inbox-popover")
+                .occlude()
+                .absolute()
+                .top(zpx(64.))
+                .right(space(18.))
+                .w(zpx(380.))
+                .max_h(zpx(480.))
+                .rounded(corner(16.))
+                .bg(palette.card)
+                .border_1()
+                .border_color(palette.border)
+                .shadow_lg()
+                .overflow_hidden()
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.inbox_open = false;
+                    cx.notify();
+                }))
+                .child(
+                    h_flex()
+                        .items_center()
+                        .justify_between()
+                        .px(space(14.))
+                        .py(space(10.))
+                        .border_b_1()
+                        .border_color(palette.border_subtle)
+                        .child(
+                            h_flex()
+                                .gap(zpx(4.))
+                                .child(tab("inbox-tab-unreads", "unreads", !mentions_only).on_click(cx.listener(|this, _, _, cx| {
+                                    this.inbox_mentions_only = false;
+                                    cx.notify();
+                                })))
+                                .child(tab("inbox-tab-mentions", "mentions", mentions_only).on_click(cx.listener(|this, _, _, cx| {
+                                    this.inbox_mentions_only = true;
+                                    cx.notify();
+                                }))),
+                        )
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .gap(space(6.))
+                                .when(!unread_ids.is_empty(), |row| {
+                                    let ids = unread_ids.clone();
+                                    row.child(
+                                        div()
+                                            .id("inbox-mark-all")
+                                            .px(space(7.))
+                                            .py(zpx(2.))
+                                            .rounded(corner(6.))
+                                            .cursor_pointer()
+                                            .text_xs()
+                                            .text_color(palette.accent)
+                                            .hover(|d| d.bg(palette.raised))
+                                            .child("mark all read")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.on_rooms(ids.clone(), cx, |core, id| Box::pin(async move { core_rooms::mark_read(&core, &id).await }));
+                                            })),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .id("inbox-close")
+                                        .px(space(6.))
+                                        .py(zpx(2.))
+                                        .rounded(corner(6.))
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(palette.text_tertiary)
+                                        .hover(|d| d.bg(palette.raised).text_color(palette.text))
+                                        .child("✕")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.inbox_open = false;
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
+                )
+                .child(if rooms.is_empty() {
+                    div()
+                        .py(space(28.))
+                        .text_center()
+                        .text_xs()
+                        .text_color(palette.text_tertiary)
+                        .child(if mentions_only { "no unread mentions~" } else { "all caught up~" })
+                        .into_any_element()
+                } else {
+                    v_flex()
+                        .id("inbox-scroll")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .p(space(8.))
+                        .gap(zpx(4.))
+                        .children(rooms.into_iter().enumerate().map(|(ix, r)| {
+                            let rid = r.id.clone();
+                            let face = avatar(&r.id, &r.name, r.avatar_url.as_deref(), zpx(30.), cx);
+                            let preview = if r.membership == RoomMembership::Invited {
+                                "invited you to join".to_owned()
+                            } else {
+                                preview_for(&r).replace('\n', " ")
+                            };
+                            let badge = if r.membership == RoomMembership::Invited {
+                                Some(("invite".to_owned(), palette.accent))
+                            } else if r.highlight_count > 0 {
+                                Some((format!("@{}", r.highlight_count), palette.danger))
+                            } else if r.notification_count > 0 {
+                                Some((r.notification_count.to_string(), palette.accent))
+                            } else {
+                                None
+                            };
+                            h_flex()
+                                .id(("inbox-row", ix))
+                                .gap(space(10.))
+                                .px(space(10.))
+                                .py(space(8.))
+                                .rounded(corner(12.))
+                                .items_center()
+                                .cursor_pointer()
+                                .hover(|d| d.bg(palette.raised))
+                                .child(face)
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .gap(zpx(2.))
+                                        .child(div().truncate().text_xs().font_weight(FontWeight::BOLD).text_color(palette.text).child(r.name))
+                                        .when(!preview.is_empty(), |col| {
+                                            col.child(div().truncate().text_xs().text_color(palette.text_tertiary).child(preview))
+                                        }),
+                                )
+                                .children(badge.map(|(txt, col)| {
+                                    div()
+                                        .flex_none()
+                                        .px(space(7.))
+                                        .py(zpx(2.))
+                                        .rounded_full()
+                                        .bg(Hsla { a: 0.16, ..col })
+                                        .font_family(palette.mono_font.clone())
+                                        .text_size(text(10.))
+                                        .text_color(col)
+                                        .child(txt)
+                                }))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.inbox_open = false;
+                                    let id = rid.clone();
+                                    this.store.update(cx, |s, cx| s.open_room(id, cx));
+                                    cx.notify();
+                                }))
+                        }))
+                        .into_any_element()
+                })
+                .into_any_element(),
+        )
     }
 
     fn status_popover(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -1711,6 +1909,32 @@ impl Shell {
                 }
             }));
 
+        let inbox_open = self.inbox_open;
+        let inbox_highlights: u64 = self
+            .store
+            .read(cx)
+            .rooms
+            .iter()
+            .filter(|r| !r.is_space && !r.is_muted)
+            .map(|r| r.highlight_count + u64::from(r.membership == horo_core::dto::RoomMembership::Invited))
+            .sum();
+        let inbox_button = div()
+            .id("header-inbox")
+            .relative()
+            .p(space(9.))
+            .rounded(corner(12.))
+            .cursor_pointer()
+            .bg(palette.raised)
+            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("inbox (unreads & mentions)").build(window, cx))
+            .child(voice::icon("icons/mail.svg").size(zpx(17.)).text_color(if inbox_open { palette.accent } else { palette.text_secondary }))
+            .when(inbox_highlights > 0, |d| {
+                d.child(div().absolute().top(zpx(5.)).right(zpx(5.)).size(zpx(7.)).rounded_full().bg(palette.danger))
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.inbox_open = !this.inbox_open;
+                cx.notify();
+            }));
+
         let info_open = self.store.read(cx).prefs.show_info_panel;
         let store = self.store.clone();
         let info_button = div()
@@ -1762,6 +1986,7 @@ impl Shell {
                     .child(pins_button)
                     .child(search_button)
                     .child(call_button)
+                    .child(inbox_button)
                     .child(info_button),
             )
             .into_any_element()
@@ -1925,7 +2150,7 @@ impl Render for Shell {
             // Escape closes open menus / call mixer, as a click elsewhere does.
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
-                    let closed_local = this.space_menu.take().is_some() | this.room_menu.take().is_some();
+                    let closed_local = this.space_menu.take().is_some() | this.room_menu.take().is_some() | std::mem::take(&mut this.inbox_open);
                     let closed_call = this.store.read(cx).call_participant_menu.is_some()
                         || this.store.read(cx).call.as_ref().is_some_and(|c| c.mixer_open);
                     if closed_call {
@@ -2029,6 +2254,7 @@ impl Render for Shell {
             .children(self.browse.clone())
             .children(self.space_menu(&palette, cx))
             .children(self.room_menu(&palette, cx))
+            .children(self.inbox_popover(&palette, cx))
             .children(self.status_popover(&palette, cx))
             .children(self.profile.clone())
             .children(banner(&self.store, &palette, cx))

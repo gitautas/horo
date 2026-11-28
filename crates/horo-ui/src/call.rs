@@ -213,6 +213,8 @@ pub struct CallView {
     pub mixer_open: bool,
     /// User minimized the bottom-right mini call modal.
     pub pip_hidden: bool,
+    /// Call is popped out into its own OS window.
+    pub popped_out: bool,
     /// Which of the four viewport corners the floating mini call window rests in.
     pub pip_corner: PipCorner,
     /// Live `(right, bottom)` offset in design pixels while dragging or resizing.
@@ -319,6 +321,7 @@ impl Store {
             participant_volumes: std::collections::HashMap::new(),
             mixer_open: false,
             pip_hidden: false,
+            popped_out: false,
             pip_corner: PipCorner::default(),
             pip_pos: None,
             pip_size: None,
@@ -691,6 +694,20 @@ impl Store {
     pub fn set_call_fullscreen(&mut self, on: bool, cx: &mut Context<Self>) {
         if let Some(view) = &mut self.call {
             view.fullscreen = on;
+            if on {
+                view.popped_out = false;
+            }
+            cx.notify();
+        }
+    }
+
+    pub fn set_call_popped_out(&mut self, on: bool, cx: &mut Context<Self>) {
+        if let Some(view) = &mut self.call {
+            view.popped_out = on;
+            if on {
+                view.fullscreen = false;
+                view.pip_hidden = false;
+            }
             cx.notify();
         }
     }
@@ -942,6 +959,7 @@ impl Store {
             return;
         }
         let feed = live.screen_feed.clone();
+        let quality = self.prefs.screen_quality;
         // The system's picker first: a window, an app or a display.
         let picked = crate::screen::pick();
         cx.spawn(async move |this, cx| {
@@ -970,7 +988,7 @@ impl Store {
                         feed.push(&frame);
                     }
                 });
-                crate::screen::ScreenShare::start(picked, on_frame)
+                crate::screen::ScreenShare::start(picked, quality, on_frame)
             });
             let started = task.await;
             let _ = this.update(cx, |store, cx| {
@@ -1077,13 +1095,14 @@ impl Store {
             return;
         }
         let feed = live.screen_feed.clone();
+        let quality = self.prefs.screen_quality;
         let task = cx.background_spawn(async move {
             let on_frame: crate::screen::OnFrame = Box::new(move |frame| {
                 if let Ok(mut feed) = feed.lock() {
                     feed.push(&frame);
                 }
             });
-            crate::screen::ScreenShare::start(on_frame).await
+            crate::screen::ScreenShare::start(quality, on_frame).await
         });
         cx.spawn(async move |this, cx| {
             let started = task.await;

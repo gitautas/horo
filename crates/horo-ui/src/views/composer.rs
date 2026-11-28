@@ -145,11 +145,26 @@ struct Completing {
     active: usize,
 }
 
+struct SlashCommand {
+    name: &'static str,
+    description: &'static str,
+}
+
+const SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand { name: "shrug", description: r"appends ¯\_(ツ)_/¯" },
+    SlashCommand { name: "tableflip", description: "appends (╯°□°)╯︵ ┻━┻" },
+    SlashCommand { name: "unflip", description: "appends ┬─┬ノ( º _ ºノ)" },
+    SlashCommand { name: "lenny", description: "appends ( ͡° ͜ʖ ͡°)" },
+    SlashCommand { name: "me", description: "send an action / emote message" },
+    SlashCommand { name: "spoiler", description: "wrap text in a spoiler" },
+];
+
 /// One line of the suggestions menu.
 enum Suggestion {
     Emote(horo_core::matrix::packs::PackImageDto),
     Person(Person),
     Role(RoleDto),
+    Slash(&'static SlashCommand),
 }
 
 /// How many matches the menu offers.
@@ -358,7 +373,15 @@ impl Composer {
             let input = self.input.read(cx);
             (input.value().to_string(), input.cursor())
         };
-        self.completing = if let Some((query, start)) = mentions::typing_mention(&text, caret) {
+        self.completing = if let Some(prefix) = text.get(..caret).and_then(|s| s.strip_prefix('/')).filter(|s| !s.chars().any(char::is_whitespace)) {
+            let q = prefix.to_ascii_lowercase();
+            let matches: Vec<Suggestion> = SLASH_COMMANDS
+                .iter()
+                .filter(|c| q.is_empty() || c.name.starts_with(&q))
+                .map(Suggestion::Slash)
+                .collect();
+            (!matches.is_empty()).then_some(Completing { start: 0, matches, active: 0 })
+        } else if let Some((query, start)) = mentions::typing_mention(&text, caret) {
             let q = query.to_lowercase();
             let mut matches: Vec<Suggestion> = self
                 .store
@@ -442,6 +465,7 @@ impl Composer {
                 }
                 format!("{tag} ")
             }
+            Suggestion::Slash(cmd) => format!("/{} ", cmd.name),
         };
         self.input.update(cx, |state, cx| {
             let caret = state.cursor();
@@ -980,6 +1004,22 @@ impl Render for Composer {
                             Some(format!("{} {}", role.members.len(), if role.members.len() == 1 { "member" } else { "members" })),
                         )
                     }
+                    Suggestion::Slash(cmd) => (
+                        div()
+                            .size(zpx(22.))
+                            .rounded(corner(6.))
+                            .bg(palette.inset)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .font_family(palette.mono_font.clone())
+                            .text_size(text(11.))
+                            .text_color(palette.accent)
+                            .child("/")
+                            .into_any_element(),
+                        div().font_family(palette.mono_font.clone()).child(format!("/{}", cmd.name)),
+                        Some(cmd.description.to_owned()),
+                    ),
                 };
                 list = list.child(
                     h_flex()

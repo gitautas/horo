@@ -613,7 +613,7 @@ pub struct ResizedCallPip(pub crate::call::PipResizeEdge);
 /// rings in voice-only calls.
 pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window, cx: &mut App) -> Vec<AnyElement> {
     let state = store.read(cx);
-    let Some(call) = state.call.clone().filter(|c| c.is_live() && !c.fullscreen && !c.pip_hidden) else {
+    let Some(call) = state.call.clone().filter(|c| c.is_live() && !c.fullscreen && !c.pip_hidden && !c.popped_out) else {
         return Vec::new();
     };
     let room_id = call.room_id.clone();
@@ -625,6 +625,7 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window,
         .unwrap_or_else(|| call.room_id.clone());
     let connecting = call.status == CallStatus::Connecting;
     let expand = store.clone();
+    let popout = store.clone();
     let hide = store.clone();
     let open_room = store.clone();
     let drag_start = store.clone();
@@ -829,6 +830,14 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window,
                         h_flex()
                             .gap_1()
                             .child(
+                                Button::new("call-popout")
+                                    .ghost()
+                                    .small()
+                                    .icon(gpui_component::Icon::new(gpui_component::IconName::ExternalLink))
+                                    .tooltip("pop out into separate window")
+                                    .on_click(move |_, _, cx| open_popout_window(popout.clone(), cx)),
+                            )
+                            .child(
                                 Button::new("call-expand")
                                     .ghost()
                                     .small()
@@ -867,6 +876,112 @@ pub fn floating(store: &Entity<Store>, palette: &Palette, window: &gpui::Window,
             .into_any_element(),
     );
     out
+}
+
+/// A standalone OS window for the active call (ideal for dual-monitor setups).
+pub struct CallPopoutWindow {
+    store: Entity<Store>,
+}
+
+impl CallPopoutWindow {
+    fn new(store: Entity<Store>, cx: &mut gpui::Context<Self>) -> Self {
+        cx.observe(&store, |_, _, cx| cx.notify()).detach();
+        cx.on_release(|this: &mut CallPopoutWindow, cx| {
+            this.store.update(cx, |s, cx| s.set_call_popped_out(false, cx));
+        })
+        .detach();
+        Self { store }
+    }
+}
+
+impl gpui::Render for CallPopoutWindow {
+    fn render(&mut self, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let palette = cx.global::<Palette>().clone();
+        let state = self.store.read(cx);
+        let Some(call) = state.call.clone().filter(|c| c.is_live() && c.popped_out) else {
+            window.remove_window();
+            return div().into_any_element();
+        };
+        let room_name = state
+            .rooms
+            .iter()
+            .find(|r| r.id == call.room_id)
+            .map(|r| r.name.clone())
+            .unwrap_or_else(|| call.room_id.clone());
+        let (zoom, viewport) = (crate::theme::zoom(), window.viewport_size());
+        let area = ((f32::from(viewport.width) / zoom - 32.).max(120.), (f32::from(viewport.height) / zoom - 32. - 40. - 44. - 24.).max(120.));
+        let dock_back = self.store.clone();
+        if any_camera(&self.store, cx) {
+            window.request_animation_frame();
+        }
+        v_flex()
+            .id("call-popout-window")
+            .relative()
+            .size_full()
+            .bg(palette.app)
+            .text_color(palette.text)
+            .font_family(palette.body_font.clone())
+            .p_4()
+            .gap_3()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .pl(if cfg!(target_os = "macos") { zpx(64.) } else { zpx(0.) })
+                    .items_center()
+                    .child(icon("icons/phone-call.svg").size(zpx(16.)).text_color(palette.online))
+                    .child(div().flex_1().truncate().font_family(palette.heading_font.clone()).text_lg().font_weight(FontWeight::SEMIBOLD).child(room_name))
+                    .child(
+                        Button::new("call-popout-dock")
+                            .ghost()
+                            .icon(icon("icons/minimize-2.svg"))
+                            .tooltip("dock back into main window")
+                            .on_click(move |_, window, cx| {
+                                dock_back.update(cx, |s, cx| s.set_call_popped_out(false, cx));
+                                window.remove_window();
+                            }),
+                    ),
+            )
+            .child(stage(&call, &self.store, &palette, true, area, cx))
+            .child(h_flex().flex_none().justify_center().child(controls(&self.store, &call, "popout")))
+            .children(mixer(&self.store, &palette, window, cx))
+            .children(participant_menu(&self.store, &palette, window, cx))
+            .into_any_element()
+    }
+}
+
+/// Open the active call in a separate OS window.
+pub fn open_popout_window(store: Entity<Store>, cx: &mut App) {
+    let room_name = {
+        let s = store.read(cx);
+        let Some(call) = s.call.as_ref().filter(|c| c.is_live()) else { return };
+        if call.popped_out {
+            return;
+        }
+        s.rooms.iter().find(|r| r.id == call.room_id).map(|r| r.name.clone()).unwrap_or_else(|| "call".into())
+    };
+    store.update(cx, |s, cx| s.set_call_popped_out(true, cx));
+    let bounds = gpui::Bounds::centered(None, gpui::size(gpui::px(640.), gpui::px(460.)), cx);
+    let options = gpui::WindowOptions {
+        window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+        titlebar: Some(gpui::TitlebarOptions {
+            title: Some(format!("horo — {room_name}").into()),
+            appears_transparent: true,
+            traffic_light_position: Some(gpui::point(gpui::px(14.), gpui::px(14.))),
+        }),
+        window_min_size: Some(gpui::size(gpui::px(360.), gpui::px(280.))),
+        app_id: Some("horo".into()),
+        ..Default::default()
+    };
+    let s_for_win = store.clone();
+    if cx
+        .open_window(options, move |window, cx| {
+            let view = cx.new(|cx| CallPopoutWindow::new(s_for_win, cx));
+            cx.new(|cx| gpui_component::Root::new(view, window, cx))
+        })
+        .is_err()
+    {
+        store.update(cx, |s, cx| s.set_call_popped_out(false, cx));
+    }
 }
 
 /// The call filling the window: its tiles as big as they'll go, and its

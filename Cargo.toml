@@ -11,6 +11,7 @@ version = "0.12.10"
 edition = "2024"
 rust-version = "1.93"
 authors = ["horo"]
+license = "AGPL-3.0-or-later"
 
 [workspace.dependencies]
 horo-core = { path = "crates/horo-core" }
