@@ -34,6 +34,9 @@ pub mod screen;
 #[cfg(target_os = "linux")]
 #[path = "screen_linux.rs"]
 pub mod screen;
+#[cfg(target_os = "windows")]
+#[path = "screen_windows.rs"]
+pub mod screen;
 pub mod sounds;
 pub mod store;
 pub mod theme;

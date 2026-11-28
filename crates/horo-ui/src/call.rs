@@ -281,7 +281,7 @@ pub struct Live {
     ringing: bool,
     ringback: Option<crate::sounds::Ringback>,
     /// The screen, while it's shared.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     pub screen: Option<crate::screen::ScreenShare>,
     /// Our camera, while it's on (and its picture, for our own tile).
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -418,7 +418,7 @@ impl Store {
                             ringback: None,
                             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
                             camera: None,
-                            #[cfg(any(target_os = "macos", target_os = "linux"))]
+                            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
                             screen: None,
                         });
                         cx.notify();
@@ -439,7 +439,7 @@ impl Store {
                                 ringback: None,
                                 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
                                 camera: None,
-                                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                                #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
                                 screen: None,
                             },
                             cx,
@@ -1078,9 +1078,9 @@ impl Store {
         cx.notify();
     }
 
-    /// Share a screen or window in the call, or stop, on Linux: the desktop
-    /// portal asks which (its picker waits on the user), off the UI thread.
-    #[cfg(target_os = "linux")]
+    /// Share a screen or window in the call, or stop, on Linux and Windows:
+    /// the OS picker asks which (waiting on the user), off the UI thread.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn set_call_screen(&mut self, on: bool, cx: &mut Context<Self>) {
         tracing::info!("screen share {}", if on { "on" } else { "off" });
         let Some(live) = &mut self.call_live else { return };

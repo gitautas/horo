@@ -1304,7 +1304,7 @@ pub fn mixer(store: &Entity<Store>, palette: &Palette, window: &mut gpui::Window
 /// Our camera, screen, microphone, hearing, volume mixer and the way out.
 fn controls(store: &Entity<Store>, call: &CallView, prefix: &'static str) -> gpui::Div {
     let row = h_flex().gap_1();
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     let row = {
         let (share, sharing) = (store.clone(), call.sharing);
         row.child(
