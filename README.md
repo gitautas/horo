@@ -1,15 +1,22 @@
 # horo
 
-A native Matrix client for desktop, with end-to-end encryption and native
-LiveKit voice/video calls built in. Written in Rust with GPUI.
+A fast, native Matrix desktop client with end-to-end encryption and built-in
+LiveKit voice, video, and screen sharing—written in Rust with [GPUI].
 
 <img align="center" src="docs/screenshot.png" height="380">
+
+## Highlights
+- **Native calls (`horo-rtc`)**: Voice, camera, and screen sharing (720p/1080p, 30/60 fps) over MatrixRTC + LiveKit with echo cancellation, noise gate, speaking indicators, voice cues, resizable corner-snapping PiP, pop-out OS call window, and right-click per-user volume sliders (`0%–200%`).
+- **Discord-style navigation**: Spaces with drag-reordering, custom roles & mentions, room/DM quick switcher (`⌘K` / `Ctrl+K`), unified Inbox drawer for unreads & mentions, pinned messages, threads, and per-room drafts.
+- **Rich messaging**: End-to-end encryption & SAS verification, custom emote & sticker packs, voice messages, inline media lightbox & video thumbnails, copyable code blocks, message forwarding, slash commands (`/shrug`, `/tableflip`, `/unflip`, `/lenny`, `/me`, `/spoiler`), custom status, and private user notes.
+- **Native & cross-platform**: macOS (Apple Silicon & Intel), Linux (AppImage & `.deb`, Wayland/X11 + PipeWire), and Windows, with signed self-updates.
 
 ## Getting started
 Download the latest build for your platform from [GitHub releases]. Installed
 apps on macOS, Windows, and Linux AppImage update themselves; `.deb` installs
 notify you when a new version is out.
 
+[GPUI]: https://www.gpui.rs/
 [GitHub releases]: https://github.com/gitautas/horo/releases/latest
 
 ## Developing
